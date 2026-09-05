@@ -1,0 +1,67 @@
+# AI Search Bridge
+# Shopify CLI updates application_url / redirect_urls automatically in dev.
+
+client_id = "f166c985bb6b7fc9cd3f0cc13d3918f1"
+application_url = "https://example.com"
+embedded = true
+name = "ai-search-bridge"
+
+[access_scopes]
+# Least-privilege scopes used by the current app:
+# - read_products: build/update semantic product documents
+# - read_themes: Theme Renderer Bridge
+# - write_app_proxy: storefront App Proxy configuration
+scopes = "read_products,read_themes,write_app_proxy"
+
+[webhooks]
+api_version = "2026-07"
+
+[[webhooks.subscriptions]]
+uri = "/webhooks/app/uninstalled"
+topics = ["app/uninstalled"]
+
+[[webhooks.subscriptions]]
+uri = "/webhooks/app/scopes_update"
+topics = ["app/scopes_update"]
+
+[[webhooks.subscriptions]]
+uri = "/webhooks/products/create"
+topics = ["products/create"]
+
+[[webhooks.subscriptions]]
+uri = "/webhooks/products/update"
+topics = ["products/update"]
+
+[[webhooks.subscriptions]]
+uri = "/webhooks/products/delete"
+topics = ["products/delete"]
+
+[[webhooks.subscriptions]]
+uri = "/webhooks/themes/publish"
+topics = ["themes/publish", "themes/update"]
+
+# Mandatory privacy/compliance topics for public apps.
+[[webhooks.subscriptions]]
+uri = "/webhooks/customers/data_request"
+compliance_topics = ["customers/data_request"]
+
+[[webhooks.subscriptions]]
+uri = "/webhooks/customers/redact"
+compliance_topics = ["customers/redact"]
+
+[[webhooks.subscriptions]]
+uri = "/webhooks/shop/redact"
+compliance_topics = ["shop/redact"]
+
+[auth]
+redirect_urls = [
+  "https://example.com/api/auth"
+]
+
+[build]
+automatically_update_urls_on_dev = true
+
+[app_proxy]
+url = "/proxy/ai-search"
+subpath = "ai-search"
+prefix = "apps"

@@ -1,0 +1,245 @@
+// AI Search Bridge - Prisma schema
+// Development database: SQLite.
+// Production can move to PostgreSQL/MySQL after replacing the datasource.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = "file:dev.sqlite"
+}
+
+model Session {
+  id                  String    @id
+  shop                String
+  state               String
+  isOnline            Boolean   @default(false)
+  scope               String?
+  expires             DateTime?
+  accessToken         String
+  userId              BigInt?
+  firstName           String?
+  lastName            String?
+  email               String?
+  accountOwner        Boolean   @default(false)
+  locale              String?
+  collaborator        Boolean?  @default(false)
+  emailVerified       Boolean?  @default(false)
+  refreshToken        String?
+  refreshTokenExpires DateTime?
+}
+
+model AiSearchSyncJob {
+  id          Int       @id @default(autoincrement())
+  shop        String
+  webhookId   String    @unique
+  topic       String
+  productId   String
+  status      String    @default("PENDING")
+  attempts    Int       @default(0)
+  lastError   String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  startedAt   DateTime?
+  processedAt DateTime?
+
+  @@index([status, createdAt])
+  @@index([shop, productId])
+}
+
+model AiSearchLeaseLock {
+  shop       String
+  resource   String
+  ownerToken String
+  leaseUntil DateTime
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@id([shop, resource])
+  @@index([leaseUntil])
+}
+
+// =====================================================
+// COMMERCIAL / MULTI-TENANT LAYER
+// =====================================================
+
+model AiSearchShop {
+  shop          String    @id
+  shopifyShopId String?
+  status        String    @default("ACTIVE")
+  installedAt   DateTime  @default(now())
+  uninstalledAt DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  subscription AiSearchSubscription?
+  settings     AiSearchShopSettings?
+  usagePeriods AiSearchUsagePeriod[]
+  usageEvents  AiSearchUsageEvent[]
+  usageReservations AiSearchUsageReservation[]
+  products     AiSearchIndexedProduct[]
+  catalogJobs  AiSearchCatalogSyncJob[]
+}
+
+model AiSearchSubscription {
+  id                    Int       @id @default(autoincrement())
+  shop                  String    @unique
+  plan                  String    @default("NONE")
+  status                String    @default("INACTIVE")
+  planHandle             String?
+  shopifySubscriptionId String?
+  billingPeriodStart    DateTime?
+  billingPeriodEnd      DateTime?
+  source                String    @default("LOCAL")
+  lastSyncedAt          DateTime?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  shopRecord AiSearchShop @relation(fields: [shop], references: [shop], onDelete: Cascade)
+
+  @@index([plan, status])
+}
+
+model AiSearchShopSettings {
+  shop                      String   @id
+  aiSearchEnabled           Boolean  @default(true)
+  fallbackEnabled           Boolean  @default(true)
+  productLimitOverride      Int?
+  searchLimitOverride       Int?
+  vectorUpdateLimitOverride Int?
+  resultLimit               Int      @default(20)
+  createdAt                 DateTime @default(now())
+  updatedAt                 DateTime @updatedAt
+
+  shopRecord AiSearchShop @relation(fields: [shop], references: [shop], onDelete: Cascade)
+}
+
+model AiSearchUsagePeriod {
+  id                    Int      @id @default(autoincrement())
+  shop                  String
+  periodKey             String
+  periodStart           DateTime
+  periodEnd             DateTime
+  searchCount           Int      @default(0)
+  vectorUpdateCount     Int      @default(0)
+  productIndexCount     Int      @default(0)
+  productDeleteCount    Int      @default(0)
+  queryEmbeddingCount   Int      @default(0)
+  productEmbeddingCount Int      @default(0)
+  fallbackCount         Int      @default(0)
+  blockedSearchCount    Int      @default(0)
+  blockedVectorCount    Int      @default(0)
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  shopRecord AiSearchShop       @relation(fields: [shop], references: [shop], onDelete: Cascade)
+  events       AiSearchUsageEvent[]
+  reservations AiSearchUsageReservation[]
+
+  @@unique([shop, periodKey])
+  @@index([shop, periodStart, periodEnd])
+}
+
+model AiSearchUsageEvent {
+  id           Int      @id @default(autoincrement())
+  shop         String
+  periodId     Int?
+  type         String
+  quantity     Int      @default(1)
+  success      Boolean  @default(true)
+  productId    String?
+  queryHash    String?
+  jobId        Int?
+  metadataJson String?
+  createdAt    DateTime @default(now())
+
+  shopRecord AiSearchShop         @relation(fields: [shop], references: [shop], onDelete: Cascade)
+  period     AiSearchUsagePeriod? @relation(fields: [periodId], references: [id], onDelete: SetNull)
+
+  @@index([shop, type, createdAt])
+  @@index([periodId, createdAt])
+}
+
+
+model AiSearchUsageReservation {
+  id                  String    @id
+  shop                String
+  periodId            Int
+  kind                String
+  status              String    @default("PENDING")
+  countsVectorUpdate  Boolean   @default(false)
+  productId           String?
+  queryHash           String?
+  embeddingConsumedAt DateTime?
+  effectAppliedAt     DateTime?
+  resolvedAt          DateTime?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  shopRecord AiSearchShop        @relation(fields: [shop], references: [shop], onDelete: Cascade)
+  period     AiSearchUsagePeriod @relation(fields: [periodId], references: [id], onDelete: Cascade)
+
+  @@index([shop, status, createdAt])
+  @@index([status, createdAt])
+  @@index([shop, status, updatedAt])
+  @@index([status, updatedAt])
+  @@index([status, resolvedAt])
+  @@index([periodId, status])
+}
+
+model AiSearchIndexedProduct {
+  id            Int       @id @default(autoincrement())
+  shop          String
+  productId     String
+  handle        String
+  title         String
+  status        String    @default("INDEXED")
+  hasVector     Boolean   @default(false)
+  documentHash  String?
+  lastIndexedAt    DateTime?
+  lastSeenAt       DateTime  @default(now())
+  lastCatalogSeenAt DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  shopRecord AiSearchShop @relation(fields: [shop], references: [shop], onDelete: Cascade)
+
+  @@unique([shop, productId])
+  @@index([shop, status])
+  @@index([shop, handle])
+  @@index([shop, lastCatalogSeenAt])
+}
+
+// Background initial catalog sync. One shop can keep history, but only one
+// PENDING/PROCESSING job is created by the service at a time.
+model AiSearchCatalogSyncJob {
+  id                Int       @id @default(autoincrement())
+  shop              String
+  reason            String    @default("INITIAL")
+  planAtStart       String?
+  status            String    @default("PENDING")
+  cursor            String?
+  pagesProcessed    Int       @default(0)
+  productsProcessed Int       @default(0)
+  productsIndexed   Int       @default(0)
+  productsSkipped   Int       @default(0)
+  productsBlocked   Int       @default(0)
+  productsFailed    Int       @default(0)
+  attempts          Int       @default(0)
+  lastError         String?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+  // Stable timestamp for one logical full-catalog scan. Unlike startedAt,
+  // this is not reset on retry/reclaim and is used for stale-entry cleanup.
+  scanStartedAt     DateTime?
+  startedAt         DateTime?
+  processedAt       DateTime?
+
+  shopRecord AiSearchShop @relation(fields: [shop], references: [shop], onDelete: Cascade)
+
+  @@index([shop, status, createdAt])
+  @@index([status, createdAt])
+  @@index([status, updatedAt])
+}
