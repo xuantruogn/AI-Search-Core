@@ -215,8 +215,8 @@ export function classifySearchRequest({
   const pageRaw = parsed.searchParams.get("page");
   if (pageRaw) {
     const page = Number.parseInt(pageRaw, 10);
-    if (!Number.isSafeInteger(page) || page !== 1) {
-      return native("PAGINATED_SEARCH", normalizedQuery, nativePath, resourceTypes);
+    if (!Number.isSafeInteger(page) || page < 1) {
+      return native("INVALID_PAGE", normalizedQuery, nativePath, resourceTypes);
     }
   }
 

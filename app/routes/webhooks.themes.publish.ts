@@ -1,7 +1,7 @@
 import type { ActionFunctionArgs } from "react-router";
 
 import { authenticate } from "../shopify.server";
-import { invalidateThemeRendererCache } from "../services/theme/theme-renderer-profile.server";
+import { invalidateThemeMap } from "../services/theme/theme-map-lifecycle.server";
 
 export const action = async ({ request }: ActionFunctionArgs) => {
   const { shop, topic, payload, webhookId } = await authenticate.webhook(request);
@@ -15,9 +15,9 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     normalizedRole.length === 0;
 
   // App Embed activation remains merchant-controlled. Publishing a theme only
-  // invalidates compiled renderer state; the next Admin status check / eligible
+  // invalidates Theme Map state; the next Admin status check / eligible
   // storefront request reads the new MAIN theme and its settings.
-  if (affectsActiveTheme) invalidateThemeRendererCache(shop);
+  if (affectsActiveTheme) invalidateThemeMap(shop);
 
   console.log("[AI Search] Theme lifecycle event received:", {
     shop,

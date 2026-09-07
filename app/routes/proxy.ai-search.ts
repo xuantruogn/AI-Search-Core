@@ -1,12 +1,8 @@
 import type { LoaderFunctionArgs } from "react-router";
 
 import { authenticate } from "../shopify.server";
-import {
-  getCompiledThemeRenderer,
-  rejectThemeRendererCandidate,
-  type CompiledThemeRenderer,
-} from "../services/theme/theme-renderer-profile.server";
-import { buildThemeSearchLiquid } from "../services/renderer/renderer-bridge.server";
+import { getActiveThemeMap } from "../services/theme/theme-map-lifecycle.server";
+import type { ThemeMap } from "../services/theme-map.server";
 import { semanticSearch } from "../services/search/semantic-search.server";
 import { revalidateSearchResults } from "../services/search/search-result-revalidation.server";
 import { classifySearchRequest } from "../services/search/search-request-router.server";
@@ -27,15 +23,6 @@ import {
   rollbackSearchUsage,
   type UsageReservation,
 } from "../services/commerce/usage.server";
-
-function escapeHtml(value: string) {
-  return value
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#039;");
-}
 
 const NATIVE_BYPASS_PARAM = "_ai_search_bypass";
 
@@ -64,7 +51,7 @@ function nativeSearchUrl(query: string, requestedUrl?: string | null) {
   return `/search?${params.toString()}`;
 }
 
-function nativeRedirect(
+function nativeRedirectResponse(
   query: string,
   requestedUrl?: string | null,
   reason = "NATIVE_SEARCH",
@@ -90,10 +77,6 @@ const MIN_SEMANTIC_QUERY_CHARS = readPositiveInteger(
   "AI_SEARCH_MIN_SEMANTIC_QUERY_CHARS",
   3,
 );
-const MAX_RENDERER_ATTEMPTS = Math.max(
-  1,
-  Math.min(readPositiveInteger("AI_SEARCH_THEME_RENDERER_MAX_ATTEMPTS", 5), 8),
-);
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const requestUrl = new URL(request.url);
@@ -102,14 +85,31 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     requestUrl.searchParams.get("native_search_url") ??
     requestUrl.searchParams.get("native_search_path");
 
+  const wantsJson = requestUrl.searchParams.get("format") === "json";
+  const requestedPageRaw = Number.parseInt(requestUrl.searchParams.get("page") || "1", 10);
+  const requestedPage = Number.isSafeInteger(requestedPageRaw) && requestedPageRaw > 0 ? requestedPageRaw : 1;
+  const nativeRedirect = (value: string, target?: string | null, reason = "NATIVE_SEARCH") => wantsJson
+    ? Response.json({status:"fallback",engine:"native",reason,native_url:nativeSearchUrl(value,target)}, {headers:{"Cache-Control":"no-store"}})
+    : nativeRedirectResponse(value,target,reason);
   try {
-    const { admin, liquid, session } = await authenticate.public.appProxy(request);
+    const { admin, session } = await authenticate.public.appProxy(request);
 
     // Old App Embed markup can briefly outlive an uninstall/session. Native
     // search is always safer than a storefront 500.
     if (!admin || !session) {
       return nativeRedirect(query, nativeSearchTarget, "APP_PROXY_SESSION_MISSING");
     }
+
+    if (wantsJson && requestUrl.searchParams.get("mode") === "theme-map") {
+      const theme = await getActiveTheme(admin);
+      const embed = await getAiSearchAppEmbedStatusForTheme(admin, theme);
+      if (embed.enabled !== true) return nativeRedirect(query,nativeSearchTarget,"APP_EMBED_DISABLED_ON_ACTIVE_THEME");
+      const map = await getActiveThemeMap({admin,shop:session.shop,activeTheme:theme});
+      return Response.json({status:"success",theme_map:map}, {headers:{"Cache-Control":"no-store"}});
+    }
+    // HTML navigations from an old embed use native search until the new
+    // storefront asset is deployed. AI's new contract is JSON only.
+    if (!wantsJson) return nativeRedirect(query,nativeSearchTarget,"JSON_RUNTIME_REQUIRED");
 
     // First gate: pure request semantics. This runs before billing, DB quota,
     // theme discovery, OpenAI or Qdrant. Exact/SKU/barcode searches, mixed
@@ -195,9 +195,9 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     // Second gate: theme capability preflight. This intentionally runs BEFORE
     // search quota reservation and before semanticSearch() creates an OpenAI
     // embedding. Every request validates the live MAIN theme id + updatedAt;
-    // a theme publish/edit invalidates stale renderer state immediately.
+    // a theme publish/edit invalidates stale Theme Map state before AI.
     let activeTheme: ActiveTheme;
-    let preflightRenderer: CompiledThemeRenderer;
+    let preflightMap: ThemeMap;
     try {
       activeTheme = await getActiveTheme(admin);
       const appEmbed = await getAiSearchAppEmbedStatusForTheme(
@@ -224,29 +224,33 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
       // App Embed settings are read from a theme file. A publish can complete
       // during that request, so confirm the MAIN identity again before
-      // compiling/reserving. Never combine embed state from theme A with a
-      // renderer from theme B.
+      // mapping/reserving. Never combine embed state from theme A with a
+      // map from theme B.
       const confirmedTheme = await getActiveTheme(admin);
       if (confirmedTheme.versionKey !== activeTheme.versionKey) {
         return fallback("ACTIVE_THEME_CHANGED_DURING_PREFLIGHT");
       }
       activeTheme = confirmedTheme;
 
-      preflightRenderer = await getCompiledThemeRenderer({
+      preflightMap = await getActiveThemeMap({
         admin,
         shop: session.shop,
         activeTheme,
       });
 
-      if (preflightRenderer.themeVersionKey !== activeTheme.versionKey) {
-        return fallback("THEME_RENDERER_SNAPSHOT_MISMATCH");
+      if (preflightMap.theme.versionKey !== activeTheme.versionKey) {
+        return fallback("THEME_MAP_SNAPSHOT_MISMATCH");
       }
+      if (requestUrl.searchParams.get("theme_id") !== preflightMap.theme.id || requestUrl.searchParams.get("map_fingerprint") !== preflightMap.fingerprint) {
+        return fallback("STOREFRONT_THEME_MAP_STALE");
+      }
+
     } catch (error) {
       console.warn("[AI Search] Theme preflight failed; native search selected:", {
         shop: session.shop,
         error: error instanceof Error ? error.message : String(error),
       });
-      return fallback("THEME_RENDERER_UNAVAILABLE");
+      return fallback("THEME_MAP_UNAVAILABLE");
     }
 
     const reservationResult = await reserveSearchUsage({
@@ -283,7 +287,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         admin,
         shop: session.shop,
         results: rawSearchResults,
-        limit: entitlement.resultLimit,
+        // Validate the ranked pool before pagination so total_pages remains correct.
+        limit: rawSearchResults.length,
       });
       const searchResults = revalidated.results;
 
@@ -296,7 +301,6 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         throw new Error("NO_LIVE_AI_RESULTS_AFTER_REVALIDATION");
       }
 
-      const rankedHandles = searchResults.map((result) => result.handle);
 
       if (revalidated.staleProductIds.length > 0 || revalidated.repairedMetadata > 0) {
         console.log("[AI Search] Search candidates reconciled with Shopify:", {
@@ -306,79 +310,36 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
           validResults: searchResults.length,
         });
       }
-      const debugEnabled = process.env.AI_SEARCH_STOREFRONT_DEBUG === "true";
-      const rankingBlock = debugEnabled
-        ? `
-          <div data-ai-search-debug="true">
-            <p>Query: <strong>${escapeHtml(query)}</strong></p>
-            <ol>
-              ${searchResults
-                .map(
-                  (result) =>
-                    `<li>${escapeHtml(result.handle)} — ${result.score.toFixed(6)}</li>`,
-                )
-                .join("")}
-            </ol>
-          </div>
-        `
-        : "";
+      // Theme rendering happens on Shopify's /search page, never in this
+      // backend. Fence the JSON ranking against a mid-query theme change.
+      const finalTheme = await getActiveTheme(admin);
+      if (finalTheme.versionKey !== activeTheme.versionKey || finalTheme.processing || finalTheme.processingFailed) throw new Error("ACTIVE_THEME_CHANGED_DURING_SEARCH");
+      const finalEmbed = await getAiSearchAppEmbedStatusForTheme(admin, finalTheme);
+      if (finalEmbed.enabled !== true) throw new Error("APP_EMBED_CHANGED_DURING_SEARCH");
+      const finalMap = await getActiveThemeMap({admin,shop:session.shop,activeTheme:finalTheme});
+      if (finalMap.fingerprint !== preflightMap.fingerprint) throw new Error("THEME_MAP_CHANGED_DURING_SEARCH");
+      const seen = new Set<string>();
+      const products = searchResults.flatMap((result) => {
+        const id = result.productId.match(/^(?:gid:\/\/shopify\/Product\/)?(\d+)$/)?.[1];
+        if (!id) throw new Error("INVALID_SHOPIFY_PRODUCT_ID");
+        if (seen.has(id)) return [];
+        seen.add(id);
+        return [{id,handle:result.handle}];
+      });
+      const pageSize = Math.max(1, entitlement.resultLimit);
+      const totalProducts = products.length;
+      const totalPages = Math.max(1, Math.ceil(totalProducts / pageSize));
+      const currentPage = Math.min(requestedPage, totalPages);
+      const pageStart = (currentPage - 1) * pageSize;
+      const pageProducts = products.slice(pageStart, pageStart + pageSize);
 
-      let renderer: CompiledThemeRenderer | null = null;
-      let response: Response | null = null;
-      let lastRendererError: unknown = null;
-      let candidate: CompiledThemeRenderer = preflightRenderer;
-
-      // Runtime Liquid incompatibility can still exist despite static source
-      // checks. Retry alternate source-proven candidates without generating a
-      // second query embedding.
-      for (let attempt = 0; attempt < MAX_RENDERER_ATTEMPTS; attempt += 1) {
-        try {
-          const productGrid = buildThemeSearchLiquid({
-            handles: rankedHandles,
-            profile: candidate.profile,
-            resolvedArguments: candidate.resolvedArguments,
-          });
-
-          response = await liquid(`${rankingBlock}${productGrid}`);
-          if (!response.ok) {
-            throw new Error(`Shopify Liquid renderer returned HTTP ${response.status}`);
-          }
-
-          renderer = candidate;
-          break;
-        } catch (rendererError) {
-          lastRendererError = rendererError;
-          rejectThemeRendererCandidate({
-            shop: session.shop,
-            themeVersionKey: candidate.themeVersionKey,
-            rendererId: candidate.rendererId,
-          });
-
-          console.warn("[AI Search] Theme renderer candidate rejected:", {
-            shop: session.shop,
-            themeId: candidate.themeId,
-            themeUpdatedAt: candidate.themeUpdatedAt,
-            sourceFile: candidate.sourceFile,
-            rendererId: candidate.rendererId,
-            attempt: attempt + 1,
-            error:
-              rendererError instanceof Error
-                ? rendererError.message
-                : String(rendererError),
-          });
-
-          if (attempt + 1 >= MAX_RENDERER_ATTEMPTS) break;
-          candidate = await getCompiledThemeRenderer({
-            admin,
-            shop: session.shop,
-            activeTheme,
-          });
-        }
-      }
-
-      if (!renderer || !response) {
-        throw lastRendererError ?? new Error("No compatible theme renderer succeeded");
-      }
+      const response = Response.json({
+        status:"success",engine:"ai-search-v3",query,
+        theme_id:finalMap.theme.id,map_fingerprint:finalMap.fingerprint,
+        target_ids:pageProducts.map((product)=>`id:${product.id}`).join(" OR "),
+        products:pageProducts,
+        pagination:{current_page:currentPage,page_size:pageSize,total_products:totalProducts,total_pages:totalPages},
+      }, {headers:{"Cache-Control":"no-store"}});
 
       try {
         await markUsageReservationEffectApplied(reservation);
@@ -390,8 +351,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         await commitSearchUsage(reservation, {
           resultCount: searchResults.length,
           durationMs: Date.now() - startedAt,
-          themeId: renderer.themeId,
-          rendererSource: renderer.sourceFile,
+          themeId: finalMap.theme.gid,
+          rendererSource: finalMap.search.searchTemplate ?? "native-search",
         });
       } catch (usageError) {
         console.error("[AI Search] Search usage commit logging failed:", usageError);

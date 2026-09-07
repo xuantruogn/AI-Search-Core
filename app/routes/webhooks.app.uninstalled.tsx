@@ -3,7 +3,7 @@ import type { ActionFunctionArgs } from "react-router";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
 import { markShopUninstalled } from "../services/commerce/shop-registry.server";
-import { invalidateThemeRendererCache } from "../services/theme/theme-renderer-profile.server";
+import { invalidateThemeMap } from "../services/theme/theme-map-lifecycle.server";
 
 export const action = async ({ request }: ActionFunctionArgs) => {
   const { shop, topic } = await authenticate.webhook(request);
@@ -12,7 +12,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
   // Remove renderer/rejection state from this process immediately. A later
   // reinstall for the same shop must start from its then-current MAIN theme.
-  invalidateThemeRendererCache(shop);
+  invalidateThemeMap(shop);
 
   try {
     await markShopUninstalled(shop);

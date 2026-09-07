@@ -1,5 +1,5 @@
-import type { LoaderFunctionArgs } from "react-router";
-import { useLoaderData } from "react-router";
+import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
+import { Form, useLoaderData, useActionData, useNavigation } from "react-router";
 
 import { authenticate } from "../shopify.server";
 import { getShopEntitlement } from "../services/commerce/entitlement.server";
@@ -8,6 +8,16 @@ import { getLatestCatalogSyncJob } from "../services/catalog/catalog-sync-job.se
 import { getShopifyPricingPlansUrl } from "../services/billing/shopify-app-pricing.server";
 import { getThemeAppEmbedDeepLink } from "../services/theme/app-embed.server";
 import { getThemeIntegrationStatus } from "../services/theme/theme-integration.server";
+import { invalidateThemeMap } from "../services/theme/theme-map-lifecycle.server";
+
+export const action = async ({ request }: ActionFunctionArgs) => {
+  const { admin, session } = await authenticate.admin(request);
+  const form = await request.formData();
+  if (form.get("intent") !== "sync-theme-map") throw new Response("Unknown action", { status: 400 });
+  invalidateThemeMap(session.shop);
+  const status = await getThemeIntegrationStatus({ admin, shop: session.shop });
+  return { message: status.themeMap ? "Đã đồng bộ Theme Map từ theme đang publish." : `Chưa đồng bộ được Theme Map: ${status.themeMapError ?? status.status}` };
+};
 
 function formatLimit(value: number | null) {
   return value === null ? "Không giới hạn" : value.toLocaleString("vi-VN");
@@ -90,6 +100,8 @@ function MetricCard({
 
 export default function Dashboard() {
   const data = useLoaderData<typeof loader>();
+  const actionData = useActionData<typeof action>();
+  const navigation = useNavigation();
   const { entitlement } = data;
 
   const searchRemaining = remaining(
@@ -149,12 +161,23 @@ export default function Dashboard() {
               : ""}
           </s-text>
           <s-text>
-            4. Theme Renderer: {data.themeIntegration.rendererCompatible ? "TƯƠNG THÍCH" : "CHƯA TƯƠNG THÍCH"}
-            {data.themeIntegration.rendererSource ? ` · ${data.themeIntegration.rendererSource}` : ""}
+            4. Theme Map: {data.themeIntegration.themeMapReady ? "ĐÃ ĐỒNG BỘ" : "CHƯA SẴN SÀNG"}
+            {data.themeIntegration.themeMapSource ? ` · ${data.themeIntegration.themeMapSource}` : ""}
           </s-text>
           <s-text>
             Integration: {data.themeIntegration.status}
           </s-text>
+          <s-text>Shopify dùng theme hiện tại để tạo HTML sản phẩm. Cần thử tìm kiếm trên storefront để xác nhận giao diện thực tế.</s-text>
+          {data.themeIntegration.themeMap ? (
+            <s-text>
+              Theme Map: {data.themeIntegration.themeMap.search.searchTemplate} · {data.themeIntegration.themeMap.sources.length} file phụ thuộc · {data.themeIntegration.themeMap.fingerprint.slice(0, 12)}
+            </s-text>
+          ) : null}
+          <Form method="post">
+            <input type="hidden" name="intent" value="sync-theme-map" />
+            <button type="submit" disabled={navigation.state !== "idle"}>Đọc lại Theme Map</button>
+          </Form>
+          {actionData?.message ? <s-text>{actionData.message}</s-text> : null}
           {data.appEmbed.enabled !== true && data.appEmbedUrl ? (
             <>
               <s-link href={data.appEmbedUrl} target="_top">

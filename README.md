@@ -1,4 +1,12 @@
-# Shopify App Template - React Router
+# AI Search Bridge V3
+
+V3 hiện dùng kiến trúc Theme Map + native search HTML từ app `ai-search` được cung cấp. Backend trả ID/handle đã xếp hạng; Shopify và theme hiện tại tạo HTML sản phẩm. Theme Compiler/Renderer Bridge cũ đã được bỏ.
+
+Đọc [hướng dẫn thay kiến trúc và nâng cấp](AI_SEARCH_V3_THEME_MIGRATION.md) và [kết quả kiểm tra V3](AI_SEARCH_V3_FINAL_AUDIT.md) trước khi chạy. Mã nguồn đã qua typecheck/lint/self-test/build; phần render vẫn cần thử trên dev store.
+
+Các mục bên dưới là tài liệu scaffold và vận hành nền. Tài liệu V2 được giữ cho mục đích lịch sử, không mô tả cơ chế theme hiện tại.
+
+## Shopify App Template - React Router
 
 This is a template for building a [Shopify app](https://shopify.dev/docs/apps/getting-started) using [React Router](https://reactrouter.com/). It was forked from the [Shopify Remix app template](https://github.com/Shopify/shopify-app-template-remix) and converted to React Router.
 

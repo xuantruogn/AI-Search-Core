@@ -1,9 +1,9 @@
 import { getActiveTheme } from "./theme-reader.server";
 import { getAiSearchAppEmbedStatusForTheme } from "./app-embed.server";
 import {
-  getCompiledThemeRenderer,
-  invalidateThemeRendererCache,
-} from "./theme-renderer-profile.server";
+  getActiveThemeMap,
+  invalidateThemeMap,
+} from "./theme-map-lifecycle.server";
 
 type AdminGraphqlClient = {
   graphql: (
@@ -16,7 +16,7 @@ export type ThemeIntegrationStatus =
   | "READY"
   | "EMBED_DISABLED"
   | "EMBED_UNKNOWN"
-  | "RENDERER_UNSUPPORTED"
+  | "THEME_MAP_UNAVAILABLE"
   | "THEME_PROCESSING"
   | "ERROR";
 
@@ -30,7 +30,7 @@ export async function getThemeIntegrationStatus({
   let lastTheme: Awaited<ReturnType<typeof getActiveTheme>> | null = null;
 
   try {
-    // App Embed status and renderer discovery use separate Shopify requests.
+    // App Embed status and map discovery use separate Shopify requests.
     // Retry when MAIN changes between them so the dashboard never reports a
     // hybrid state assembled from two different theme versions.
     for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -48,50 +48,52 @@ export async function getThemeIntegrationStatus({
             themeName: theme.name,
             reason: "THEME_PROCESSING",
           },
-          rendererCompatible: false,
-          rendererSource: null as string | null,
-          rendererError: "Active theme is still processing or failed processing",
+          themeMapReady: false,
+          themeMap: null,
+          themeMapSource: null as string | null,
+          themeMapError: "Active theme is still processing or failed processing",
         };
       }
 
-      const [appEmbed, rendererResult] = await Promise.all([
+      const [appEmbed, mapResult] = await Promise.all([
         getAiSearchAppEmbedStatusForTheme(admin, theme),
-        getCompiledThemeRenderer({ admin, shop, activeTheme: theme })
-          .then((renderer) => ({ renderer, error: null as string | null }))
+        getActiveThemeMap({ admin, shop, activeTheme: theme })
+          .then((map) => ({ map, error: null as string | null }))
           .catch((error) => ({
-            renderer: null,
+            map: null,
             error: error instanceof Error ? error.message : String(error),
           })),
       ]);
 
       const confirmedTheme = await getActiveTheme(admin);
-      const rendererMatchesSnapshot =
-        !rendererResult.renderer ||
-        rendererResult.renderer.themeVersionKey === theme.versionKey;
+      const mapMatchesSnapshot =
+        !mapResult.map ||
+        mapResult.map.theme.versionKey === theme.versionKey;
 
       if (
         confirmedTheme.versionKey !== theme.versionKey ||
-        !rendererMatchesSnapshot
+        !mapMatchesSnapshot
       ) {
-        invalidateThemeRendererCache(shop);
+        invalidateThemeMap(shop);
         lastTheme = confirmedTheme;
         continue;
       }
 
-      const rendererCompatible = Boolean(rendererResult.renderer);
+      const themeMapReady = Boolean(mapResult.map);
       let status: ThemeIntegrationStatus;
       if (appEmbed.enabled === null) status = "EMBED_UNKNOWN";
       else if (appEmbed.enabled === false) status = "EMBED_DISABLED";
-      else if (!rendererCompatible) status = "RENDERER_UNSUPPORTED";
+      else if (!themeMapReady) status = "THEME_MAP_UNAVAILABLE";
       else status = "READY";
 
       return {
         status,
         theme,
         appEmbed,
-        rendererCompatible,
-        rendererSource: rendererResult.renderer?.sourceFile ?? null,
-        rendererError: rendererResult.error,
+        themeMapReady,
+        themeMap: mapResult.map ?? null,
+        themeMapSource: mapResult.map?.search.searchTemplate ?? null,
+        themeMapError: mapResult.error,
       };
     }
 
@@ -107,9 +109,10 @@ export async function getThemeIntegrationStatus({
         themeName: lastTheme?.name ?? null,
         reason: "STATUS_CHECK_FAILED",
       },
-      rendererCompatible: false,
-      rendererSource: null as string | null,
-      rendererError: error instanceof Error ? error.message : String(error),
+      themeMapReady: false,
+      themeMap: null,
+      themeMapSource: null as string | null,
+      themeMapError: error instanceof Error ? error.message : String(error),
     };
   }
 }

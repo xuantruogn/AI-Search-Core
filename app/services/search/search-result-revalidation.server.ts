@@ -40,7 +40,7 @@ export async function revalidateSearchResults({
   results: SearchResult[];
   limit: number;
 }): Promise<RevalidatedSearchResults> {
-  const safeLimit = Math.max(1, Math.min(Math.trunc(limit), 20));
+  const safeLimit = Math.max(1, Math.min(Math.trunc(limit), results.length));
   if (results.length === 0) {
     return { results: [], staleProductIds: [], repairedMetadata: 0 };
   }

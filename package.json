@@ -18,7 +18,8 @@
     "graphql-codegen": "graphql-codegen",
     "vite": "vite",
     "typecheck": "react-router typegen && tsc --noEmit",
-    "test:v3": "node scripts/v3-selftest.cjs"
+    "test:v3": "node scripts/v3-selftest.cjs && node scripts/theme-map-selftest.cjs",
+    "test:storefront": "node scripts/storefront-selftest.cjs"
   },
   "type": "module",
   "engines": {

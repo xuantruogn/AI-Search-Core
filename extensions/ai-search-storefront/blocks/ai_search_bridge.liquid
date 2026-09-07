@@ -1,53 +1,17 @@
-{% comment %}
-  AI Search Bridge app embed.
-
-  This block never renders product cards and never depends on theme CSS
-  selectors/classes. The JavaScript observes Shopify's canonical /search
-  navigation (GET form submits, direct search links, and direct /search loads)
-  and routes only proven product-only semantic searches through the Shopify App Proxy.
-
-  Shopify's actual shop.search_types value is passed to JavaScript. The embed
-  setting controls whether an unscoped /search is treated as product-only AI
-  search or respects the store's configured resource types. Explicit mixed
-  product/article/page searches always remain native.
-
-  If AI Search is disabled, over quota, or unavailable, the proxy redirects
-  back to native Shopify search with a one-request bypass marker so fallback
-  can never loop.
-{% endcomment %}
-
 <script>
-  window.__aiSearchBridgeConfig = {
-    proxyPath: {{ block.settings.proxy_path | default: '/apps/ai-search' | json }},
-    defaultSearchTypes: {{ shop.search_types | json }},
-    unscopedSearchMode: {{ block.settings.unscoped_search_mode | default: 'product_only' | json }}
-  };
+  window.AI_SEARCH_CONFIG = window.AI_SEARCH_CONFIG || {};
+  window.AI_SEARCH_CONFIG.version = 3;
+  window.AI_SEARCH_CONFIG.search_endpoint = {{ block.settings.proxy_path | default: "/apps/ai-search" | json }};
+  window.AI_SEARCH_CONFIG.unscopedSearchMode = {{ block.settings.unscoped_search_mode | json }};
 </script>
-
 {% schema %}
 {
   "name": "AI Search Bridge",
-  "target": "body",
-  "javascript": "ai-search-bridge.js",
+  "target": "head",
+  "javascript": "search-interceptor.v3.js",
   "settings": [
-    {
-      "type": "select",
-      "id": "unscoped_search_mode",
-      "label": "Searches without an explicit resource type",
-      "default": "product_only",
-      "options": [
-        { "value": "product_only", "label": "Use AI as product-only search (recommended)" },
-        { "value": "respect_store", "label": "Respect the store's default product/article/page search types" }
-      ],
-      "info": "Explicit article/page/mixed searches always stay on Shopify Search. This only controls /search requests that don't specify type."
-    },
-    {
-      "type": "text",
-      "id": "proxy_path",
-      "label": "App proxy path",
-      "default": "/apps/ai-search",
-      "info": "Only change this if the store has customized the app proxy prefix/subpath in Shopify Admin."
-    }
+    {"type":"select","id":"unscoped_search_mode","label":"Searches without an explicit resource type","default":"product_only","options":[{"value":"product_only","label":"Use AI as product-only search (recommended)"},{"value":"respect_store","label":"Respect store search types"}]},
+    {"type":"text","id":"proxy_path","label":"App proxy path","default":"/apps/ai-search"}
   ]
 }
 {% endschema %}

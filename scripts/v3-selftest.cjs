@@ -2,7 +2,6 @@
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
-const crypto = require("node:crypto");
 const assert = require("node:assert");
 const ts = require("typescript");
 
@@ -27,97 +26,6 @@ function transpile(sourcePath, targetPath) {
   write(targetPath, output);
 }
 
-function fixtureFiles(snippet, updatedAt) {
-  const files = [
-    {
-      filename: "sections/search-grid.liquid",
-      content: `<ul class="grid product-grid">{% for x in search.results %}<li class="grid__item">{% render '${snippet}', merchandise: x, show_vendor: section.settings.show_vendor %}</li>{% endfor %}</ul>`,
-    },
-    {
-      filename: `snippets/${snippet}.liquid`,
-      content: `<a href="{{ merchandise.url }}"><span>{{ merchandise.title }}</span>{{ merchandise.featured_image | image_url: width: 300 | image_tag }}</a>`,
-    },
-    {
-      filename: "templates/search.json",
-      content: JSON.stringify({
-        sections: { main: { type: "search-grid", settings: { show_vendor: true } } },
-        order: ["main"],
-      }),
-    },
-    {
-      filename: "config/settings_data.json",
-      content: JSON.stringify({ current: {} }),
-    },
-  ];
-
-  return files.map((file) => ({
-    ...file,
-    checksumMd5: crypto.createHash("md5").update(file.content).digest("hex"),
-    updatedAt,
-  }));
-}
-
-function makeAdmin(state, counters = { active: 0, files: 0 }) {
-  return {
-    counters,
-    async graphql(query) {
-      if (query.includes("GetActiveThemeIdentity")) {
-        counters.active += 1;
-        const theme = state.theme;
-        return new Response(
-          JSON.stringify({
-            data: {
-              themes: {
-                nodes: [
-                  {
-                    id: theme.id,
-                    name: theme.name,
-                    updatedAt: theme.updatedAt,
-                    processing: Boolean(theme.processing),
-                    processingFailed: Boolean(theme.processingFailed),
-                  },
-                ],
-              },
-            },
-          }),
-          { status: 200, headers: { "content-type": "application/json" } },
-        );
-      }
-
-      if (query.includes("DiscoverThemeFiles")) {
-        counters.files += 1;
-        // Capture the source snapshot before an optional gate so lifecycle
-        // tests can model a publish/update racing an in-flight discovery.
-        const files = state.files.map((file) => ({
-          filename: file.filename,
-          checksumMd5: file.checksumMd5,
-          updatedAt: file.updatedAt,
-          body: { content: file.content },
-        }));
-        if (typeof state.beforeFilesResponse === "function") {
-          await state.beforeFilesResponse(counters.files);
-        }
-        return new Response(
-          JSON.stringify({
-            data: {
-              theme: {
-                files: {
-                  nodes: files,
-                  pageInfo: { hasNextPage: false, endCursor: null },
-                  userErrors: [],
-                },
-              },
-            },
-          }),
-          { status: 200, headers: { "content-type": "application/json" } },
-        );
-      }
-
-      throw new Error(`Unexpected GraphQL query: ${query.slice(0, 80)}`);
-    },
-  };
-}
-
 function setupProxyRuntime() {
   transpile("app/routes/proxy.ai-search.ts", "routes/proxy.ai-search.js");
 
@@ -130,12 +38,8 @@ function setupProxyRuntime() {
     `const s=require('./proxy-state'); module.exports={authenticate:{public:{appProxy:async()=>({admin:{},session:{shop:'test.myshopify.com'},liquid:async()=>{s.order.push('liquid'); return new Response('<html>ok</html>',{status:200})}})}}};`,
   );
   write(
-    "services/theme/theme-renderer-profile.server.js",
-    `const s=require('../../proxy-state'); module.exports={getCompiledThemeRenderer:async()=>{s.order.push('theme');s.theme+=1;if(s.themeError)throw new Error('unsupported theme');return {rendererId:'r1',themeId:s.rendererThemeId||'t1',themeName:'Theme',themeUpdatedAt:s.rendererThemeUpdatedAt||'2026-09-04T00:00:00Z',themeVersionKey:s.rendererThemeVersionKey||'t1\\0'+'2026-09-04T00:00:00Z',themeFingerprint:'fp',sourceFile:'sections/x.liquid',templateFile:'templates/search.json',sectionType:'x',profile:{cardSnippet:'card',productArgument:'product',implicitProductVariable:null,invocationTag:'render',renderArguments:{},stylesheetAssets:[],gridClass:null,itemClass:null,containerClass:null,gridTag:'div',itemTag:'div',containerTag:'div',score:1,signals:['search-context']},resolvedArguments:{},score:1}},rejectThemeRendererCandidate:()=>{s.rejected+=1}};`,
-  );
-  write(
-    "services/renderer/renderer-bridge.server.js",
-    `module.exports={buildThemeSearchLiquid:()=>'<div>cards</div>'};`,
+    "services/theme/theme-map-lifecycle.server.js",
+    `const s=require('../../proxy-state'); module.exports={getActiveThemeMap:async()=>{s.order.push('theme');s.theme+=1;if(s.themeError)throw new Error('map unavailable');return {version:3,theme:{id:s.rendererThemeId||'1',gid:'t1',versionKey:s.rendererThemeVersionKey||'t1\\0'+'2026-09-04T00:00:00Z'},fingerprint:s.theme>1&&s.mapChanged?'changed':'fp',search:{searchTemplate:'templates/search.json'}}}};`,
   );
   write(
     "services/search/semantic-search.server.js",
@@ -179,8 +83,7 @@ function setupProxyRuntime() {
   // route integration test cannot accidentally execute the old module.
   for (const relativePath of [
     "shopify.server.js",
-    "services/theme/theme-renderer-profile.server.js",
-    "services/renderer/renderer-bridge.server.js",
+    "services/theme/theme-map-lifecycle.server.js",
     "services/search/semantic-search.server.js",
     "services/search/search-result-revalidation.server.js",
     "services/search/search-request-router.server.js",
@@ -242,6 +145,9 @@ async function proxyScenario(query, nativeTarget, stateOverrides = {}) {
   const { loader } = require(modulePath);
   const url = new URL("https://shop.test/apps/ai-search");
   url.searchParams.set("q", query);
+  url.searchParams.set("format","json");
+  url.searchParams.set("theme_id","1");
+  url.searchParams.set("map_fingerprint",stateOverrides.requestFingerprint || "fp");
   url.searchParams.set("native_search_url", nativeTarget);
   const response = await loader({ request: new Request(url), params: {}, context: {} });
   return { response, state: global.__aiSearchV3ProxyState };
@@ -364,140 +270,6 @@ async function main() {
     null,
   );
 
-  // Compiler + renderer arbitrary variable/product argument.
-  transpile(
-    "app/services/theme/theme-compiler.server.ts",
-    "services/theme/theme-compiler.server.js",
-  );
-  transpile(
-    "app/services/renderer/renderer-bridge.server.ts",
-    "services/renderer/renderer-bridge.server.js",
-  );
-  const compiler = require(path.join(tempRoot, "services/theme/theme-compiler.server.js"));
-  const bridge = require(path.join(tempRoot, "services/renderer/renderer-bridge.server.js"));
-  const source = `<ul class="grid product-grid">{% for x in search.results %}<li class="grid__item">{% render 'tile', merchandise: x %}</li>{% endfor %}</ul>`;
-  const candidates = compiler.compileSearchRendererCandidates(source);
-  assert.ok(candidates.length > 0);
-  assert.equal(candidates[0].profile.productArgument, "merchandise");
-  const rendered = bridge.buildThemeSearchLiquid({
-    handles: ["alpha"],
-    profile: candidates[0].profile,
-    resolvedArguments: {},
-  });
-  assert.ok(rendered.includes("merchandise: ai_product"));
-
-  // Hard context must not be treated as a safe standalone card.
-  const hard = compiler.analyzeSnippetCompatibility(`{% doc %}@param {product} product{% enddoc %}<a href="{{ product.url }}">{{ product.title }}</a>{% content_for 'block', type: 'x', id: 'x' %}`);
-  assert.ok(hard.hardContextDependencies.includes("theme-block-context"));
-
-  // Theme lifecycle: A -> B, same-ID source edit, then concurrent discovery.
-  transpile("app/services/theme/theme-reader.server.ts", "services/theme/theme-reader.server.js");
-  transpile("app/services/theme/theme-settings-resolver.server.ts", "services/theme/theme-settings-resolver.server.js");
-  transpile("app/services/theme/theme-renderer-profile.server.ts", "services/theme/theme-renderer-profile.server.js");
-  const profile = require(path.join(tempRoot, "services/theme/theme-renderer-profile.server.js"));
-  const state = {
-    theme: { id: "gid://theme/A", name: "A", updatedAt: "2026-09-04T01:00:00Z" },
-    files: fixtureFiles("tile-a", "2026-09-04T01:00:00Z"),
-  };
-  const admin = makeAdmin(state);
-  const a = await profile.getCompiledThemeRenderer({ admin, shop: "switch-test.myshopify.com" });
-  assert.equal(a.profile.cardSnippet, "tile-a");
-
-  state.theme = { id: "gid://theme/B", name: "B", updatedAt: "2026-09-04T02:00:00Z" };
-  state.files = fixtureFiles("tile-b", "2026-09-04T02:00:00Z");
-  const b = await profile.getCompiledThemeRenderer({ admin, shop: "switch-test.myshopify.com" });
-  assert.equal(b.profile.cardSnippet, "tile-b");
-
-  state.theme = { id: "gid://theme/B", name: "B", updatedAt: "2026-09-04T03:00:00Z" };
-  state.files = fixtureFiles("tile-c", "2026-09-04T03:00:00Z");
-  const c = await profile.getCompiledThemeRenderer({ admin, shop: "switch-test.myshopify.com" });
-  assert.equal(c.profile.cardSnippet, "tile-c");
-  assert.notEqual(c.themeVersionKey, b.themeVersionKey);
-
-  // A renderer rejected on one theme version must be reconsidered on a new version.
-  profile.rejectThemeRendererCandidate({
-    shop: "reject-test.myshopify.com",
-    themeVersionKey: a.themeVersionKey,
-    rendererId: a.rendererId,
-  });
-  const rejectState = {
-    theme: { id: "gid://theme/A", name: "A", updatedAt: "2026-09-04T05:00:00Z" },
-    files: fixtureFiles("tile-a", "2026-09-04T05:00:00Z"),
-  };
-  const freshA = await profile.getCompiledThemeRenderer({ admin: makeAdmin(rejectState), shop: "reject-test.myshopify.com" });
-  assert.equal(freshA.profile.cardSnippet, "tile-a");
-
-  const concurrentState = {
-    theme: { id: "gid://theme/C", name: "C", updatedAt: "2026-09-04T04:00:00Z" },
-    files: fixtureFiles("tile-con", "2026-09-04T04:00:00Z"),
-  };
-  const counters = { active: 0, files: 0 };
-  const concurrentAdmin = makeAdmin(concurrentState, counters);
-  await Promise.all(Array.from({ length: 5 }, () => profile.getCompiledThemeRenderer({ admin: concurrentAdmin, shop: "concurrent-test.myshopify.com" })));
-  assert.equal(counters.files, 1);
-
-  // A themes/update invalidation can arrive while source discovery is in
-  // flight, including before Shopify exposes a new updatedAt. The obsolete
-  // build must neither repopulate cache nor be returned to the waiting search.
-  let signalFirstDiscovery;
-  let releaseFirstDiscovery;
-  const firstDiscoveryStarted = new Promise((resolve) => {
-    signalFirstDiscovery = resolve;
-  });
-  const firstDiscoveryGate = new Promise((resolve) => {
-    releaseFirstDiscovery = resolve;
-  });
-  const raceState = {
-    theme: { id: "gid://theme/R", name: "R", updatedAt: "2026-09-04T07:00:00Z" },
-    files: fixtureFiles("tile-old", "2026-09-04T07:00:00Z"),
-    beforeFilesResponse: async (call) => {
-      if (call === 1) {
-        signalFirstDiscovery();
-        await firstDiscoveryGate;
-      }
-    },
-  };
-  const raceCounters = { active: 0, files: 0 };
-  const raceAdmin = makeAdmin(raceState, raceCounters);
-  const firstRaceBuild = profile.getCompiledThemeRenderer({
-    admin: raceAdmin,
-    shop: "race-test.myshopify.com",
-  });
-  await firstDiscoveryStarted;
-  raceState.files = fixtureFiles("tile-new", "2026-09-04T07:00:00Z");
-  profile.invalidateThemeRendererCache("race-test.myshopify.com");
-  const secondRaceBuild = profile.getCompiledThemeRenderer({
-    admin: raceAdmin,
-    shop: "race-test.myshopify.com",
-  });
-  const secondRaceResult = await secondRaceBuild;
-  releaseFirstDiscovery();
-  const firstRaceResult = await firstRaceBuild;
-  assert.equal(secondRaceResult.profile.cardSnippet, "tile-new");
-  assert.equal(firstRaceResult.profile.cardSnippet, "tile-new");
-  assert.equal(raceCounters.files, 2);
-
-  // Invalidation also clears runtime-rejected candidates. Editing/publishing
-  // the same version must not leave the integration poisoned until TTL expiry.
-  profile.rejectThemeRendererCandidate({
-    shop: "race-test.myshopify.com",
-    themeVersionKey: secondRaceResult.themeVersionKey,
-    rendererId: secondRaceResult.rendererId,
-  });
-  profile.invalidateThemeRendererCache("race-test.myshopify.com");
-  const afterInvalidation = await profile.getCompiledThemeRenderer({
-    admin: raceAdmin,
-    shop: "race-test.myshopify.com",
-  });
-  assert.equal(afterInvalidation.profile.cardSnippet, "tile-new");
-
-  // Theme processing must fail preflight rather than reaching AI.
-  const processingState = {
-    theme: { id: "gid://theme/P", name: "P", updatedAt: "2026-09-04T06:00:00Z", processing: true },
-    files: fixtureFiles("tile-p", "2026-09-04T06:00:00Z"),
-  };
-  await assert.rejects(() => profile.getCompiledThemeRenderer({ admin: makeAdmin(processingState), shop: "processing-test.myshopify.com" }));
-
   // Search-result data revalidation: Shopify is source of truth. Stale products
   // are removed, changed handle/title metadata is repaired, and search-time
   // liveness does not pretend to be a full catalog scan.
@@ -562,7 +334,7 @@ async function main() {
   // must consume zero embeddings/reservations.
   setupProxyRuntime();
   let scenario = await proxyScenario("12312", "/search?q=12312&type=product");
-  assert.equal(scenario.response.status, 302);
+  assert.equal((await scenario.response.clone().json()).status, "fallback");
   assert.equal(scenario.state.entitlement, 0);
   assert.equal(scenario.state.theme, 0);
   assert.equal(scenario.state.reserve, 0);
@@ -574,14 +346,14 @@ async function main() {
   assert.equal(scenario.state.semantic, 0);
 
   scenario = await proxyScenario("green", "/search?q=green&type=product", { themeError: true });
-  assert.equal(scenario.response.status, 302);
+  assert.equal((await scenario.response.clone().json()).status, "fallback");
   assert.equal(scenario.state.theme, 1);
   assert.equal(scenario.state.reserve, 0);
   assert.equal(scenario.state.semantic, 0);
   assert.equal(scenario.state.embedding, 0);
 
   scenario = await proxyScenario("green", "/search?q=green&type=product", { embedEnabled: false });
-  assert.equal(scenario.response.status, 302);
+  assert.equal((await scenario.response.clone().json()).status, "fallback");
   assert.equal(scenario.state.activeTheme, 1);
   assert.equal(scenario.state.appEmbed, 1);
   assert.equal(scenario.state.theme, 0);
@@ -595,7 +367,7 @@ async function main() {
       {id:"t2",name:"Theme B",updatedAt:"2026-09-04T00:01:00Z"},
     ],
   });
-  assert.equal(scenario.response.status, 302);
+  assert.equal((await scenario.response.clone().json()).status, "fallback");
   assert.equal(scenario.state.activeTheme, 2);
   assert.equal(scenario.state.theme, 0);
   assert.equal(scenario.state.reserve, 0);
@@ -607,7 +379,7 @@ async function main() {
     rendererThemeUpdatedAt: "2026-09-04T00:01:00Z",
     rendererThemeVersionKey: "t2\0v2",
   });
-  assert.equal(scenario.response.status, 302);
+  assert.equal((await scenario.response.clone().json()).status, "fallback");
   assert.equal(scenario.state.theme, 1);
   assert.equal(scenario.state.reserve, 0);
   assert.equal(scenario.state.semantic, 0);
@@ -629,13 +401,33 @@ async function main() {
 
   scenario = await proxyScenario("green snowboard", "/search?q=green+snowboard&type=product");
   assert.equal(scenario.response.status, 200);
-  assert.deepEqual(scenario.state.order.slice(0, 9), ["entitlement", "active-theme", "app-embed", "active-theme", "theme", "reserve", "semantic", "revalidate", "liquid"]);
-  assert.equal(scenario.state.theme, 1);
+  assert.deepEqual(scenario.state.order.slice(0, 11), ["entitlement", "active-theme", "app-embed", "active-theme", "theme", "reserve", "semantic", "revalidate", "active-theme", "app-embed", "theme"]);
+  assert.equal(scenario.state.theme, 2);
   assert.equal(scenario.state.reserve, 1);
   assert.equal(scenario.state.semantic, 1);
   assert.equal(scenario.state.revalidate, 1);
   assert.equal(scenario.state.embedding, 1);
   assert.equal(scenario.state.commit, 1);
+
+  const ranking=await scenario.response.clone().json();
+  assert.equal(ranking.status,"success");
+  assert.equal(ranking.target_ids,"id:1");
+  assert.deepEqual(ranking.products,[{id:"1",handle:"alpha"}]);
+  assert.equal(scenario.response.headers.get("content-type"),"application/json");
+  // A publish while OpenAI is running must not return a stale ranking.
+  scenario = await proxyScenario("green snowboard", "/search?q=green+snowboard&type=product", {
+    activeThemeSequence: [
+      {id:"t1",name:"Theme A",updatedAt:"2026-09-04T00:00:00Z"},
+      {id:"t1",name:"Theme A",updatedAt:"2026-09-04T00:00:00Z"},
+      {id:"t2",name:"Theme B",updatedAt:"2026-09-04T00:01:00Z"},
+    ],
+  });
+  assert.equal((await scenario.response.clone().json()).status, "fallback");
+  assert.equal(scenario.state.semantic, 1);
+  assert.equal(scenario.state.embedding, 1);
+  assert.equal(scenario.state.rollback, 1);
+  assert.equal(scenario.state.commit, 0);
+  assert.ok(!scenario.state.order.includes("liquid"));
 
   // The proxy harness deliberately mocks the new revalidation module. If all
   // vector candidates are no longer storefront-visible, usage is rolled back
@@ -643,7 +435,7 @@ async function main() {
   scenario = await proxyScenario("green snowboard", "/search?q=green+snowboard&type=product", {
     revalidateEmpty: true,
   });
-  assert.equal(scenario.response.status, 302);
+  assert.equal((await scenario.response.clone().json()).status, "fallback");
   assert.equal(scenario.state.semantic, 1);
   assert.equal(scenario.state.revalidate, 1);
   assert.equal(scenario.state.embedding, 1);

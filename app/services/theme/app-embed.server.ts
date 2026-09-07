@@ -1,5 +1,5 @@
 import { getActiveTheme, getThemeFile, type ActiveTheme } from "./theme-reader.server";
-import { parseShopifyThemeJson } from "./theme-settings-resolver.server";
+import { parseShopifyThemeJson } from "./theme-json.server";
 
 export const DEFAULT_AI_SEARCH_APP_EMBED_BLOCK_HANDLE = "ai_search_bridge";
 
@@ -55,10 +55,9 @@ function findAppEmbedBlock(value: unknown): {
     if (!isObject(node)) return;
 
     const type = typeof node.type === "string" ? node.type : "";
-    const normalizedType = type.toLowerCase();
-    const marker = `/blocks/${getAiSearchAppEmbedBlockHandle().toLowerCase()}/`;
-
-    if (normalizedType.includes(marker)) {
+    const reference = type.match(/^shopify:\/\/apps\/[^/]+\/blocks\/([^/]+)\/([^/]+)$/);
+    const extensionId = process.env.AI_SEARCH_APP_EMBED_EXTENSION_ID?.trim();
+    if (reference?.[1] === getAiSearchAppEmbedBlockHandle() && (!extensionId || reference[2] === extensionId)) {
       found = true;
       if (node.disabled !== true) {
         enabled = true;
@@ -116,7 +115,10 @@ export async function getAiSearchAppEmbedStatusForTheme(
     const parsed = parseShopifyThemeJson<ThemeSettingsData>(
       settingsFile.content,
     );
-    const match = findAppEmbedBlock(parsed.current ?? parsed);
+    // Only saved app embeds in current.blocks are live. Presets, draft
+    // section blocks and arbitrary nested strings must not enable the proxy.
+    const current = isObject(parsed.current) ? parsed.current : null;
+    const match = findAppEmbedBlock(current?.blocks);
 
     return {
       enabled: match.found ? match.enabled : false,

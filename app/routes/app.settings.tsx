@@ -99,7 +99,7 @@ export default function SettingsPage() {
 
             <s-text>
               Fallback về Shopify Search: LUÔN BẬT. Đây là cơ chế an toàn bắt
-              buộc khi AI, quota, subscription hoặc Theme Renderer không khả
+              buộc khi AI, quota, subscription hoặc Theme Map không khả
               dụng.
             </s-text>
 
@@ -148,12 +148,12 @@ export default function SettingsPage() {
             <s-text>Theme hiện tại: {data.appEmbed.themeName}</s-text>
           ) : null}
           <s-text>
-            Theme Renderer: {data.themeIntegration.rendererCompatible ? "TƯƠNG THÍCH" : "CHƯA TƯƠNG THÍCH"}
+            Theme Map: {data.themeIntegration.themeMapReady ? "ĐÃ ĐỒNG BỘ" : "CHƯA SẴN SÀNG"}
           </s-text>
           <s-text>Integration: {data.themeIntegration.status}</s-text>
           <s-text>
-            App Embed theo dõi điều hướng Shopify /search mà không đoán CSS
-            selector/class và không tự render product card. AI chỉ nhận search
+            App Embed lấy HTML sản phẩm do Shopify và theme hiện tại tạo ra,
+            dùng Theme Map để tìm vùng kết quả rồi sắp theo thứ tự AI. AI chỉ nhận search
             product-only, semantic và không có filter/sort/page chưa hỗ trợ;
             SKU/barcode/mã số, article/page/mixed search và filter nâng cao giữ
             nguyên Shopify Search để không tốn query embedding.

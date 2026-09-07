@@ -292,7 +292,10 @@ export async function getThemeFilesByPatterns(
     collectThemeFiles(json, result);
 
     const pageInfo = json.data.theme.files?.pageInfo;
-    if (!pageInfo?.hasNextPage || !pageInfo.endCursor) break;
+    if (!pageInfo?.hasNextPage) break;
+    if (!pageInfo.endCursor || pageInfo.endCursor === after || result.size >= maxFiles || page + 1 >= maxPages) {
+      throw new Error("THEME_DISCOVERY_INCOMPLETE");
+    }
     after = pageInfo.endCursor;
   }
 
