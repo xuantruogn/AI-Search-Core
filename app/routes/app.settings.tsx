@@ -10,6 +10,9 @@ import {
 import { getThemeAppEmbedDeepLink } from "../services/theme/app-embed.server";
 import { getThemeIntegrationStatus } from "../services/theme/theme-integration.server";
 import { canUseQuotaOverrideUi } from "../services/commerce/support-access.server";
+import { clearShopThemeCache } from "./proxy.ai-search";
+import { getActiveTheme } from "../services/theme/theme-reader.server";
+import { getActiveThemeMap } from "../services/theme/theme-map-lifecycle.server";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { admin, session } = await authenticate.admin(request);
@@ -28,10 +31,36 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
+  const { admin, session } = await authenticate.admin(request);
   const form = await request.formData();
 
   const intent = String(form.get("intent") || "settings");
+
+  // ĐỒNG BỘ THEME MAP
+  if (intent === "sync_theme_map") {
+    try {
+      // 1. Clear RAM cache ở App Proxy
+      clearShopThemeCache(session.shop);
+
+      // 2. Ép quét lại Theme Map của Active Theme
+      const activeTheme = await getActiveTheme(admin);
+      await getActiveThemeMap({
+        admin,
+        shop: session.shop,
+        activeTheme,
+      });
+
+      return {
+        success: true,
+        message: "Đã đồng bộ lại Theme Map thành công!",
+      };
+    } catch (error) {
+      return {
+        success: false,
+        message: `Đồng bộ Theme Map thất bại: ${error instanceof Error ? error.message : String(error)}`,
+      };
+    }
+  }
 
   if (intent === "quota_overrides") {
     const allowed = canUseQuotaOverrideUi(session.shop);
@@ -127,17 +156,17 @@ export default function SettingsPage() {
               Lưu settings
             </s-button>
 
-            {fetcher.data?.message ? (
+            {fetcher.data?.message && fetcher.formData?.get("intent") === "settings" ? (
               <s-text>{fetcher.data.message}</s-text>
             ) : null}
           </div>
         </fetcher.Form>
       </s-section>
 
-      <s-section heading="Theme App Embed">
+      <s-section heading="Theme App Embed & Theme Map">
         <s-stack direction="block" gap="base">
           <s-text>
-            Trạng thái:{" "}
+            Trạng thái App Embed:{" "}
             {data.appEmbed.enabled === true
               ? "ĐÃ BẬT"
               : data.appEmbed.enabled === false
@@ -148,15 +177,30 @@ export default function SettingsPage() {
             <s-text>Theme hiện tại: {data.appEmbed.themeName}</s-text>
           ) : null}
           <s-text>
-            Theme Map: {data.themeIntegration.themeMapReady ? "ĐÃ ĐỒNG BỘ" : "CHƯA SẴN SÀNG"}
+            Trạng thái Theme Map: {data.themeIntegration.themeMapReady ? "ĐÃ ĐỒNG BỘ" : "CHƯA SẴN SÀNG"}
           </s-text>
           <s-text>Integration: {data.themeIntegration.status}</s-text>
+
+          {/* Nút bấm ĐỒNG BỘ THEME MAP */}
+          <fetcher.Form method="post" style={{ marginTop: 12, marginBottom: 12 }}>
+            <input type="hidden" name="intent" value="sync_theme_map" />
+            <s-button
+              type="submit"
+              {...(fetcher.state !== "idle" && fetcher.formData?.get("intent") === "sync_theme_map" ? { loading: true } : {})}
+            >
+              Đồng bộ lại Theme Map
+            </s-button>
+          </fetcher.Form>
+
+          {fetcher.data?.message && fetcher.formData?.get("intent") === "sync_theme_map" ? (
+            <span style={{ color: fetcher.data.success ? "green" : "red" }}>
+              <s-text>{fetcher.data.message}</s-text>
+            </span>
+          ) : null}
+
           <s-text>
             App Embed lấy HTML sản phẩm do Shopify và theme hiện tại tạo ra,
-            dùng Theme Map để tìm vùng kết quả rồi sắp theo thứ tự AI. AI chỉ nhận search
-            product-only, semantic và không có filter/sort/page chưa hỗ trợ;
-            SKU/barcode/mã số, article/page/mixed search và filter nâng cao giữ
-            nguyên Shopify Search để không tốn query embedding.
+            dùng Theme Map để tìm vùng kết quả rồi sắp theo thứ tự AI.
           </s-text>
           {data.appEmbedUrl ? (
             <s-link href={data.appEmbedUrl} target="_top">
@@ -168,8 +212,7 @@ export default function SettingsPage() {
             </s-text>
           )}
           <s-text>
-            Sau khi bật “AI Search Bridge” trong Theme Editor, merchant cần bấm
-            Save.
+            Lưu ý: Khi đổi sang Theme mới, bạn hãy nhấn nút "Đồng bộ lại Theme Map" ở trên và bật “AI Search Bridge” trong Theme Editor rồi nhấn Save.
           </s-text>
         </s-stack>
       </s-section>

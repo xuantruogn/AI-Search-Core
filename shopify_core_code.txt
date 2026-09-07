@@ -1302,7 +1302,6 @@ import { authenticate } from "../shopify.server";
 import { getActiveThemeMap } from "../services/theme/theme-map-lifecycle.server";
 import type { ThemeMap } from "../services/theme-map.server";
 import { semanticSearch } from "../services/search/semantic-search.server";
-import { revalidateSearchResults } from "../services/search/search-result-revalidation.server";
 import { classifySearchRequest } from "../services/search/search-request-router.server";
 import {
   getActiveTheme,
@@ -1323,6 +1322,44 @@ import {
 } from "../services/commerce/usage.server";
 
 const NATIVE_BYPASS_PARAM = "_ai_search_bypass";
+
+// ==========================================
+// IN-MEMORY QUERY EMBEDDING CACHE (TTL 24 HOURS)
+// ==========================================
+const queryEmbeddingCache = new Map<
+  string,
+  { embedding: number[]; timestamp: number }
+>();
+const EMBEDDING_CACHE_TTL = 24 * 60 * 60 * 1000; // 24 hours
+
+export function getCachedQueryEmbedding(
+  shop: string,
+  query: string,
+): number[] | null {
+  const key = `${shop}:${query.toLowerCase().trim()}`;
+  const cached = queryEmbeddingCache.get(key);
+  if (cached && Date.now() - cached.timestamp < EMBEDDING_CACHE_TTL) {
+    return cached.embedding;
+  }
+  return null;
+}
+
+export function setCachedQueryEmbedding(
+  shop: string,
+  query: string,
+  embedding: number[],
+) {
+  const key = `${shop}:${query.toLowerCase().trim()}`;
+  if (queryEmbeddingCache.size > 10000) {
+    const oldestKey = queryEmbeddingCache.keys().next().value;
+    if (oldestKey) queryEmbeddingCache.delete(oldestKey);
+  }
+  queryEmbeddingCache.set(key, { embedding, timestamp: Date.now() });
+}
+
+// ==========================================
+// HELPER FUNCTIONS
+// ==========================================
 
 function nativeSearchUrl(query: string, requestedUrl?: string | null) {
   if (
@@ -1376,7 +1413,67 @@ const MIN_SEMANTIC_QUERY_CHARS = readPositiveInteger(
   3,
 );
 
+// ==========================================
+// IN-MEMORY CACHE FOR THEME PREFLIGHT (TTL 60s)
+// ==========================================
+interface CachedThemeData {
+  activeTheme: ActiveTheme;
+  preflightMap: ThemeMap;
+  timestamp: number;
+}
+
+const themeCache = new Map<string, CachedThemeData>();
+const THEME_CACHE_TTL_MS = 60 * 1000; // 60 seconds
+
+async function getCachedThemePreflight(admin: any, shop: string) {
+  const cached = themeCache.get(shop);
+  const now = Date.now();
+
+  if (cached && now - cached.timestamp < THEME_CACHE_TTL_MS) {
+    return {
+      activeTheme: cached.activeTheme,
+      preflightMap: cached.preflightMap,
+      fromCache: true,
+      embedEnabled: true,
+      reason: null,
+    };
+  }
+
+  const activeTheme = await getActiveTheme(admin);
+  const appEmbed = await getAiSearchAppEmbedStatusForTheme(admin, activeTheme);
+
+  if (appEmbed.enabled !== true) {
+    return {
+      activeTheme,
+      preflightMap: null,
+      fromCache: false,
+      embedEnabled: false,
+      reason: appEmbed.reason,
+    };
+  }
+
+  const preflightMap = await getActiveThemeMap({
+    admin,
+    shop,
+    activeTheme,
+  });
+
+  themeCache.set(shop, { activeTheme, preflightMap, timestamp: now });
+  return {
+    activeTheme,
+    preflightMap,
+    fromCache: false,
+    embedEnabled: true,
+    reason: null,
+  };
+}
+
+// ==========================================
+// LOADER
+// ==========================================
+
 export const loader = async ({ request }: LoaderFunctionArgs) => {
+  console.time("[PERF-PROXY] TOTAL PROXY REQUEST");
   const requestUrl = new URL(request.url);
   const query = requestUrl.searchParams.get("q")?.trim() ?? "";
   const nativeSearchTarget =
@@ -1384,35 +1481,72 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     requestUrl.searchParams.get("native_search_path");
 
   const wantsJson = requestUrl.searchParams.get("format") === "json";
-  const requestedPageRaw = Number.parseInt(requestUrl.searchParams.get("page") || "1", 10);
-  const requestedPage = Number.isSafeInteger(requestedPageRaw) && requestedPageRaw > 0 ? requestedPageRaw : 1;
-  const nativeRedirect = (value: string, target?: string | null, reason = "NATIVE_SEARCH") => wantsJson
-    ? Response.json({status:"fallback",engine:"native",reason,native_url:nativeSearchUrl(value,target)}, {headers:{"Cache-Control":"no-store"}})
-    : nativeRedirectResponse(value,target,reason);
+  const requestedPageRaw = Number.parseInt(
+    requestUrl.searchParams.get("page") || "1",
+    10,
+  );
+  const requestedPage =
+    Number.isSafeInteger(requestedPageRaw) && requestedPageRaw > 0
+      ? requestedPageRaw
+      : 1;
+
+  const nativeRedirect = (
+    value: string,
+    target?: string | null,
+    reason = "NATIVE_SEARCH",
+  ) =>
+    wantsJson
+      ? Response.json(
+          {
+            status: "fallback",
+            engine: "native",
+            reason,
+            native_url: nativeSearchUrl(value, target),
+          },
+          { headers: { "Cache-Control": "no-store" } },
+        )
+      : nativeRedirectResponse(value, target, reason);
+
   try {
     const { admin, session } = await authenticate.public.appProxy(request);
 
-    // Old App Embed markup can briefly outlive an uninstall/session. Native
-    // search is always safer than a storefront 500.
     if (!admin || !session) {
-      return nativeRedirect(query, nativeSearchTarget, "APP_PROXY_SESSION_MISSING");
+      return nativeRedirect(
+        query,
+        nativeSearchTarget,
+        "APP_PROXY_SESSION_MISSING",
+      );
     }
 
     if (wantsJson && requestUrl.searchParams.get("mode") === "theme-map") {
+      console.time("[PERF-PROXY] Mode Theme-Map Processing");
       const theme = await getActiveTheme(admin);
       const embed = await getAiSearchAppEmbedStatusForTheme(admin, theme);
-      if (embed.enabled !== true) return nativeRedirect(query,nativeSearchTarget,"APP_EMBED_DISABLED_ON_ACTIVE_THEME");
-      const map = await getActiveThemeMap({admin,shop:session.shop,activeTheme:theme});
-      return Response.json({status:"success",theme_map:map}, {headers:{"Cache-Control":"no-store"}});
+      if (embed.enabled !== true)
+        return nativeRedirect(
+          query,
+          nativeSearchTarget,
+          "APP_EMBED_DISABLED_ON_ACTIVE_THEME",
+        );
+      const map = await getActiveThemeMap({
+        admin,
+        shop: session.shop,
+        activeTheme: theme,
+      });
+      console.timeEnd("[PERF-PROXY] Mode Theme-Map Processing");
+      return Response.json(
+        { status: "success", theme_map: map },
+        { headers: { "Cache-Control": "no-store" } },
+      );
     }
-    // HTML navigations from an old embed use native search until the new
-    // storefront asset is deployed. AI's new contract is JSON only.
-    if (!wantsJson) return nativeRedirect(query,nativeSearchTarget,"JSON_RUNTIME_REQUIRED");
 
-    // First gate: pure request semantics. This runs before billing, DB quota,
-    // theme discovery, OpenAI or Qdrant. Exact/SKU/barcode searches, mixed
-    // resource searches, filters, pagination and unsupported sorts stay on
-    // Shopify Search and consume zero AI tokens.
+    if (!wantsJson)
+      return nativeRedirect(
+        query,
+        nativeSearchTarget,
+        "JSON_RUNTIME_REQUIRED",
+      );
+
     const routeDecision = classifySearchRequest({
       query,
       nativeSearchTarget,
@@ -1421,15 +1555,11 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     });
 
     if (routeDecision.engine === "NATIVE") {
-      console.log("[AI Search] Pre-AI router chose Shopify native search:", {
-        shop: session.shop,
-        reason: routeDecision.reason,
-        queryLength: query.length,
-        resourceTypes: routeDecision.resourceTypes,
-      });
       return nativeRedirect(query, nativeSearchTarget, routeDecision.reason);
     }
 
+    // Billing Check & Reconciliation
+    console.time("[PERF-PROXY] Billing Check & Reconciliation");
     let billingChanged = false;
     try {
       const billing = await refreshShopifyAppPricingIfStale({
@@ -1449,11 +1579,17 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         shop: session.shop,
         forceCatalogRefresh: true,
       }).catch((error) => {
-        console.error("[AI Search] Storefront plan reconciliation failed:", error);
+        console.error(
+          "[AI Search] Storefront plan reconciliation failed:",
+          error,
+        );
       });
     }
+    console.timeEnd("[PERF-PROXY] Billing Check & Reconciliation");
 
+    console.time("[PERF-PROXY] Entitlement Check");
     const entitlement = await getShopEntitlement(session.shop);
+    console.timeEnd("[PERF-PROXY] Entitlement Check");
 
     const fallback = async (reason: string) => {
       try {
@@ -1478,7 +1614,10 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       ) {
         void reconcileShopCommercialState({ shop: session.shop }).catch(
           (error) => {
-            console.error("[AI Search] Entitlement reconciliation trigger failed:", error);
+            console.error(
+              "[AI Search] Entitlement reconciliation trigger failed:",
+              error,
+            );
           },
         );
       }
@@ -1490,65 +1629,37 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       return fallback("CATALOG_EMPTY");
     }
 
-    // Second gate: theme capability preflight. This intentionally runs BEFORE
-    // search quota reservation and before semanticSearch() creates an OpenAI
-    // embedding. Every request validates the live MAIN theme id + updatedAt;
-    // a theme publish/edit invalidates stale Theme Map state before AI.
-    let activeTheme: ActiveTheme;
+    // BƯỚC 1: Theme Preflight Check (In-Memory Cached)
+    console.time("[PERF-PROXY] 1. Theme Preflight (Cached)");
     let preflightMap: ThemeMap;
     try {
-      activeTheme = await getActiveTheme(admin);
-      const appEmbed = await getAiSearchAppEmbedStatusForTheme(
+      const themePreflight = await getCachedThemePreflight(
         admin,
-        activeTheme,
+        session.shop,
       );
 
-      // A direct/stale App Proxy request can outlive a theme publish. Never
-      // spend an embedding when the current MAIN theme doesn't actually have
-      // the App Embed enabled.
-      if (appEmbed.enabled !== true) {
-        console.warn("[AI Search] Active theme App Embed unavailable; native search selected:", {
-          shop: session.shop,
-          themeId: activeTheme.id,
-          themeName: activeTheme.name,
-          reason: appEmbed.reason,
-        });
+      if (themePreflight.embedEnabled === false) {
         return fallback(
-          appEmbed.enabled === false
+          themePreflight.reason === "APP_EMBED_DISABLED"
             ? "APP_EMBED_DISABLED_ON_ACTIVE_THEME"
             : "APP_EMBED_STATUS_UNKNOWN",
         );
       }
 
-      // App Embed settings are read from a theme file. A publish can complete
-      // during that request, so confirm the MAIN identity again before
-      // mapping/reserving. Never combine embed state from theme A with a
-      // map from theme B.
-      const confirmedTheme = await getActiveTheme(admin);
-      if (confirmedTheme.versionKey !== activeTheme.versionKey) {
-        return fallback("ACTIVE_THEME_CHANGED_DURING_PREFLIGHT");
-      }
-      activeTheme = confirmedTheme;
+      preflightMap = themePreflight.preflightMap!;
 
-      preflightMap = await getActiveThemeMap({
-        admin,
-        shop: session.shop,
-        activeTheme,
-      });
-
-      if (preflightMap.theme.versionKey !== activeTheme.versionKey) {
-        return fallback("THEME_MAP_SNAPSHOT_MISMATCH");
-      }
-      if (requestUrl.searchParams.get("theme_id") !== preflightMap.theme.id || requestUrl.searchParams.get("map_fingerprint") !== preflightMap.fingerprint) {
+      if (
+        requestUrl.searchParams.get("theme_id") !== preflightMap.theme.id ||
+        requestUrl.searchParams.get("map_fingerprint") !==
+          preflightMap.fingerprint
+      ) {
+        themeCache.delete(session.shop);
         return fallback("STOREFRONT_THEME_MAP_STALE");
       }
-
     } catch (error) {
-      console.warn("[AI Search] Theme preflight failed; native search selected:", {
-        shop: session.shop,
-        error: error instanceof Error ? error.message : String(error),
-      });
       return fallback("THEME_MAP_UNAVAILABLE");
+    } finally {
+      console.timeEnd("[PERF-PROXY] 1. Theme Preflight (Cached)");
     }
 
     const reservationResult = await reserveSearchUsage({
@@ -1566,107 +1677,129 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     const startedAt = Date.now();
 
     try {
-      // Oversample Qdrant candidates so stale/unpublished entries can be
-      // removed without unnecessarily shrinking the visible result set.
+      // BƯỚC 2: Semantic Search (Lấy danh sách Top kết quả)
+      console.time(
+        "[PERF-PROXY] 2. Semantic Search (OpenAI/Vector Cache + Qdrant)",
+      );
+
+      const cachedVector = getCachedQueryEmbedding(session.shop, query);
+      if (cachedVector) {
+        console.log(
+          `[AI Search] Cache Hit Vector cho từ khóa: "${query}" - BỎ QUA OpenAI API!`,
+        );
+      }
+
+      // Lấy danh sách kết quả đủ lớn (Top 60 sản phẩm) để trả về cho Client
       const rawSearchResults = await semanticSearch({
         shop: session.shop,
         query,
-        limit: Math.min(60, Math.max(entitlement.resultLimit, entitlement.resultLimit * 3)),
-        onEmbeddingCreated: async () => {
+        vectorOverride: cachedVector ?? undefined,
+        limit: Math.min(
+          60,
+          Math.max(entitlement.resultLimit, entitlement.resultLimit * 3),
+        ),
+        onEmbeddingCreated: async (vector) => {
+          if (vector) setCachedQueryEmbedding(session.shop, query, vector);
           try {
             await recordQueryEmbeddingConsumed(reservation);
           } catch (usageError) {
-            console.error("[AI Search] Query embedding usage logging failed:", usageError);
+            console.error(
+              "[AI Search] Query embedding usage logging failed:",
+              usageError,
+            );
           }
         },
       });
+      console.timeEnd(
+        "[PERF-PROXY] 2. Semantic Search (OpenAI/Vector Cache + Qdrant)",
+      );
 
-      const revalidated = await revalidateSearchResults({
-        admin,
-        shop: session.shop,
-        results: rawSearchResults,
-        // Validate the ranked pool before pagination so total_pages remains correct.
-        limit: rawSearchResults.length,
-      });
-      const searchResults = revalidated.results;
-
-      // Qdrant can be briefly ahead of Shopify after an unpublish/delete. If
-      // every ranked candidate is rejected by the live Shopify check, do not
-      // render a misleading empty AI page. The outer execution handler rolls
-      // back the search reservation (while preserving real embedding usage)
-      // and sends the customer to Shopify native search.
-      if (searchResults.length === 0) {
-        throw new Error("NO_LIVE_AI_RESULTS_AFTER_REVALIDATION");
+      if (rawSearchResults.length === 0) {
+        throw new Error("NO_LIVE_AI_RESULTS");
       }
 
-
-      if (revalidated.staleProductIds.length > 0 || revalidated.repairedMetadata > 0) {
-        console.log("[AI Search] Search candidates reconciled with Shopify:", {
-          shop: session.shop,
-          staleRemoved: revalidated.staleProductIds.length,
-          metadataRepaired: revalidated.repairedMetadata,
-          validResults: searchResults.length,
-        });
-      }
-      // Theme rendering happens on Shopify's /search page, never in this
-      // backend. Fence the JSON ranking against a mid-query theme change.
-      const finalTheme = await getActiveTheme(admin);
-      if (finalTheme.versionKey !== activeTheme.versionKey || finalTheme.processing || finalTheme.processingFailed) throw new Error("ACTIVE_THEME_CHANGED_DURING_SEARCH");
-      const finalEmbed = await getAiSearchAppEmbedStatusForTheme(admin, finalTheme);
-      if (finalEmbed.enabled !== true) throw new Error("APP_EMBED_CHANGED_DURING_SEARCH");
-      const finalMap = await getActiveThemeMap({admin,shop:session.shop,activeTheme:finalTheme});
-      if (finalMap.fingerprint !== preflightMap.fingerprint) throw new Error("THEME_MAP_CHANGED_DURING_SEARCH");
+      // Lọc trùng ID
       const seen = new Set<string>();
-      const products = searchResults.flatMap((result) => {
-        const id = result.productId.match(/^(?:gid:\/\/shopify\/Product\/)?(\d+)$/)?.[1];
-        if (!id) throw new Error("INVALID_SHOPIFY_PRODUCT_ID");
+      const allProducts = rawSearchResults.flatMap((result) => {
+        const id =
+          result.productId.match(/^(?:gid:\/\/shopify\/Product\/)?(\d+)$/)?.[1] ||
+          result.productId;
+        if (!id) return [];
         if (seen.has(id)) return [];
         seen.add(id);
-        return [{id,handle:result.handle}];
+        return [{ id, handle: result.handle }];
       });
+
+      // Cắt mảng cho Trang 1
       const pageSize = Math.max(1, entitlement.resultLimit);
-      const totalProducts = products.length;
+      const totalProducts = allProducts.length;
       const totalPages = Math.max(1, Math.ceil(totalProducts / pageSize));
       const currentPage = Math.min(requestedPage, totalPages);
       const pageStart = (currentPage - 1) * pageSize;
-      const pageProducts = products.slice(pageStart, pageStart + pageSize);
+      const pageProducts = allProducts.slice(pageStart, pageStart + pageSize);
 
-      const response = Response.json({
-        status:"success",engine:"ai-search-v3",query,
-        theme_id:finalMap.theme.id,map_fingerprint:finalMap.fingerprint,
-        target_ids:pageProducts.map((product)=>`id:${product.id}`).join(" OR "),
-        products:pageProducts,
-        pagination:{current_page:currentPage,page_size:pageSize,total_products:totalProducts,total_pages:totalPages},
-      }, {headers:{"Cache-Control":"no-store"}});
+      const response = Response.json(
+        {
+          status: "success",
+          engine: "ai-search-v3",
+          query,
+          theme_id: preflightMap.theme.id,
+          map_fingerprint: preflightMap.fingerprint,
+          target_ids: pageProducts
+            .map((product) => `id:${product.id}`)
+            .join(" OR "),
+          products: pageProducts,
+          all_products: allProducts, // Trả về toàn bộ ID để Frontend lưu vào Session Storage
+          pagination: {
+            current_page: currentPage,
+            page_size: pageSize,
+            total_products: totalProducts,
+            total_pages: totalPages,
+          },
+        },
+        { headers: { "Cache-Control": "no-store" } },
+      );
 
       try {
         await markUsageReservationEffectApplied(reservation);
       } catch (usageError) {
-        console.error("[AI Search] Search reservation effect marker failed:", usageError);
+        console.error(
+          "[AI Search] Search reservation effect marker failed:",
+          usageError,
+        );
       }
 
       try {
         await commitSearchUsage(reservation, {
-          resultCount: searchResults.length,
+          resultCount: rawSearchResults.length,
           durationMs: Date.now() - startedAt,
-          themeId: finalMap.theme.gid,
-          rendererSource: finalMap.search.searchTemplate ?? "native-search",
+          themeId: preflightMap.theme.gid,
+          rendererSource: preflightMap.search.searchTemplate ?? "native-search",
         });
       } catch (usageError) {
-        console.error("[AI Search] Search usage commit logging failed:", usageError);
+        console.error(
+          "[AI Search] Search usage commit logging failed:",
+          usageError,
+        );
       }
 
       return response;
     } catch (error) {
-      console.error("[AI Search] AI execution failed; using Shopify native search:", {
-        shop: session.shop,
-        error: error instanceof Error ? error.message : String(error),
-      });
+      console.error(
+        "[AI Search] AI execution failed; using Shopify native search:",
+        {
+          shop: session.shop,
+          error: error instanceof Error ? error.message : String(error),
+        },
+      );
 
       try {
         await rollbackSearchUsage(reservation, error);
       } catch (usageError) {
-        console.error("[AI Search] Search usage rollback failed:", usageError);
+        console.error(
+          "[AI Search] Search usage rollback failed:",
+          usageError,
+        );
       }
 
       return fallback("AI_SEARCH_RUNTIME_ERROR");
@@ -1677,9 +1810,10 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     });
 
     return nativeRedirect(query, nativeSearchTarget, "APP_PROXY_FATAL_ERROR");
+  } finally {
+    console.timeEnd("[PERF-PROXY] TOTAL PROXY REQUEST");
   }
 };
-
 ---
 D:\AI-Buyense\app\routes\webhooks.app.scopes_update.tsx
 ---
@@ -10476,13 +10610,15 @@ export type SemanticSearchInput = {
   shop: string;
   query: string;
   limit?: number;
-  onEmbeddingCreated?: (dimensions: number) => void | Promise<void>;
+  vectorOverride?: number[]; // Hỗ trợ Vector cache truyền vào
+  onEmbeddingCreated?: (vector: number[]) => void | Promise<void>; // Trả về mảng vector để lưu vào Cache
 };
 
 export async function semanticSearch({
   shop,
   query,
   limit = 20,
+  vectorOverride,
   onEmbeddingCreated,
 }: SemanticSearchInput): Promise<SearchResult[]> {
   const cleanQuery = query.trim();
@@ -10491,24 +10627,44 @@ export async function semanticSearch({
     return [];
   }
 
-  // Do not emit raw customer queries into operational logs. Persistent usage
-  // events store only a deterministic keyed digest (HMAC when configured).
   console.log("[AI Search] Semantic search", {
     shop,
     queryLength: cleanQuery.length,
     limit,
+    cacheHit: Boolean(vectorOverride),
   });
 
   await ensureProductCollection();
 
-  // The callback fires immediately after OpenAI succeeds, before Qdrant is
-  // called. This lets usage accounting keep the real embedding cost even if
-  // the downstream vector query or theme renderer later fails.
-  const queryVector = await createEmbedding(cleanQuery);
-  await onEmbeddingCreated?.(queryVector.length);
+  let queryVector: number[];
+
+  // 1. Nếu có vectorOverride từ Cache -> Dùng lại ngay, không gọi OpenAI API
+  if (
+    vectorOverride &&
+    Array.isArray(vectorOverride) &&
+    vectorOverride.length > 0
+  ) {
+    queryVector = vectorOverride;
+  } else {
+    // 2. Nếu chưa có trong Cache -> Gọi OpenAI API để tạo Embedding
+    queryVector = await createEmbedding(cleanQuery);
+
+    // Bắn callback lưu mảng Vector (number[]) vào queryEmbeddingCache trên Server
+    if (onEmbeddingCreated && typeof onEmbeddingCreated === "function") {
+      try {
+        await onEmbeddingCreated(queryVector);
+      } catch (usageError) {
+        console.error(
+          "[AI Search] Query embedding callback failed:",
+          usageError,
+        );
+      }
+    }
+  }
 
   console.log("[AI Search] Query embedding dimensions:", queryVector.length);
 
+  // 3. Tìm kiếm Vector trên Qdrant
   const results = await searchProductVectors({
     shop,
     vector: queryVector,
@@ -10530,7 +10686,6 @@ export async function semanticSearch({
     score: result.score,
   }));
 }
-
 ---
 D:\AI-Buyense\app\services\search\vector-id.server.ts
 ---
@@ -11848,28 +12003,22 @@ D:\AI-Buyense\extensions\ai-search-storefront\assets\search-interceptor.v3.js
   "use strict";
   if (window.__aiSearchV3Installed) return;
   window.__aiSearchV3Installed = true;
-  if (window.Shopify?.designMode || window.AI_SEARCH_CONFIG?.designMode ||
-      new URL(location.href).searchParams.has("preview_theme_id") ||
-      (window.Shopify?.theme?.role && window.Shopify.theme.role !== "main")) return;
+  if (
+    window.Shopify?.designMode ||
+    window.AI_SEARCH_CONFIG?.designMode ||
+    new URL(location.href).searchParams.has("preview_theme_id") ||
+    (window.Shopify?.theme?.role && window.Shopify.theme.role !== "main")
+  )
+    return;
 
-  console.log(
-    "[AI SEARCH V3] Search Interceptor V3 loaded"
-  );
-  const config =
-    window.AI_SEARCH_CONFIG || {};
-  const SEARCH_ENDPOINT =
-    config.search_endpoint ||
-    "/apps/ai-search";
-  const AI_SEARCH_PARAM =
-    "ai_search";
-  const STATE_KEY =
-    "aiSearchV3";
-  let activeController =
-    null;
-  let activeRequestId =
-    0;
-  let interceptionInstalled =
-    false;
+  console.log("[AI SEARCH V3] Search Interceptor V3 loaded (ID Paging Optimized)");
+  const config = window.AI_SEARCH_CONFIG || {};
+  const SEARCH_ENDPOINT = config.search_endpoint || "/apps/ai-search";
+  const AI_SEARCH_PARAM = "ai_search";
+  const STATE_KEY = "aiSearchV3";
+  let activeController = null;
+  let activeRequestId = 0;
+  let interceptionInstalled = false;
   const NATIVE_BYPASS_PARAM = "_ai_search_bypass";
   const SAFE_SEARCH_PARAMS = new Set([
     "q",
@@ -11889,9 +12038,104 @@ D:\AI-Buyense\extensions\ai-search-storefront\assets\search-interceptor.v3.js
     "options[unavailable_products]",
   ]);
 
-  const defaultSearchTypes = Array.isArray(config.defaultSearchTypes) ? config.defaultSearchTypes : [];
+  const defaultSearchTypes = Array.isArray(config.defaultSearchTypes)
+    ? config.defaultSearchTypes
+    : [];
   const unscopedSearchMode = config.unscopedSearchMode || "product_only";
 
+  // ==========================================
+  // CLIENT-SIDE PRODUCT ID STORAGE & THEME MAP
+  // ==========================================
+  const THEME_MAP_CACHE_KEY = "ai_search_theme_map_v3";
+  const THEME_MAP_TTL = 24 * 60 * 60 * 1000; // 24 Hours
+  const ID_CACHE_KEY_PREFIX = "ai_search_ids_";
+
+  function getCachedThemeMap() {
+    try {
+      const item = localStorage.getItem(THEME_MAP_CACHE_KEY);
+      if (!item) return null;
+      const parsed = JSON.parse(item);
+      if (Date.now() - parsed.timestamp < THEME_MAP_TTL) {
+        return parsed.schema;
+      }
+      localStorage.removeItem(THEME_MAP_CACHE_KEY);
+    } catch {
+      /* ignore */
+    }
+    return null;
+  }
+
+  function setCachedThemeMap(schema) {
+    try {
+      localStorage.setItem(
+        THEME_MAP_CACHE_KEY,
+        JSON.stringify({ schema, timestamp: Date.now() })
+      );
+    } catch {
+      /* ignore */
+    }
+  }
+
+  // Xóa toàn bộ ID cũ trong sessionStorage khi tìm từ khóa mới
+  function clearProductIdsCache() {
+    try {
+      Object.keys(sessionStorage).forEach((key) => {
+        if (key.startsWith(ID_CACHE_KEY_PREFIX)) {
+          sessionStorage.removeItem(key);
+        }
+      });
+    } catch {
+      /* ignore */
+    }
+  }
+
+  // Lưu mảng ID/Handle của từ khóa vào sessionStorage
+  function saveProductIdsForQuery(query, allProducts) {
+    clearProductIdsCache();
+    try {
+      const key = `${ID_CACHE_KEY_PREFIX}${query.toLowerCase().trim()}`;
+      sessionStorage.setItem(key, JSON.stringify(allProducts));
+    } catch {
+      console.warn("[AI SEARCH V3] Failed to save product IDs to sessionStorage");
+    }
+  }
+
+  // Cắt mảng ID sản phẩm từ sessionStorage khi Next trang
+  function getPagedProductsFromStorage(query, page, pageSize = 20) {
+    try {
+      const key = `${ID_CACHE_KEY_PREFIX}${query.toLowerCase().trim()}`;
+      const raw = sessionStorage.getItem(key);
+      if (!raw) return null;
+
+      const allProducts = JSON.parse(raw);
+      const totalProducts = allProducts.length;
+      const totalPages = Math.ceil(totalProducts / pageSize);
+
+      if (page > totalPages) return null;
+
+      const start = (page - 1) * pageSize;
+      const pageProducts = allProducts.slice(start, start + pageSize);
+
+      if (pageProducts.length === 0) return null;
+
+      return {
+        products: pageProducts,
+        target_ids: pageProducts.map((p) => `id:${p.id}`).join(" OR "),
+        pagination: {
+          current_page: page,
+          page_size: pageSize,
+          total_products: totalProducts,
+          total_pages: totalPages,
+        },
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  // ==========================================
+  // HELPER & ROUTING FUNCTIONS
+  // ==========================================
   function isNativeSearchPath(pathname) {
     return /\/search\/?$/i.test(pathname);
   }
@@ -11960,79 +12204,35 @@ D:\AI-Buyense\extensions\ai-search-storefront\assets\search-interceptor.v3.js
     }
 
     const pageRaw = url.searchParams.get("page");
-
     if (pageRaw) {
       const page = Number.parseInt(pageRaw, 10);
-
-      // AI Search xử lý pagination riêng.
-      // Page >= 1 đều được phép.
-      if (!Number.isSafeInteger(page) || page < 1) {
-        return true;
-      }
+      if (!Number.isSafeInteger(page) || page < 1) return true;
     }
 
-    const sortBy =
-      (url.searchParams.get("sort_by") || "")
-        .trim()
-        .toLowerCase();
+    const sortBy = (url.searchParams.get("sort_by") || "").trim().toLowerCase();
+    if (sortBy && sortBy !== "relevance") return true;
 
-    if (sortBy && sortBy !== "relevance") {
-      return true;
-    }
-
-    const prefix =
-      (url.searchParams.get("options[prefix]") || "")
-        .trim()
-        .toLowerCase();
-
-    if (
-      prefix &&
-      prefix !== "last" &&
-      prefix !== "none"
-    ) {
-      return true;
-    }
+    const prefix = (url.searchParams.get("options[prefix]") || "")
+      .trim()
+      .toLowerCase();
+    if (prefix && prefix !== "last" && prefix !== "none") return true;
 
     return false;
   }
 
   function shouldUseAi(url) {
     url.searchParams.delete("ai_search");
+    if (!isNativeSearchPath(url.pathname)) return false;
+    if (url.searchParams.get(NATIVE_BYPASS_PARAM) === "1") return false;
 
-    if (!isNativeSearchPath(url.pathname)) {
-      return false;
-    }
-
-    if (
-      url.searchParams.get(NATIVE_BYPASS_PARAM) === "1"
-    ) {
-      return false;
-    }
-
-    const query =
-      (url.searchParams.get("q") || "").trim();
-
-    if (query.length < 3) {
-      return false;
-    }
-
-    if (looksLikeExactIdentifier(query)) {
-      return false;
-    }
-
-    if (usesAdvancedShopifySyntax(query)) {
-      return false;
-    }
-
-    if (!productOnlySearch(url)) {
-      return false;
-    }
+    const query = (url.searchParams.get("q") || "").trim();
+    if (query.length < 3) return false;
+    if (looksLikeExactIdentifier(query)) return false;
+    if (usesAdvancedShopifySyntax(query)) return false;
+    if (!productOnlySearch(url)) return false;
 
     normalizeProductOnlyType(url);
-
-    if (hasUnsupportedSearchParameters(url)) {
-      return false;
-    }
+    if (hasUnsupportedSearchParameters(url)) return false;
 
     return true;
   }
@@ -12046,220 +12246,89 @@ D:\AI-Buyense\extensions\ai-search-storefront\assets\search-interceptor.v3.js
   }
 
   function getUrlParams() {
-    return new URLSearchParams(
-      window.location.search
-    );
+    return new URLSearchParams(window.location.search);
   }
 
   function getQueryFromUrl() {
-    return (
-      getUrlParams()
-        .get("q") || ""
-    ).trim();
+    return (getUrlParams().get("q") || "").trim();
   }
 
   function getPageFromUrl() {
-    const raw =
-      parseInt(
-        getUrlParams()
-          .get("page") || "1",
-        10
-      );
-
-    return (
-      Number.isFinite(raw) &&
-      raw >= 1
-    )
-      ? raw
-      : 1;
+    const raw = parseInt(getUrlParams().get("page") || "1", 10);
+    return Number.isFinite(raw) && raw >= 1 ? raw : 1;
   }
 
   function isAiSearchPage() {
-    const params =
-      getUrlParams();
-
-    return (
-      params.get(
-        AI_SEARCH_PARAM
-      ) === "1"
-    );
+    return getUrlParams().get(AI_SEARCH_PARAM) === "1";
   }
 
   function isNativeSearchPage() {
-    const path =
-      window.location.pathname;
-
-    return (
-      path === "/search" ||
-      path.endsWith("/search")
-    );
+    const path = window.location.pathname;
+    return path === "/search" || path.endsWith("/search");
   }
 
   function nativeTarget(query) {
-  const url = new URL(
-    config.search_url || "/search",
-    location.origin
-  );
-
-  url.searchParams.set(
-    "q",
-    String(query || "").trim()
-  );
-
-
-  url.searchParams.set(
-    "type",
-    "product"
-  );
-
-  return url;
-}
-
-  function buildAiBackendUrl(
-    query,
-    page
-  ) {
-    const url =
-      new URL(
-        SEARCH_ENDPOINT,
-        location.origin
-      );
-
-    if (
-      url.origin !==
-      location.origin
-    ) {
-      throw new Error(
-        "Invalid app proxy URL"
-      );
-    }
-
-    url.searchParams.set(
-      "q",
-      query
-    );
-
-    url.searchParams.set(
-      "format",
-      "json"
-    );
-
-    // const target =
-    //   nativeTarget(query);
-
-    // if (page > 1) {
-    //   target.searchParams.set(
-    //     "page",
-    //     String(page)
-    //   );
-    // }
-    url.searchParams.set(
-  "page",
-  String(
-    Number.isSafeInteger(
-      Number.parseInt(String(page || 1), 10)
-    )
-      ? Number.parseInt(String(page || 1), 10)
-      : 1
-  )
-);
-
-const target =
-  nativeTarget(query);
-
-    url.searchParams.set(
-      "native_search_url",
-      target.pathname +
-        target.search
-    );
-
-    const schema =
-      getThemeSchema();
-
-    if (schema) {
-      url.searchParams.set(
-        "theme_id",
-        schema.theme.id
-      );
-
-      url.searchParams.set(
-        "map_fingerprint",
-        schema.fingerprint
-      );
-    }
-
-    return (
-      url.pathname +
-      url.search
-    );
+    const url = new URL(config.search_url || "/search", location.origin);
+    url.searchParams.set("q", String(query || "").trim());
+    url.searchParams.set("type", "product");
+    return url;
   }
 
-  async function ensureThemeMap(
-    query,
-    signal
-  ) {
-    const url =
-      new URL(
-        buildAiBackendUrl(
-          query,
-          1
-        ),
-        location.origin
-      );
+  function buildAiBackendUrl(query, page) {
+    const url = new URL(SEARCH_ENDPOINT, location.origin);
+    if (url.origin !== location.origin) throw new Error("Invalid app proxy URL");
 
+    url.searchParams.set("q", query);
+    url.searchParams.set("format", "json");
     url.searchParams.set(
-      "mode",
-      "theme-map"
+      "page",
+      String(
+        Number.isSafeInteger(Number.parseInt(String(page || 1), 10))
+          ? Number.parseInt(String(page || 1), 10)
+          : 1
+      )
     );
 
-    const response =
-      await fetch(
-        url,
-        {
-          signal,
-          credentials:
-            "same-origin",
-          headers: {
-            Accept:
-              "application/json"
-          }
-        }
-      );
+    const target = nativeTarget(query);
+    url.searchParams.set("native_search_url", target.pathname + target.search);
 
-    if (!response.ok) {
-      throw new Error(
-        "Theme Map unavailable"
-      );
+    const schema = getThemeSchema();
+    if (schema) {
+      url.searchParams.set("theme_id", schema.theme.id);
+      url.searchParams.set("map_fingerprint", schema.fingerprint);
     }
 
-    const data =
-      await response.json();
+    return url.pathname + url.search;
+  }
 
-    if (
-      data.status !== "success" ||
-      !data.theme_map
-    ) {
-      throw new Error(
-        "Theme Map unavailable"
-      );
+  async function ensureThemeMap(query, signal) {
+    const cachedSchema = getCachedThemeMap();
+    if (cachedSchema) {
+      config.theme_id = cachedSchema.theme.id;
+      config.schema = cachedSchema;
+      return cachedSchema;
     }
 
-    if (
-      config.theme_id &&
-      String(config.theme_id) !==
-        String(data.theme_map.theme.id)
-    ) {
-      throw new Error(
-        "Theme changed or map unavailable"
-      );
+    const url = new URL(buildAiBackendUrl(query, 1), location.origin);
+    url.searchParams.set("mode", "theme-map");
+
+    const response = await fetch(url, {
+      signal,
+      credentials: "same-origin",
+      headers: { Accept: "application/json" },
+    });
+
+    if (!response.ok) throw new Error("Theme Map unavailable");
+    const data = await response.json();
+
+    if (data.status !== "success" || !data.theme_map) {
+      throw new Error("Theme Map unavailable");
     }
 
-    config.theme_id =
-      data.theme_map.theme.id;
+    config.theme_id = data.theme_map.theme.id;
+    config.schema = data.theme_map;
 
-    config.schema =
-      data.theme_map;
-
+    setCachedThemeMap(data.theme_map);
     return data.theme_map;
   }
 
@@ -12268,243 +12337,79 @@ const target =
     restoreNativePagination();
     hideLoadingMessage();
 
-    const url =
-      nativeTarget(query);
-
-    url.searchParams.set(
-      "_ai_search_bypass",
-      "1"
-    );
-
-    location.replace(
-      url.pathname +
-      url.search
-    );
+    const url = nativeTarget(query);
+    url.searchParams.set("_ai_search_bypass", "1");
+    location.replace(url.pathname + url.search);
   }
 
-  function buildNativeAiSearchUrl(
-  query,
-  page = 1
-) {
-  const url = new URL(
-    config.search_url || "/search",
-    location.origin
-  );
-
-  url.searchParams.set(
-    "q",
-    String(query || "").trim()
-  );
-
-  url.searchParams.set(
-    "type",
-    "product"
-  );
-
-  url.searchParams.set(
-    AI_SEARCH_PARAM,
-    "1"
-  );
-
-  if (
-    Number(page) > 1
-  ) {
-    url.searchParams.set(
-      "page",
-      String(page)
-    );
+  function buildNativeAiSearchUrl(query, page = 1) {
+    const url = new URL(config.search_url || "/search", location.origin);
+    url.searchParams.set("q", String(query || "").trim());
+    url.searchParams.set("type", "product");
+    url.searchParams.set(AI_SEARCH_PARAM, "1");
+    if (Number(page) > 1) url.searchParams.set("page", String(page));
+    return url.pathname + url.search;
   }
 
-  return (
-    url.pathname +
-    url.search
-  );
-}
-
-  function buildNativeRenderUrl(
-    targetIds,
-    page = 1
-  ) {
-    const url =
-      new URL(
-        config.search_url || "/search",
-        location.origin
-      );
-
-    url.searchParams.set(
-      "q",
-      targetIds
-    );
-
-    url.searchParams.set(
-      "type",
-      "product"
-    );
-
-    url.searchParams.set(
-      "_ai_search_bypass",
-      "1"
-    );
-
-    if (page > 1) {
-      url.searchParams.set(
-        "page",
-        String(page)
-      );
-    }
-
-    return (
-      url.pathname +
-      url.search
-    );
+  function buildNativeRenderUrl(targetIds, page = 1) {
+    const url = new URL(config.search_url || "/search", location.origin);
+    url.searchParams.set("q", targetIds);
+    url.searchParams.set("type", "product");
+    url.searchParams.set("_ai_search_bypass", "1");
+    if (page > 1) url.searchParams.set("page", String(page));
+    return url.pathname + url.search;
   }
 
-  function updateBrowserUrl(
-    query,
-    page = 1,
-    replace = false
-  ) {
-    const url =
-      buildNativeAiSearchUrl(
-        query,
-        page
-      );
-
-    const state = {
-      [STATE_KEY]: true,
-      query,
-      page
-    };
-
+  function updateBrowserUrl(query, page = 1, replace = false) {
+    const url = buildNativeAiSearchUrl(query, page);
+    const state = { [STATE_KEY]: true, query, page };
     if (replace) {
-      window.history.replaceState(
-        state,
-        "",
-        url
-      );
+      window.history.replaceState(state, "", url);
     } else {
-      window.history.pushState(
-        state,
-        "",
-        url
-      );
+      window.history.pushState(state, "", url);
     }
   }
 
-  function safeQuery(
-    root,
-    selector
-  ) {
-    if (
-      !root ||
-      !selector
-    ) {
-      return null;
-    }
-
+  function safeQuery(root, selector) {
+    if (!root || !selector) return null;
     try {
-      return root.querySelector(
-        selector
-      );
-    } catch (error) {
+      return root.querySelector(selector);
+    } catch {
       return null;
     }
   }
 
-  function mappedRoots(
-    root,
-    map
-  ) {
-    const ids =
-      map.searchTemplateStructure?.[0]?.sectionIds || [];
+  function mappedRoots(root, map) {
+    const ids = map.searchTemplateStructure?.[0]?.sectionIds || [];
+    const types = map.searchSectionTypes || [];
+    const sections = Array.from(root.querySelectorAll('[id^="shopify-section-"]'));
 
-    const types =
-      map.searchSectionTypes || [];
+    const matched = sections.filter(
+      (section) =>
+        ids.some(
+          (id) =>
+            section.id.endsWith("__" + id) ||
+            section.id === "shopify-section-" + id
+        ) ||
+        types.some((type) => section.id === "shopify-section-" + type)
+    );
 
-    const sections =
-      Array.from(
-        root.querySelectorAll(
-          '[id^="shopify-section-"]'
-        )
-      );
-
-    const matched =
-      sections.filter(
-        (section) =>
-          ids.some(
-            (id) =>
-              section.id.endsWith(
-                "__" + id
-              ) ||
-              section.id ===
-                "shopify-section-" + id
-          ) ||
-          types.some(
-            (type) =>
-              section.id ===
-              "shopify-section-" + type
-          )
-      );
-
-    return matched.length
-      ? matched
-      : [
-          safeQuery(
-            root,
-            "main"
-          ) || root
-        ];
+    return matched.length ? matched : [safeQuery(root, "main") || root];
   }
 
-  function findProductGrid(
-    root,
-    map
-  ) {
-    for (
-      const scope of mappedRoots(
-        root,
-        map
-      )
-    ) {
-      const grid =
-        findProductGridWithin(
-          scope,
-          map
-        );
-
-      if (grid) {
-        return grid;
-      }
+  function findProductGrid(root, map) {
+    for (const scope of mappedRoots(root, map)) {
+      const grid = findProductGridWithin(scope, map);
+      if (grid) return grid;
     }
-
     return null;
   }
 
-  function findProductGridWithin(
-    root,
-    map
-  ) {
-    if (
-      !root ||
-      typeof root.querySelector !==
-        "function"
-    ) {
-      return null;
-    }
-
-    if (
-      map &&
-      map.grid_selector
-    ) {
-      const mapped =
-        safeQuery(
-          root,
-          map.grid_selector
-        );
-
-      if (mapped) {
-        return mapped;
-      }
+  function findProductGridWithin(root, map) {
+    if (!root || typeof root.querySelector !== "function") return null;
+    if (map && map.grid_selector) {
+      const mapped = safeQuery(root, map.grid_selector);
+      if (mapped) return mapped;
     }
 
     const selectors = [
@@ -12516,93 +12421,37 @@ const target =
       ".template-search__results .grid",
       ".template-search .grid",
       "[data-product-grid]",
-      "[id*='product-grid']"
+      "[id*='product-grid']",
     ];
 
-    for (
-      const selector of selectors
-    ) {
-      const element =
-        safeQuery(
-          root,
-          selector
-        );
-
-      if (element) {
-        return element;
-      }
+    for (const selector of selectors) {
+      const element = safeQuery(root, selector);
+      if (element) return element;
     }
 
-    const links =
-      Array.from(
-        root.querySelectorAll(
-          'a[href*="/products/"]'
-        )
-      );
+    const links = Array.from(root.querySelectorAll('a[href*="/products/"]'));
+    if (links.length < 1) return null;
 
-    if (
-      links.length < 1
-    ) {
-      return null;
-    }
-
-    let bestCandidate =
-      null;
-
-    let bestScore =
-      0;
+    let bestCandidate = null;
+    let bestScore = 0;
 
     links.forEach((link) => {
-      let current =
-        link.parentElement;
+      let current = link.parentElement;
+      let depth = 0;
 
-      let depth =
-        0;
+      while (current && depth < 8) {
+        const tag = current.tagName ? current.tagName.toLowerCase() : "";
+        if (tag === "main" || tag === "body" || current.id === "MainContent") break;
 
-      while (
-        current &&
-        depth < 8
-      ) {
-        const tag =
-          current.tagName
-            ? current.tagName.toLowerCase()
-            : "";
-
-        if (
-          tag === "main" ||
-          tag === "body" ||
-          current.id === "MainContent"
-        ) {
-          break;
-        }
-
-        const productCount =
-          current.querySelectorAll(
-            'a[href*="/products/"]'
-          ).length;
-
-        if (
-          productCount >= 1
-        ) {
-          const score =
-            productCount * 10 -
-            depth;
-
-          if (
-            score >
-            bestScore
-          ) {
-            bestScore =
-              score;
-
-            bestCandidate =
-              current;
+        const productCount = current.querySelectorAll('a[href*="/products/"]').length;
+        if (productCount >= 1) {
+          const score = productCount * 10 - depth;
+          if (score > bestScore) {
+            bestScore = score;
+            bestCandidate = current;
           }
         }
-
-        current =
-          current.parentElement;
-
+        current = current.parentElement;
         depth++;
       }
     });
@@ -12611,1508 +12460,480 @@ const target =
   }
 
   function hideNativeResults() {
-    if (
-      !isAiSearchPage()
-    ) {
-      return null;
-    }
+    if (!isAiSearchPage()) return null;
+    const map = getThemeMap();
+    const grid = findProductGrid(document, map);
+    if (!grid) return null;
 
-    const map =
-      getThemeMap();
-
-    const grid =
-      findProductGrid(
-        document,
-        map
-      );
-
-    if (!grid) {
-      return null;
-    }
-
-    grid.dataset.aiSearchV3Hidden =
-      "true";
-
-    grid.style.visibility =
-      "hidden";
-
-    grid.style.opacity =
-      "0";
-
-    grid.setAttribute(
-      "aria-hidden",
-      "true"
-    );
-
+    grid.dataset.aiSearchV3Hidden = "true";
+    grid.style.visibility = "hidden";
+    grid.style.opacity = "0";
+    grid.setAttribute("aria-hidden", "true");
     return grid;
   }
 
-  function showAiResults(
-    grid
-  ) {
-    if (!grid) {
-      return;
-    }
+  function showAiResults(grid) {
+    if (!grid) return;
+    grid.style.visibility = "";
+    grid.style.opacity = "";
+    grid.removeAttribute("aria-hidden");
+    delete grid.dataset.aiSearchV3Hidden;
 
-    grid.style.visibility =
-      "";
-
-    grid.style.opacity =
-      "";
-
-    grid.removeAttribute(
-      "aria-hidden"
-    );
-
-    delete grid.dataset
-      .aiSearchV3Hidden;
-
-    document.documentElement.classList.remove(
-      "ai-search-v3-pending"
-    );
-
-    document.documentElement.classList.add(
-      "ai-search-v3-ready"
-    );
+    document.documentElement.classList.remove("ai-search-v3-pending");
+    document.documentElement.classList.add("ai-search-v3-ready");
   }
 
   function restoreNativeResults() {
-    document
-      .querySelectorAll(
-        '[data-ai-search-v3-hidden="true"]'
-      )
-      .forEach((grid) => {
-        grid.style.visibility =
-          "";
+    document.querySelectorAll('[data-ai-search-v3-hidden="true"]').forEach((grid) => {
+      grid.style.visibility = "";
+      grid.style.opacity = "";
+      grid.removeAttribute("aria-hidden");
+      delete grid.dataset.aiSearchV3Hidden;
+    });
 
-        grid.style.opacity =
-          "";
-
-        grid.removeAttribute(
-          "aria-hidden"
-        );
-
-        delete grid.dataset
-          .aiSearchV3Hidden;
-      });
-
-    document.documentElement.classList.remove(
-      "ai-search-v3-pending"
-    );
-
-    document.documentElement.classList.remove(
-      "ai-search-v3-ready"
-    );
+    document.documentElement.classList.remove("ai-search-v3-pending");
+    document.documentElement.classList.remove("ai-search-v3-ready");
   }
 
-  function findSearchRoot(
-    grid,
-    map
-  ) {
+  function findSearchRoot(grid, map) {
     if (grid) {
       return (
-        grid.closest(
-          '[id^="shopify-section-"]'
-        ) ||
+        grid.closest('[id^="shopify-section-"]') ||
         grid.closest("main") ||
         grid.parentElement
       );
     }
-
-    return (
-      mappedRoots(
-        document,
-        map
-      )[0] || null
-    );
+    return mappedRoots(document, map)[0] || null;
   }
 
   function removeAiPagination() {
-    document
-      .querySelectorAll(
-        ".ai-search-v3-pagination"
-      )
-      .forEach((element) => {
-        element.remove();
-      });
+    document.querySelectorAll(".ai-search-v3-pagination").forEach((element) => {
+      element.remove();
+    });
   }
 
-  function hideNativePagination(
-    root
-  ) {
-    if (!root) {
-      return;
-    }
-
+  function hideNativePagination(root) {
+    if (!root) return;
     const selectors = [
       ".pagination",
       ".pagination-wrapper",
       ".main-search__pagination",
       "nav.pagination",
-      "[data-pagination]"
+      "[data-pagination]",
     ];
 
-    selectors.forEach(
-      (selector) => {
-        root
-          .querySelectorAll(
-            selector
-          )
-          .forEach((element) => {
-            if (
-              element.classList.contains(
-                "ai-search-v3-pagination"
-              )
-            ) {
-              return;
-            }
-
-            element.style.display =
-              "none";
-
-            element.dataset.aiSearchHidden =
-              "true";
-          });
-      }
-    );
+    selectors.forEach((selector) => {
+      root.querySelectorAll(selector).forEach((element) => {
+        if (element.classList.contains("ai-search-v3-pagination")) return;
+        element.style.display = "none";
+        element.dataset.aiSearchHidden = "true";
+      });
+    });
   }
 
   function restoreNativePagination() {
-    document
-      .querySelectorAll(
-        '[data-ai-search-hidden="true"]'
-      )
-      .forEach((element) => {
-        element.style.display =
-          "";
-
-        delete element.dataset
-          .aiSearchHidden;
-      });
+    document.querySelectorAll('[data-ai-search-hidden="true"]').forEach((element) => {
+      element.style.display = "";
+      delete element.dataset.aiSearchHidden;
+    });
   }
 
-  function updateSearchInputs(
-    query
-  ) {
+  function updateSearchInputs(query) {
     document
-      .querySelectorAll(
-        'input[name="q"], input[type="search"]'
-      )
+      .querySelectorAll('input[name="q"], input[type="search"]')
       .forEach((input) => {
-        if (
-          document.activeElement !==
-          input
-        ) {
-          input.value =
-            query;
+        if (document.activeElement !== input) {
+          input.value = query;
         }
       });
   }
 
-  function setLoading(
-    isLoading
-  ) {
-    const map =
-      getThemeMap();
-
-    const grid =
-      findProductGrid(
-        document,
-        map
-      );
-
-    if (!grid) {
-      return;
-    }
+  function setLoading(isLoading) {
+    const map = getThemeMap();
+    const grid = findProductGrid(document, map);
+    if (!grid) return;
 
     if (isLoading) {
-      grid.classList.add(
-        "ai-search-v3-loading"
-      );
-
-      grid.setAttribute(
-        "aria-busy",
-        "true"
-      );
+      grid.classList.add("ai-search-v3-loading");
+      grid.setAttribute("aria-busy", "true");
     } else {
-      grid.classList.remove(
-        "ai-search-v3-loading"
-      );
-
-      grid.removeAttribute(
-        "aria-busy"
-      );
+      grid.classList.remove("ai-search-v3-loading");
+      grid.removeAttribute("aria-busy");
     }
   }
 
   function showLoadingMessage() {
-    let element =
-      document.querySelector(
-        ".ai-search-v3-status"
-      );
-
-    const map =
-      getThemeMap();
-
-    const grid =
-      findProductGrid(
-        document,
-        map
-      );
+    let element = document.querySelector(".ai-search-v3-status");
+    const map = getThemeMap();
+    const grid = findProductGrid(document, map);
 
     if (!element) {
-      element =
-        document.createElement(
-          "div"
-        );
+      element = document.createElement("div");
+      element.className = "ai-search-v3-status";
+      element.setAttribute("role", "status");
+      element.setAttribute("aria-live", "polite");
+      element.style.display = "none";
 
-      element.className =
-        "ai-search-v3-status";
-
-      element.setAttribute(
-        "role",
-        "status"
-      );
-
-      element.setAttribute(
-        "aria-live",
-        "polite"
-      );
-
-      element.style.display =
-        "none";
-
-      if (
-        grid &&
-        grid.parentElement
-      ) {
-        grid.parentElement.insertBefore(
-          element,
-          grid
-        );
+      if (grid && grid.parentElement) {
+        grid.parentElement.insertBefore(element, grid);
       }
     }
 
-    if (!element) {
-      return;
-    }
-
-    element.textContent =
-      "Đang tìm kiếm...";
-
-    element.style.display =
-      "";
+    if (!element) return;
+    element.textContent = "Đang tìm kiếm...";
+    element.style.display = "";
   }
 
   function hideLoadingMessage() {
-    const element =
-      document.querySelector(
-        ".ai-search-v3-status"
-      );
-
-    if (element) {
-      element.style.display =
-        "none";
-    }
+    const element = document.querySelector(".ai-search-v3-status");
+    if (element) element.style.display = "none";
   }
 
-  function getVisiblePages(
-    totalPages,
-    currentPage
-  ) {
-    const pages =
-      new Set();
-
+  function getVisiblePages(totalPages, currentPage) {
+    const pages = new Set();
     pages.add(1);
     pages.add(totalPages);
 
-    for (
-      let page =
-        currentPage - 2;
-      page <=
-        currentPage + 2;
-      page++
-    ) {
-      if (
-        page >= 1 &&
-        page <= totalPages
-      ) {
-        pages.add(page);
-      }
+    for (let page = currentPage - 2; page <= currentPage + 2; page++) {
+      if (page >= 1 && page <= totalPages) pages.add(page);
     }
 
-    return Array
-      .from(pages)
-      .sort(
-        (a, b) => a - b
-      );
+    return Array.from(pages).sort((a, b) => a - b);
   }
 
-  function createPaginationButton(
-    text,
-    page,
-    options = {}
-  ) {
-    const button =
-      document.createElement(
-        "button"
-      );
+  function createPaginationButton(text, page, options = {}) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "ai-search-v3-page-btn";
+    button.textContent = text;
+    button.dataset.page = String(page);
 
-    button.type =
-      "button";
-
-    button.className =
-      "ai-search-v3-page-btn";
-
-    button.textContent =
-      text;
-
-    button.dataset.page =
-      String(page);
-
-    if (
-      options.current
-    ) {
-      button.setAttribute(
-        "aria-current",
-        "page"
-      );
-
-      button.disabled =
-        true;
+    if (options.current) {
+      button.setAttribute("aria-current", "page");
+      button.disabled = true;
     }
 
-    button.addEventListener(
-      "click",
-      function () {
-        if (
-          button.disabled
-        ) {
-          return;
-        }
+    button.addEventListener("click", function () {
+      if (button.disabled) return;
+      const query = getQueryFromUrl();
+      if (!query) return;
 
-        const query =
-          getQueryFromUrl();
-
-        if (!query) {
-          return;
-        }
-
-        updateBrowserUrl(
-          query,
-          page,
-          false
-        );
-
-        hideNativeResults();
-
-        executeAiSearch(
-          query,
-          page
-        );
-      }
-    );
+      updateBrowserUrl(query, page, false);
+      hideNativeResults();
+      executeAiSearch(query, page);
+    });
 
     return button;
   }
 
   function createPaginationEllipsis() {
-    const element =
-      document.createElement(
-        "span"
-      );
-
-    element.className =
-      "ai-search-v3-pagination-ellipsis";
-
-    element.textContent =
-      "…";
-
+    const element = document.createElement("span");
+    element.className = "ai-search-v3-pagination-ellipsis";
+    element.textContent = "…";
     return element;
   }
 
-  function renderPagination(
-    query,
-    pagination,
-    targetGrid
-  ) {
+  function renderPagination(query, pagination, targetGrid) {
     removeAiPagination();
+    if (!targetGrid) return;
 
-    if (!targetGrid) {
-      return;
+    const totalPages = Number(pagination?.total_pages || 0);
+    const currentPage = Number(pagination?.current_page || 1);
+    const totalProducts = Number(pagination?.total_products || 0);
+
+    if (!Number.isFinite(totalPages) || totalPages <= 1) return;
+
+    const nav = document.createElement("nav");
+    nav.className = "ai-search-v3-pagination";
+    nav.setAttribute("aria-label", "AI Search pagination");
+
+    if (currentPage > 1) {
+      nav.appendChild(createPaginationButton("←", currentPage - 1));
     }
 
-    const totalPages =
-      Number(
-        pagination?.total_pages || 0
-      );
+    const pages = getVisiblePages(totalPages, currentPage);
+    let previousPage = null;
 
-    const currentPage =
-      Number(
-        pagination?.current_page || 1
-      );
-
-    const totalProducts =
-      Number(
-        pagination?.total_products || 0
-      );
-
-    if (
-      !Number.isFinite(
-        totalPages
-      ) ||
-      totalPages <= 1
-    ) {
-      return;
-    }
-
-    const nav =
-      document.createElement(
-        "nav"
-      );
-
-    nav.className =
-      "ai-search-v3-pagination";
-
-    nav.setAttribute(
-      "aria-label",
-      "AI Search pagination"
-    );
-
-    if (
-      currentPage > 1
-    ) {
-      nav.appendChild(
-        createPaginationButton(
-          "←",
-          currentPage - 1
-        )
-      );
-    }
-
-    const pages =
-      getVisiblePages(
-        totalPages,
-        currentPage
-      );
-
-    let previousPage =
-      null;
-
-    pages.forEach(
-      (page) => {
-        if (
-          previousPage !== null &&
-          page >
-            previousPage + 1
-        ) {
-          nav.appendChild(
-            createPaginationEllipsis()
-          );
-        }
-
-        nav.appendChild(
-          createPaginationButton(
-            String(page),
-            page,
-            {
-              current:
-                page === currentPage
-            }
-          )
-        );
-
-        previousPage =
-          page;
+    pages.forEach((page) => {
+      if (previousPage !== null && page > previousPage + 1) {
+        nav.appendChild(createPaginationEllipsis());
       }
-    );
-
-    if (
-      currentPage <
-      totalPages
-    ) {
       nav.appendChild(
-        createPaginationButton(
-          "→",
-          currentPage + 1
-        )
+        createPaginationButton(String(page), page, {
+          current: page === currentPage,
+        })
       );
+      previousPage = page;
+    });
+
+    if (currentPage < totalPages) {
+      nav.appendChild(createPaginationButton("→", currentPage + 1));
     }
 
-    if (
-      totalProducts > 0
-    ) {
-      const info =
-        document.createElement(
-          "span"
-        );
-
-      info.className =
-        "ai-search-v3-pagination-info";
-
-      info.textContent =
-        `${totalProducts} sản phẩm`;
-
-      nav.appendChild(
-        info
-      );
+    if (totalProducts > 0) {
+      const info = document.createElement("span");
+      info.className = "ai-search-v3-pagination-info";
+      info.textContent = `${totalProducts} sản phẩm`;
+      nav.appendChild(info);
     }
 
-    if (
-      targetGrid.parentElement
-    ) {
-      targetGrid.parentElement.insertBefore(
-        nav,
-        targetGrid.nextSibling
-      );
+    if (targetGrid.parentElement) {
+      targetGrid.parentElement.insertBefore(nav, targetGrid.nextSibling);
     }
   }
 
-  function normalizeTargetIds(
-    targetIds
-  ) {
-    if (
-      Array.isArray(targetIds)
-    ) {
+  function normalizeTargetIds(targetIds) {
+    if (Array.isArray(targetIds)) {
       return targetIds
         .filter(Boolean)
-        .map(
-          (id) =>
-            String(id).trim()
-        )
+        .map((id) => String(id).trim())
         .filter(Boolean)
         .join(" OR ");
     }
-
-    return String(
-      targetIds || ""
-    ).trim();
+    return String(targetIds || "").trim();
   }
 
-  async function fetchAiResults(
-    query,
-    page,
-    signal
-  ) {
-    const url =
-      buildAiBackendUrl(
-        query,
-        page
-      );
+  async function fetchAiResults(query, page, signal) {
+    const url = buildAiBackendUrl(query, page);
+    const response = await fetch(url, {
+      method: "GET",
+      credentials: "same-origin",
+      signal,
+      headers: { Accept: "application/json" },
+    });
 
-    const response =
-      await fetch(
-        url,
-        {
-          method: "GET",
-          credentials:
-            "same-origin",
-          signal,
-          headers: {
-            Accept:
-              "application/json"
-          }
-        }
-      );
-
-    if (
-      !response.ok
-    ) {
-      throw new Error(
-        `AI Search HTTP ${response.status}`
-      );
+    if (!response.ok) throw new Error(`AI Search HTTP ${response.status}`);
+    const data = await response.json();
+    if (!data || data.status !== "success") {
+      throw new Error(data?.message || "AI Search backend error");
     }
-
-    const data =
-      await response.json();
-
-    if (
-      !data ||
-      data.status !== "success"
-    ) {
-      throw new Error(
-        data?.message ||
-        "AI Search backend error"
-      );
-    }
-
     return data;
   }
 
-  async function fetchNativeSearchHtml(
-    targetIds,
-    signal,
-    page = 1
-  ) {
-    const response =
-      await fetch(
-        buildNativeRenderUrl(
-          targetIds,
-          page
-        ),
-        {
-          signal,
-          credentials:
-            "same-origin",
-          headers: {
-            Accept:
-              "text/html"
-          }
-        }
-      );
+  async function fetchNativeSearchHtml(targetIds, signal, page = 1) {
+    const response = await fetch(buildNativeRenderUrl(targetIds, page), {
+      signal,
+      credentials: "same-origin",
+      headers: { Accept: "text/html" },
+    });
 
     if (!response.ok) {
-      throw new Error(
-        "Shopify native search HTTP " +
-        response.status
-      );
+      throw new Error("Shopify native search HTTP " + response.status);
     }
-
     return response.text();
   }
 
-  function parseHtmlDocument(
-    html
-  ) {
-    const parser =
-      new DOMParser();
-
-    return parser.parseFromString(
-      html,
-      "text/html"
-    );
+  function parseHtmlDocument(html) {
+    const parser = new DOMParser();
+    return parser.parseFromString(html, "text/html");
   }
 
-  function replaceProductGrid(
-    currentGrid,
-    newGrid
-  ) {
-    if (
-      !currentGrid ||
-      !newGrid
-    ) {
-      return false;
-    }
-
-    const fragment =
-      document.createDocumentFragment();
-
-    Array
-      .from(
-        newGrid.childNodes
-      )
-      .forEach((node) => {
-        fragment.appendChild(
-          document.importNode(
-            node,
-            true
-          )
-        );
-      });
-
-    currentGrid.replaceChildren(
-      fragment
-    );
-
+  function replaceProductGrid(currentGrid, newGrid) {
+    if (!currentGrid || !newGrid) return false;
+    const fragment = document.createDocumentFragment();
+    Array.from(newGrid.childNodes).forEach((node) => {
+      fragment.appendChild(document.importNode(node, true));
+    });
+    currentGrid.replaceChildren(fragment);
     return true;
   }
 
-  function activateImages(
-    container
-  ) {
-    if (!container) {
-      return;
-    }
+  function activateImages(container) {
+    if (!container) return;
+    container.querySelectorAll("img").forEach((img) => {
+      const dataSrc = img.dataset.src;
+      const dataSrcset = img.dataset.srcset;
 
-    container
-      .querySelectorAll(
-        "img"
-      )
-      .forEach((img) => {
-        const dataSrc =
-          img.dataset.src;
-
-        const dataSrcset =
-          img.dataset.srcset;
-
-        if (
-          dataSrc &&
-          !img.getAttribute(
-            "src"
-          )
-        ) {
-          img.src =
-            dataSrc;
-        }
-
-        if (
-          dataSrcset &&
-          !img.getAttribute(
-            "srcset"
-          )
-        ) {
-          img.srcset =
-            dataSrcset;
-        }
-
-        img.removeAttribute(
-          "loading"
-        );
-      });
+      if (dataSrc && !img.getAttribute("src")) img.src = dataSrc;
+      if (dataSrcset && !img.getAttribute("srcset")) img.srcset = dataSrcset;
+      img.removeAttribute("loading");
+    });
   }
 
-  function dispatchSearchUpdated(
-    detail
-  ) {
+  function dispatchSearchUpdated(detail) {
     document.dispatchEvent(
-      new CustomEvent(
-        "ai-search:v3:updated",
-        {
-          detail
-        }
-      )
+      new CustomEvent("ai-search:v3:updated", { detail })
     );
   }
 
-  function cardHandle(
-    node,
-    expected
-  ) {
-    const handles =
-      new Set();
+  // ==========================================
+  // CORE SEARCH EXECUTION WITH CLIENT ID CACHE
+  // ==========================================
+  async function executeAiSearch(rawQuery, rawPage = 1) {
+    const query = String(rawQuery || "").trim();
+    if (!query || query.includes("id:")) return;
 
-    const links =
-      Array.from(
-        node.querySelectorAll(
-          'a[href*="/products/"]'
-        )
-      );
+    const pageRaw = Number.parseInt(String(rawPage), 10);
+    const page = Number.isSafeInteger(pageRaw) && pageRaw > 0 ? pageRaw : 1;
 
-    if (
-      node.matches?.(
-        'a[href*="/products/"]'
-      )
-    ) {
-      links.unshift(node);
-    }
+    const policyUrl = nativeTarget(query);
+    policyUrl.searchParams.set("page", String(page));
 
-    for (
-      const link of links
-    ) {
-      try {
-        const url =
-          new URL(
-            link.getAttribute("href"),
-            location.origin
-          );
-
-        const handle =
-          decodeURIComponent(
-            url.pathname.match(
-              /\/products\/([^/]+)/
-            )?.[1] || ""
-          );
-
-        if (
-          expected.has(handle)
-        ) {
-          handles.add(handle);
-        }
-      } catch {
-        /* Invalid product links are not rank evidence. */
-      }
-    }
-
-    return handles.size === 1
-      ? [...handles][0]
-      : null;
-  }
-
-  async function collectRankedGrid(
-    data,
-    map,
-    signal
-  ) {
-    const expected =
-      new Set(
-        data.products.map(
-          (product) =>
-            product.handle
-        )
-      );
-
-    if (
-      !expected.size ||
-      expected.size !==
-        data.products.length
-    ) {
-      throw new Error(
-        "Invalid ranked handles"
-      );
-    }
-
-    const cards =
-      new Map();
-
-    let firstGrid =
-      null;
-
-    let firstDocument =
-      null;
-
-    for (
-      let page = 1;
-      page <= 20 &&
-      cards.size < expected.size;
-      page += 1
-    ) {
-      const doc =
-        parseHtmlDocument(
-          await fetchNativeSearchHtml(
-            normalizeTargetIds(
-              data.target_ids
-            ),
-            signal,
-            page
-          )
-        );
-
-      const themeId =
-        doc.querySelector(
-          'meta[name="ai-search-theme-id"]'
-        )?.content;
-
-      if (
-        String(themeId) !==
-        String(data.theme_id)
-      ) {
-        throw new Error(
-          "Native HTML belongs to another theme"
-        );
-      }
-
-      const grid =
-        findProductGrid(
-          doc,
-          map
-        );
-
-      if (
-        !grid ||
-        /Liquid (?:error|syntax error)/i.test(
-          grid.textContent
-        )
-      ) {
-        throw new Error(
-          "Native product grid unavailable"
-        );
-      }
-
-      firstGrid ||= grid;
-      firstDocument ||= doc;
-
-      const before =
-        cards.size;
-
-      for (
-        const child of Array.from(
-          grid.children
-        )
-      ) {
-        const handle =
-          cardHandle(
-            child,
-            expected
-          );
-
-        if (
-          handle &&
-          !cards.has(handle)
-        ) {
-          cards.set(
-            handle,
-            child
-          );
-        }
-      }
-
-      if (
-        cards.size === before
-      ) {
-        break;
-      }
-    }
-
-    if (
-      cards.size !==
-      expected.size
-    ) {
-      throw new Error(
-        "Native search did not render every ranked product"
-      );
-    }
-
-    const companions =
-      Array.from(
-        firstGrid.children
-      ).filter(
-        (node) =>
-          node.matches(
-            "style,script,link"
-          )
-      );
-
-    firstGrid.replaceChildren(
-      ...companions,
-      ...data.products.map(
-        (product) =>
-          cards.get(
-            product.handle
-          )
-      )
-    );
-
-    return {
-      grid:
-        firstGrid,
-      doc:
-        firstDocument
-    };
-  }
-
-  async function loadNativeAssets(
-    root,
-    signal
-  ) {
-    const existing =
-      new Set(
-        Array.from(
-          document.querySelectorAll(
-            'script[src],link[rel="stylesheet"]'
-          )
-        ).map(
-          (node) =>
-            node.src ||
-            node.href
-        )
-      );
-
-    for (
-      const node of root.querySelectorAll(
-        'script[src],link[rel="stylesheet"]'
-      )
-    ) {
-      const url =
-        new URL(
-          node.getAttribute("src") ||
-          node.getAttribute("href"),
-          location.origin
-        );
-
-      if (
-        existing.has(
-          url.href
-        )
-      ) {
-        continue;
-      }
-
-      if (
-        url.origin !==
-          location.origin &&
-        url.hostname !==
-          "cdn.shopify.com"
-      ) {
-        continue;
-      }
-
-      if (
-        signal.aborted
-      ) {
-        throw new DOMException(
-          "Aborted",
-          "AbortError"
-        );
-      }
-
-      const copy =
-        document.createElement(
-          node.tagName.toLowerCase()
-        );
-
-      for (
-        const attr of node.attributes
-      ) {
-        copy.setAttribute(
-          attr.name,
-          attr.value
-        );
-      }
-
-      await new Promise(
-        (
-          resolve,
-          reject
-        ) => {
-          const timer =
-            setTimeout(
-              () =>
-                reject(
-                  new Error(
-                    "Theme asset timeout"
-                  )
-                ),
-              10000
-            );
-
-          copy.onload =
-            () => {
-              clearTimeout(
-                timer
-              );
-
-              resolve();
-            };
-
-          copy.onerror =
-            () => {
-              clearTimeout(
-                timer
-              );
-
-              reject(
-                new Error(
-                  "Theme asset failed"
-                )
-              );
-            };
-
-          document.head.appendChild(
-            copy
-          );
-        }
-      );
-
-      existing.add(
-        url.href
-      );
-    }
-  }
-
-  async function executeAiSearch(
-    rawQuery,
-    rawPage = 1
-  ) {
-    const query =
-      String(
-        rawQuery || ""
-      ).trim();
-
-    if (
-      !query ||
-      query.includes("id:")
-    ) {
-      return;
-    }
-
-    const pageRaw =
-      Number.parseInt(
-        String(rawPage),
-        10
-      );
-
-    const page =
-      Number.isSafeInteger(
-        pageRaw
-      ) &&
-      pageRaw > 0
-        ? pageRaw
-        : 1;
-
-    const policyUrl =
-      nativeTarget(query);
-
-    policyUrl.searchParams.set(
-      "page",
-      String(page)
-    );
-
-    if (
-      !shouldUseAi(
-        policyUrl
-      )
-    ) {
+    if (!shouldUseAi(policyUrl)) {
       fallbackToNative(query);
       return;
     }
 
     activeController?.abort();
-
-    const controller =
-      new AbortController();
-
-    activeController =
-      controller;
-
-    const requestId =
-      ++activeRequestId;
-
-    const timer =
-      setTimeout(
-        () =>
-          controller.abort(),
-        30000
-      );
-
-    const signal =
-      controller.signal;
+    const controller = new AbortController();
+    activeController = controller;
+    const requestId = ++activeRequestId;
+    const timer = setTimeout(() => controller.abort(), 30000);
+    const signal = controller.signal;
 
     try {
-      // Giữ Theme Map lifecycle của V3.
-      // Render sử dụng cơ chế đã chứng minh của V2:
-      //
-      // AI target_ids
-      // → Shopify Native HTML
-      // → findProductGrid()
-      // → replace Product Grid
+      const schema = await ensureThemeMap(query, signal);
+      if (requestId !== activeRequestId) return;
 
-      const schema =
-        await ensureThemeMap(
-          query,
-          signal
-        );
+      const map = schema.search || getThemeMap() || {};
 
-      if (
-        requestId !==
-        activeRequestId
-      ) {
-        return;
+      // BƯỚC 1: BẤM NEXT TRANG -> ĐỌC ID TỪ BỘ NHỚ TRÌNH DUYỆT (Skip Backend hoàn toàn!)
+      if (page > 1) {
+        const localPagedData = getPagedProductsFromStorage(query, page);
+
+        if (localPagedData && localPagedData.products.length > 0) {
+          console.log(`[AI SEARCH V3] Hit Client ID Cache cho Trang ${page} -> Bỏ qua Server Proxy!`);
+
+          const currentGrid = hideNativeResults() || findProductGrid(document, map);
+          if (!currentGrid) throw new Error("Current Product Grid not found");
+
+          setLoading(true);
+          showLoadingMessage();
+
+          const html = await fetchNativeSearchHtml(localPagedData.target_ids, signal, page);
+          if (requestId !== activeRequestId) return;
+
+          const nativeDocument = parseHtmlDocument(html);
+          const nativeGrid = findProductGrid(nativeDocument, map);
+          const liveGrid = findProductGrid(document, map);
+
+          if (liveGrid && nativeGrid) {
+            replaceProductGrid(liveGrid, nativeGrid);
+            activateImages(liveGrid);
+            hideNativePagination(findSearchRoot(liveGrid, map));
+            renderPagination(query, localPagedData.pagination, liveGrid);
+            updateSearchInputs(query);
+            updateBrowserUrl(query, page, true);
+            showAiResults(liveGrid);
+            setLoading(false);
+            hideLoadingMessage();
+
+            dispatchSearchUpdated({
+              query,
+              page,
+              pagination: localPagedData.pagination,
+              targetIds: localPagedData.target_ids,
+              products: localPagedData.products,
+            });
+            return; // KẾT THÚC NGAY, KHÔNG GỌI VỀ BACKEND SERVER
+          }
+        }
       }
 
-      const map =
-        schema.search ||
-        getThemeMap() ||
-        {};
-
-      const currentGrid =
-        hideNativeResults() ||
-        findProductGrid(
-          document,
-          map
-        );
-
-      if (!currentGrid) {
-        throw new Error(
-          "Current Product Grid not found"
-        );
+      // BƯỚC 2: TÌM KÍẾM MỚI (PAGE 1) -> TỰ ĐỘNG XÓA CACHE CỦ & GỌI SERVER BACKEND
+      if (page === 1) {
+        clearProductIdsCache();
       }
+
+      const currentGrid = hideNativeResults() || findProductGrid(document, map);
+      if (!currentGrid) throw new Error("Current Product Grid not found");
 
       setLoading(true);
       showLoadingMessage();
 
-      const data =
-        await fetchAiResults(
-          query,
-          page,
-          signal
-        );
+      const data = await fetchAiResults(query, page, signal);
+      if (requestId !== activeRequestId) return;
 
-      if (
-        requestId !==
-        activeRequestId
-      ) {
-        return;
+      // Lưu toàn bộ danh sách ID trả về vào sessionStorage
+      if (data.all_products && Array.isArray(data.all_products)) {
+        saveProductIdsForQuery(query, data.all_products);
       }
 
-      const targetIds =
-        normalizeTargetIds(
-          data.target_ids
-        );
+      const targetIds = normalizeTargetIds(data.target_ids);
+      if (!targetIds) throw new Error("AI Search did not return target_ids");
 
-      if (!targetIds) {
-        throw new Error(
-          "AI Search did not return target_ids"
-        );
+      const html = await fetchNativeSearchHtml(targetIds, signal);
+      if (requestId !== activeRequestId) return;
+
+      const nativeDocument = parseHtmlDocument(html);
+      const nativeGrid = findProductGrid(nativeDocument, map);
+      if (!nativeGrid) throw new Error("Product Grid not found in Shopify native HTML");
+
+      const liveGrid = findProductGrid(document, map);
+      if (!liveGrid) throw new Error("Live Product Grid not found");
+
+      if (!replaceProductGrid(liveGrid, nativeGrid)) {
+        throw new Error("Unable to replace Product Grid");
       }
 
-      const html =
-        await fetchNativeSearchHtml(
-          targetIds,
-          signal
-        );
-
-      if (
-        requestId !==
-        activeRequestId
-      ) {
-        return;
-      }
-
-      const nativeDocument =
-        parseHtmlDocument(
-          html
-        );
-
-      const nativeGrid =
-        findProductGrid(
-          nativeDocument,
-          map
-        );
-
-      if (!nativeGrid) {
-        throw new Error(
-          "Product Grid not found in Shopify native HTML"
-        );
-      }
-
-      const liveGrid =
-        findProductGrid(
-          document,
-          map
-        );
-
-      if (!liveGrid) {
-        throw new Error(
-          "Live Product Grid not found"
-        );
-      }
-
-      if (
-        !replaceProductGrid(
-          liveGrid,
-          nativeGrid
-        )
-      ) {
-        throw new Error(
-          "Unable to replace Product Grid"
-        );
-      }
-
-      activateImages(
-        liveGrid
-      );
-
-      hideNativePagination(
-        findSearchRoot(
-          liveGrid,
-          map
-        )
-      );
-
-      renderPagination(
-        query,
-        data.pagination || {},
-        liveGrid
-      );
-
-      updateSearchInputs(
-        query
-      );
-
-      updateBrowserUrl(
-        query,
-        page,
-        true
-      );
-
-      showAiResults(
-        liveGrid
-      );
+      activateImages(liveGrid);
+      hideNativePagination(findSearchRoot(liveGrid, map));
+      renderPagination(query, data.pagination || {}, liveGrid);
+      updateSearchInputs(query);
+      updateBrowserUrl(query, page, true);
+      showAiResults(liveGrid);
 
       dispatchSearchUpdated({
         query,
         page,
-        pagination:
-          data.pagination || {},
+        pagination: data.pagination || {},
         targetIds,
-        products:
-          data.products || []
+        products: data.products || [],
       });
-
-      console.log(
-        "[AI SEARCH V3] Search rendered with V2 native render flow",
-        {
-          query,
-          page,
-          pagination:
-            data.pagination,
-          targetIds
-        }
-      );
     } catch (error) {
-      if (
-        requestId !==
-          activeRequestId ||
-        error?.name ===
-          "AbortError"
-      ) {
-        return;
-      }
-
-      console.error(
-        "[AI SEARCH V3] Search error:",
-        error
-      );
-
-      showAiResults(
-        findProductGrid(
-          document,
-          getThemeMap()
-        )
-      );
-
-      fallbackToNative(
-        query
-      );
+      if (requestId !== activeRequestId || error?.name === "AbortError") return;
+      console.error("[AI SEARCH V3] Search error:", error);
+      showAiResults(findProductGrid(document, getThemeMap()));
+      fallbackToNative(query);
     } finally {
-      clearTimeout(
-        timer
-      );
-
-      if (
-        requestId ===
-        activeRequestId
-      ) {
+      clearTimeout(timer);
+      if (requestId === activeRequestId) {
         setLoading(false);
         hideLoadingMessage();
       }
     }
   }
 
-  function submitAiSearch(
-    rawQuery
-  ) {
-    const query =
-      String(
-        rawQuery || ""
-      ).trim();
+  function submitAiSearch(rawQuery) {
+    const query = String(rawQuery || "").trim();
+    if (!query) return;
 
-    if (!query) {
+    const target = nativeTarget(query);
+    if (!shouldUseAi(target)) {
+      window.location.assign(target.pathname + target.search);
       return;
     }
-
-    const target =
-      nativeTarget(query);
-
-    // Giữ chính sách V3:
-    // Không phải search nào cũng bắt buộc dùng AI.
-
-    if (
-      !shouldUseAi(
-        target
-      )
-    ) {
-      window.location.assign(
-        target.pathname +
-        target.search
-      );
-
-      return;
-    }
-
-    window.location.assign(
-      buildNativeAiSearchUrl(
-        query,
-        1
-      )
-    );
+    window.location.assign(buildNativeAiSearchUrl(query, 1));
   }
 
-  function stopSearchEvent(
-    event
-  ) {
+  function stopSearchEvent(event) {
     event.preventDefault();
     event.stopPropagation();
-
-    if (
-      typeof event.stopImmediatePropagation ===
-      "function"
-    ) {
+    if (typeof event.stopImmediatePropagation === "function") {
       event.stopImmediatePropagation();
     }
   }
 
   function installSearchInterception() {
-    if (
-      interceptionInstalled
-    ) {
-      return;
+    if (interceptionInstalled) return;
+    interceptionInstalled = true;
+
+    function findSearchInput(form) {
+      if (!(form instanceof HTMLFormElement)) return null;
+      return form.querySelector('input[name="q"], input[type="search"], textarea[name="q"]');
     }
 
-    interceptionInstalled =
-      true;
-
-    /*
-     * Kế thừa phương pháp V2:
-     *
-     * Không chỉ dựa vào form.action.
-     *
-     * Tìm trực tiếp input search để bắt được
-     * cả Search Form ở Homepage và các Theme
-     * có form.action không chuẩn.
-     */
-
-    function findSearchInput(
-      form
-    ) {
-      if (
-        !(form instanceof HTMLFormElement)
-      ) {
-        return null;
-      }
-
-      return form.querySelector(
-        'input[name="q"], input[type="search"], textarea[name="q"]'
-      );
-    }
-
-    function isSearchForm(
-      form,
-      input
-    ) {
-      if (!input) {
-        return false;
-      }
-
-      const action =
-        (
-          form.getAttribute(
-            "action"
-          ) || ""
-        ).trim();
-
+    function isSearchForm(form, input) {
+      if (!input) return false;
+      const action = (form.getAttribute("action") || "").trim();
       if (action) {
-        const actionUrl =
-          new URL(
-            action,
-            location.origin
-          );
-
-        if (
-          isNativeSearchPath(
-            actionUrl.pathname
-          )
-        ) {
-          return true;
-        }
+        const actionUrl = new URL(action, location.origin);
+        if (isNativeSearchPath(actionUrl.pathname)) return true;
       }
-
-      /*
-       * Fallback rộng như V2.
-       */
-
       return (
-        /search/i.test(
-          String(
-            form.className || ""
-          )
-        ) ||
-        form.hasAttribute(
-          "data-search-form"
-        ) ||
-        form.hasAttribute(
-          "data-predictive-search"
-        ) ||
+        /search/i.test(String(form.className || "")) ||
+        form.hasAttribute("data-search-form") ||
+        form.hasAttribute("data-predictive-search") ||
         input.name === "q"
       );
     }
@@ -14120,136 +12941,35 @@ const target =
     window.addEventListener(
       "submit",
       (event) => {
-        const form =
-          event.target;
+        const form = event.target;
+        if (!(form instanceof HTMLFormElement) || form.method.toLowerCase() !== "get") return;
 
-        if (
-          !(
-            form instanceof
-            HTMLFormElement
-          ) ||
-          form.method.toLowerCase() !==
-            "get"
-        ) {
+        const input = findSearchInput(form);
+        if (!isSearchForm(form, input)) return;
+
+        const target = new URL(config.search_url || "/search", location.origin);
+        const fields = new FormData(form, event.submitter || undefined);
+
+        for (const [key, value] of fields) {
+          if (typeof value !== "string" || key === AI_SEARCH_PARAM || key === NATIVE_BYPASS_PARAM) continue;
+          target.searchParams.append(key, value);
+        }
+
+        if (!target.searchParams.get("q")) {
+          target.searchParams.set("q", input.value || "");
+        }
+
+        normalizeProductOnlyType(target);
+
+        if (!shouldUseAi(target)) {
+          stopSearchEvent(event);
+          location.assign(target.pathname + target.search);
           return;
         }
 
-        const input =
-          findSearchInput(
-            form
-          );
-
-        if (
-          !isSearchForm(
-            form,
-            input
-          )
-        ) {
-          return;
-        }
-
-        /*
-         * Luôn tạo URL Shopify chuẩn.
-         *
-         * Điều này xử lý Homepage Search
-         * khi form.action trống hoặc
-         * không phải /search.
-         */
-
-        const target =
-          new URL(
-            config.search_url ||
-              "/search",
-            location.origin
-          );
-
-        const fields =
-          new FormData(
-            form,
-            event.submitter ||
-              undefined
-          );
-
-        for (
-          const [
-            key,
-            value
-          ] of fields
-        ) {
-          if (
-            typeof value !==
-              "string" ||
-            key ===
-              AI_SEARCH_PARAM ||
-            key ===
-              NATIVE_BYPASS_PARAM
-          ) {
-            continue;
-          }
-
-          target.searchParams.append(
-            key,
-            value
-          );
-        }
-
-        if (
-          !target.searchParams.get(
-            "q"
-          )
-        ) {
-          target.searchParams.set(
-            "q",
-            input.value || ""
-          );
-        }
-
-        normalizeProductOnlyType(
-          target
-        );
-
-        /*
-         * QUYẾT ĐỊNH AI HAY SHOPIFY NATIVE
-         */
-
-        if (
-          !shouldUseAi(
-            target
-          )
-        ) {
-          /*
-           * Trường hợp cần Shopify Search mặc định.
-           */
-
-          stopSearchEvent(
-            event
-          );
-
-          location.assign(
-            target.pathname +
-            target.search
-          );
-
-          return;
-        }
-
-        /*
-         * AI Search.
-         */
-
-        stopSearchEvent(
-          event
-        );
-
-        target.searchParams.set(
-          "ai_search",
-          "1"
-        );
-
-        location.assign(
-          target.pathname +
-          target.search
-        );
+        stopSearchEvent(event);
+        target.searchParams.set("ai_search", "1");
+        location.assign(target.pathname + target.search);
       },
       true
     );
@@ -14264,85 +12984,25 @@ const target =
           event.metaKey ||
           event.shiftKey ||
           event.altKey
-        ) {
-          return;
-        }
+        ) return;
 
-        const link =
-          event.target?.closest?.(
-            "a[href]"
-          );
+        const link = event.target?.closest?.("a[href]");
+        if (!link || link.download || (link.target && link.target !== "_self")) return;
 
-        if (
-          !link ||
-          link.download ||
-          (
-            link.target &&
-            link.target !== "_self"
-          )
-        ) {
-          return;
-        }
+        const target = new URL(link.href, location.origin);
+        if (target.origin !== location.origin || !isNativeSearchPath(target.pathname)) return;
 
-        const target =
-          new URL(
-            link.href,
-            location.origin
-          );
+        const marked = target.searchParams.has("ai_search");
+        target.searchParams.delete("ai_search");
 
-        if (
-          target.origin !==
-            location.origin ||
-          !isNativeSearchPath(
-            target.pathname
-          )
-        ) {
-          return;
-        }
-
-        const marked =
-          target.searchParams.has(
-            "ai_search"
-          );
-
-        target.searchParams.delete(
-          "ai_search"
-        );
-
-        if (
-          shouldUseAi(
-            target
-          )
-        ) {
-          stopSearchEvent(
-            event
-          );
-
-          target.searchParams.set(
-            "ai_search",
-            "1"
-          );
-
-          location.assign(
-            target.pathname +
-            target.search
-          );
-        } else if (
-          marked
-        ) {
-          stopSearchEvent(
-            event
-          );
-
-          target.searchParams.set(
-            "_ai_search_bypass",
-            "1"
-          );
-
-          location.assign(
-            target.pathname +
-            target.search
-          );
+        if (shouldUseAi(target)) {
+          stopSearchEvent(event);
+          target.searchParams.set("ai_search", "1");
+          location.assign(target.pathname + target.search);
+        } else if (marked) {
+          stopSearchEvent(event);
+          target.searchParams.set("_ai_search_bypass", "1");
+          location.assign(target.pathname + target.search);
         }
       },
       true
@@ -14350,128 +13010,52 @@ const target =
   }
 
   function initOnPageLoad() {
-    if (
-      !isNativeSearchPage()
-    ) {
+    if (!isNativeSearchPage()) return;
+    const url = new URL(location.href);
+
+    if (url.searchParams.get(NATIVE_BYPASS_PARAM) === "1") {
+      url.searchParams.delete(NATIVE_BYPASS_PARAM);
+      url.searchParams.delete(AI_SEARCH_PARAM);
+      history.replaceState(history.state, "", url.pathname + url.search);
       return;
     }
 
-    const url =
-      new URL(
-        location.href
-      );
+    const query = (url.searchParams.get("q") || "").trim();
+    if (!query || query.includes("id:")) return;
 
-    if (
-      url.searchParams.get(
-        NATIVE_BYPASS_PARAM
-      ) === "1"
-    ) {
-      url.searchParams.delete(
-        NATIVE_BYPASS_PARAM
-      );
-
-      url.searchParams.delete(
-        AI_SEARCH_PARAM
-      );
-
-      history.replaceState(
-        history.state,
-        "",
-        url.pathname +
-        url.search
-      );
-
-      return;
-    }
-
-    const query =
-      (
-        url.searchParams.get(
-          "q"
-        ) || ""
-      ).trim();
-
-    if (
-      !query ||
-      query.includes("id:")
-    ) {
-      return;
-    }
-
-    /*
-     * Quy tắc V2:
-     * Chỉ chạy AI khi URL được đánh dấu ai_search=1.
-     */
-
-    if (
-      url.searchParams.get(
-        AI_SEARCH_PARAM
-      ) !== "1"
-    ) {
-      return;
-    }
+    if (url.searchParams.get(AI_SEARCH_PARAM) !== "1") return;
 
     hideNativeResults();
-
-    executeAiSearch(
-      query,
-      getPageFromUrl()
-    );
+    executeAiSearch(query, getPageFromUrl());
   }
 
   function handlePopState() {
     activeController?.abort();
-
     activeRequestId += 1;
 
-    if (
-      !isAiSearchPage()
-    ) {
+    if (!isAiSearchPage()) {
       location.reload();
       return;
     }
 
-    executeAiSearch(
-      getQueryFromUrl(),
-      getPageFromUrl()
-    );
+    executeAiSearch(getQueryFromUrl(), getPageFromUrl());
   }
 
-  window.addEventListener(
-    "popstate",
-    handlePopState
-  );
+  window.addEventListener("popstate", handlePopState);
 
   window.AI_SEARCH_V3 = {
-    search:
-      submitAiSearch,
-
+    search: submitAiSearch,
     executeAiSearch,
-
     getThemeMap,
-
     findProductGrid,
-
-    getQuery:
-      getQueryFromUrl,
-
-    getPage:
-      getPageFromUrl
+    getQuery: getQueryFromUrl,
+    getPage: getPageFromUrl,
   };
 
   installSearchInterception();
 
-  if (
-    document.readyState ===
-    "loading"
-  ) {
-    document.addEventListener(
-      "DOMContentLoaded",
-      initOnPageLoad,
-      {
-        once: true
-      }
-    );
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", initOnPageLoad, { once: true });
   } else {
     initOnPageLoad();
   }

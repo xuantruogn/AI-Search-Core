@@ -4,7 +4,6 @@ import { authenticate } from "../shopify.server";
 import { getActiveThemeMap } from "../services/theme/theme-map-lifecycle.server";
 import type { ThemeMap } from "../services/theme-map.server";
 import { semanticSearch } from "../services/search/semantic-search.server";
-import { revalidateSearchResults } from "../services/search/search-result-revalidation.server";
 import { classifySearchRequest } from "../services/search/search-request-router.server";
 import {
   getActiveTheme,
@@ -25,6 +24,44 @@ import {
 } from "../services/commerce/usage.server";
 
 const NATIVE_BYPASS_PARAM = "_ai_search_bypass";
+
+// ==========================================
+// IN-MEMORY QUERY EMBEDDING CACHE (TTL 24 HOURS)
+// ==========================================
+const queryEmbeddingCache = new Map<
+  string,
+  { embedding: number[]; timestamp: number }
+>();
+const EMBEDDING_CACHE_TTL = 24 * 60 * 60 * 1000; // 24 hours
+
+export function getCachedQueryEmbedding(
+  shop: string,
+  query: string,
+): number[] | null {
+  const key = `${shop}:${query.toLowerCase().trim()}`;
+  const cached = queryEmbeddingCache.get(key);
+  if (cached && Date.now() - cached.timestamp < EMBEDDING_CACHE_TTL) {
+    return cached.embedding;
+  }
+  return null;
+}
+
+export function setCachedQueryEmbedding(
+  shop: string,
+  query: string,
+  embedding: number[],
+) {
+  const key = `${shop}:${query.toLowerCase().trim()}`;
+  if (queryEmbeddingCache.size > 10000) {
+    const oldestKey = queryEmbeddingCache.keys().next().value;
+    if (oldestKey) queryEmbeddingCache.delete(oldestKey);
+  }
+  queryEmbeddingCache.set(key, { embedding, timestamp: Date.now() });
+}
+
+// ==========================================
+// HELPER FUNCTIONS
+// ==========================================
 
 function nativeSearchUrl(query: string, requestedUrl?: string | null) {
   if (
@@ -78,7 +115,72 @@ const MIN_SEMANTIC_QUERY_CHARS = readPositiveInteger(
   3,
 );
 
+// ==========================================
+// IN-MEMORY CACHE FOR THEME PREFLIGHT (TTL 60s)
+// ==========================================
+interface CachedThemeData {
+  activeTheme: ActiveTheme;
+  preflightMap: ThemeMap;
+  timestamp: number;
+}
+
+const themeCache = new Map<string, CachedThemeData>();
+const THEME_CACHE_TTL_MS = 60 * 1000; // 60 seconds
+
+// Hàm xóa RAM cache khi người dùng bấm Sync Theme trên Admin Dashboard
+export function clearShopThemeCache(shop: string) {
+  themeCache.delete(shop);
+}
+
+async function getCachedThemePreflight(admin: any, shop: string) {
+  const cached = themeCache.get(shop);
+  const now = Date.now();
+
+  if (cached && now - cached.timestamp < THEME_CACHE_TTL_MS) {
+    return {
+      activeTheme: cached.activeTheme,
+      preflightMap: cached.preflightMap,
+      fromCache: true,
+      embedEnabled: true,
+      reason: null,
+    };
+  }
+
+  const activeTheme = await getActiveTheme(admin);
+  const appEmbed = await getAiSearchAppEmbedStatusForTheme(admin, activeTheme);
+
+  if (appEmbed.enabled !== true) {
+    return {
+      activeTheme,
+      preflightMap: null,
+      fromCache: false,
+      embedEnabled: false,
+      reason: appEmbed.reason,
+    };
+  }
+
+  const preflightMap = await getActiveThemeMap({
+    admin,
+    shop,
+    activeTheme,
+  });
+
+  themeCache.set(shop, { activeTheme, preflightMap, timestamp: now });
+  return {
+    activeTheme,
+    preflightMap,
+    fromCache: false,
+    embedEnabled: true,
+    reason: null,
+  };
+}
+
+// ==========================================
+// LOADER
+// ==========================================
+
 export const loader = async ({ request }: LoaderFunctionArgs) => {
+  console.time("[PERF-PROXY] TOTAL PROXY REQUEST");
   const requestUrl = new URL(request.url);
   const query = requestUrl.searchParams.get("q")?.trim() ?? "";
   const nativeSearchTarget =
@@ -86,35 +188,72 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     requestUrl.searchParams.get("native_search_path");
 
   const wantsJson = requestUrl.searchParams.get("format") === "json";
-  const requestedPageRaw = Number.parseInt(requestUrl.searchParams.get("page") || "1", 10);
-  const requestedPage = Number.isSafeInteger(requestedPageRaw) && requestedPageRaw > 0 ? requestedPageRaw : 1;
-  const nativeRedirect = (value: string, target?: string | null, reason = "NATIVE_SEARCH") => wantsJson
-    ? Response.json({status:"fallback",engine:"native",reason,native_url:nativeSearchUrl(value,target)}, {headers:{"Cache-Control":"no-store"}})
-    : nativeRedirectResponse(value,target,reason);
+  const requestedPageRaw = Number.parseInt(
+    requestUrl.searchParams.get("page") || "1",
+    10,
+  );
+  const requestedPage =
+    Number.isSafeInteger(requestedPageRaw) && requestedPageRaw > 0
+      ? requestedPageRaw
+      : 1;
+
+  const nativeRedirect = (
+    value: string,
+    target?: string | null,
+    reason = "NATIVE_SEARCH",
+  ) =>
+    wantsJson
+      ? Response.json(
+          {
+            status: "fallback",
+            engine: "native",
+            reason,
+            native_url: nativeSearchUrl(value, target),
+          },
+          { headers: { "Cache-Control": "no-store" } },
+        )
+      : nativeRedirectResponse(value, target, reason);
+
   try {
     const { admin, session } = await authenticate.public.appProxy(request);
 
-    // Old App Embed markup can briefly outlive an uninstall/session. Native
-    // search is always safer than a storefront 500.
     if (!admin || !session) {
-      return nativeRedirect(query, nativeSearchTarget, "APP_PROXY_SESSION_MISSING");
+      return nativeRedirect(
+        query,
+        nativeSearchTarget,
+        "APP_PROXY_SESSION_MISSING",
+      );
     }
 
     if (wantsJson && requestUrl.searchParams.get("mode") === "theme-map") {
+      console.time("[PERF-PROXY] Mode Theme-Map Processing");
       const theme = await getActiveTheme(admin);
       const embed = await getAiSearchAppEmbedStatusForTheme(admin, theme);
-      if (embed.enabled !== true) return nativeRedirect(query,nativeSearchTarget,"APP_EMBED_DISABLED_ON_ACTIVE_THEME");
-      const map = await getActiveThemeMap({admin,shop:session.shop,activeTheme:theme});
-      return Response.json({status:"success",theme_map:map}, {headers:{"Cache-Control":"no-store"}});
+      if (embed.enabled !== true)
+        return nativeRedirect(
+          query,
+          nativeSearchTarget,
+          "APP_EMBED_DISABLED_ON_ACTIVE_THEME",
+        );
+      const map = await getActiveThemeMap({
+        admin,
+        shop: session.shop,
+        activeTheme: theme,
+      });
+      console.timeEnd("[PERF-PROXY] Mode Theme-Map Processing");
+      return Response.json(
+        { status: "success", theme_map: map },
+        { headers: { "Cache-Control": "no-store" } },
+      );
     }
-    // HTML navigations from an old embed use native search until the new
-    // storefront asset is deployed. AI's new contract is JSON only.
-    if (!wantsJson) return nativeRedirect(query,nativeSearchTarget,"JSON_RUNTIME_REQUIRED");
 
-    // First gate: pure request semantics. This runs before billing, DB quota,
-    // theme discovery, OpenAI or Qdrant. Exact/SKU/barcode searches, mixed
-    // resource searches, filters, pagination and unsupported sorts stay on
-    // Shopify Search and consume zero AI tokens.
+    if (!wantsJson)
+      return nativeRedirect(
+        query,
+        nativeSearchTarget,
+        "JSON_RUNTIME_REQUIRED",
+      );
+
     const routeDecision = classifySearchRequest({
       query,
       nativeSearchTarget,
@@ -123,15 +262,11 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     });
 
     if (routeDecision.engine === "NATIVE") {
-      console.log("[AI Search] Pre-AI router chose Shopify native search:", {
-        shop: session.shop,
-        reason: routeDecision.reason,
-        queryLength: query.length,
-        resourceTypes: routeDecision.resourceTypes,
-      });
       return nativeRedirect(query, nativeSearchTarget, routeDecision.reason);
     }
 
+    // Billing Check & Reconciliation
+    console.time("[PERF-PROXY] Billing Check & Reconciliation");
     let billingChanged = false;
     try {
       const billing = await refreshShopifyAppPricingIfStale({
@@ -151,11 +286,17 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         shop: session.shop,
         forceCatalogRefresh: true,
       }).catch((error) => {
-        console.error("[AI Search] Storefront plan reconciliation failed:", error);
+        console.error(
+          "[AI Search] Storefront plan reconciliation failed:",
+          error,
+        );
       });
     }
+    console.timeEnd("[PERF-PROXY] Billing Check & Reconciliation");
 
+    console.time("[PERF-PROXY] Entitlement Check");
     const entitlement = await getShopEntitlement(session.shop);
+    console.timeEnd("[PERF-PROXY] Entitlement Check");
 
     const fallback = async (reason: string) => {
       try {
@@ -180,7 +321,10 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       ) {
         void reconcileShopCommercialState({ shop: session.shop }).catch(
           (error) => {
-            console.error("[AI Search] Entitlement reconciliation trigger failed:", error);
+            console.error(
+              "[AI Search] Entitlement reconciliation trigger failed:",
+              error,
+            );
           },
         );
       }
@@ -192,65 +336,48 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       return fallback("CATALOG_EMPTY");
     }
 
-    // Second gate: theme capability preflight. This intentionally runs BEFORE
-    // search quota reservation and before semanticSearch() creates an OpenAI
-    // embedding. Every request validates the live MAIN theme id + updatedAt;
-    // a theme publish/edit invalidates stale Theme Map state before AI.
-    let activeTheme: ActiveTheme;
+    // BƯỚC 1: Theme Preflight Check (In-Memory Cached)
+    console.time("[PERF-PROXY] 1. Theme Preflight (Cached)");
     let preflightMap: ThemeMap;
     try {
-      activeTheme = await getActiveTheme(admin);
-      const appEmbed = await getAiSearchAppEmbedStatusForTheme(
+      const themePreflight = await getCachedThemePreflight(
         admin,
-        activeTheme,
+        session.shop,
       );
 
-      // A direct/stale App Proxy request can outlive a theme publish. Never
-      // spend an embedding when the current MAIN theme doesn't actually have
-      // the App Embed enabled.
-      if (appEmbed.enabled !== true) {
-        console.warn("[AI Search] Active theme App Embed unavailable; native search selected:", {
-          shop: session.shop,
-          themeId: activeTheme.id,
-          themeName: activeTheme.name,
-          reason: appEmbed.reason,
-        });
+      if (themePreflight.embedEnabled === false) {
         return fallback(
-          appEmbed.enabled === false
+          themePreflight.reason === "APP_EMBED_DISABLED"
             ? "APP_EMBED_DISABLED_ON_ACTIVE_THEME"
             : "APP_EMBED_STATUS_UNKNOWN",
         );
       }
 
-      // App Embed settings are read from a theme file. A publish can complete
-      // during that request, so confirm the MAIN identity again before
-      // mapping/reserving. Never combine embed state from theme A with a
-      // map from theme B.
-      const confirmedTheme = await getActiveTheme(admin);
-      if (confirmedTheme.versionKey !== activeTheme.versionKey) {
-        return fallback("ACTIVE_THEME_CHANGED_DURING_PREFLIGHT");
-      }
-      activeTheme = confirmedTheme;
+      preflightMap = themePreflight.preflightMap!;
 
-      preflightMap = await getActiveThemeMap({
-        admin,
-        shop: session.shop,
-        activeTheme,
-      });
+      const clientThemeId = requestUrl.searchParams.get("theme_id");
+      const clientFingerprint = requestUrl.searchParams.get("map_fingerprint");
 
-      if (preflightMap.theme.versionKey !== activeTheme.versionKey) {
-        return fallback("THEME_MAP_SNAPSHOT_MISMATCH");
+      // Nếu Client gửi Theme ID hoặc Fingerprint khác với dữ liệu hiện tại ở Server
+      if (
+        clientThemeId && clientFingerprint &&
+        (clientThemeId !== preflightMap.theme.id || clientFingerprint !== preflightMap.fingerprint)
+      ) {
+        themeCache.delete(session.shop);
+        // Trả về JSON để Storefront JS tự động làm mới LocalStorage
+        return Response.json(
+          {
+            status: "theme_map_refreshed",
+            reason: "STOREFRONT_THEME_MAP_STALE",
+            theme_map: preflightMap,
+          },
+          { headers: { "Cache-Control": "no-store" } }
+        );
       }
-      if (requestUrl.searchParams.get("theme_id") !== preflightMap.theme.id || requestUrl.searchParams.get("map_fingerprint") !== preflightMap.fingerprint) {
-        return fallback("STOREFRONT_THEME_MAP_STALE");
-      }
-
     } catch (error) {
-      console.warn("[AI Search] Theme preflight failed; native search selected:", {
-        shop: session.shop,
-        error: error instanceof Error ? error.message : String(error),
-      });
       return fallback("THEME_MAP_UNAVAILABLE");
+    } finally {
+      console.timeEnd("[PERF-PROXY] 1. Theme Preflight (Cached)");
     }
 
     const reservationResult = await reserveSearchUsage({
@@ -268,107 +395,129 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     const startedAt = Date.now();
 
     try {
-      // Oversample Qdrant candidates so stale/unpublished entries can be
-      // removed without unnecessarily shrinking the visible result set.
+      // BƯỚC 2: Semantic Search (Lấy danh sách Top kết quả)
+      console.time(
+        "[PERF-PROXY] 2. Semantic Search (OpenAI/Vector Cache + Qdrant)",
+      );
+
+      const cachedVector = getCachedQueryEmbedding(session.shop, query);
+      if (cachedVector) {
+        console.log(
+          `[AI Search] Cache Hit Vector cho từ khóa: "${query}" - BỎ QUA OpenAI API!`,
+        );
+      }
+
+      // Lấy danh sách kết quả đủ lớn (Top 60 sản phẩm) để trả về cho Client
       const rawSearchResults = await semanticSearch({
         shop: session.shop,
         query,
-        limit: Math.min(60, Math.max(entitlement.resultLimit, entitlement.resultLimit * 3)),
-        onEmbeddingCreated: async () => {
+        vectorOverride: cachedVector ?? undefined,
+        limit: Math.min(
+          60,
+          Math.max(entitlement.resultLimit, entitlement.resultLimit * 3),
+        ),
+        onEmbeddingCreated: async (vector) => {
+          if (vector) setCachedQueryEmbedding(session.shop, query, vector);
           try {
             await recordQueryEmbeddingConsumed(reservation);
           } catch (usageError) {
-            console.error("[AI Search] Query embedding usage logging failed:", usageError);
+            console.error(
+              "[AI Search] Query embedding usage logging failed:",
+              usageError,
+            );
           }
         },
       });
+      console.timeEnd(
+        "[PERF-PROXY] 2. Semantic Search (OpenAI/Vector Cache + Qdrant)",
+      );
 
-      const revalidated = await revalidateSearchResults({
-        admin,
-        shop: session.shop,
-        results: rawSearchResults,
-        // Validate the ranked pool before pagination so total_pages remains correct.
-        limit: rawSearchResults.length,
-      });
-      const searchResults = revalidated.results;
-
-      // Qdrant can be briefly ahead of Shopify after an unpublish/delete. If
-      // every ranked candidate is rejected by the live Shopify check, do not
-      // render a misleading empty AI page. The outer execution handler rolls
-      // back the search reservation (while preserving real embedding usage)
-      // and sends the customer to Shopify native search.
-      if (searchResults.length === 0) {
-        throw new Error("NO_LIVE_AI_RESULTS_AFTER_REVALIDATION");
+      if (rawSearchResults.length === 0) {
+        throw new Error("NO_LIVE_AI_RESULTS");
       }
 
-
-      if (revalidated.staleProductIds.length > 0 || revalidated.repairedMetadata > 0) {
-        console.log("[AI Search] Search candidates reconciled with Shopify:", {
-          shop: session.shop,
-          staleRemoved: revalidated.staleProductIds.length,
-          metadataRepaired: revalidated.repairedMetadata,
-          validResults: searchResults.length,
-        });
-      }
-      // Theme rendering happens on Shopify's /search page, never in this
-      // backend. Fence the JSON ranking against a mid-query theme change.
-      const finalTheme = await getActiveTheme(admin);
-      if (finalTheme.versionKey !== activeTheme.versionKey || finalTheme.processing || finalTheme.processingFailed) throw new Error("ACTIVE_THEME_CHANGED_DURING_SEARCH");
-      const finalEmbed = await getAiSearchAppEmbedStatusForTheme(admin, finalTheme);
-      if (finalEmbed.enabled !== true) throw new Error("APP_EMBED_CHANGED_DURING_SEARCH");
-      const finalMap = await getActiveThemeMap({admin,shop:session.shop,activeTheme:finalTheme});
-      if (finalMap.fingerprint !== preflightMap.fingerprint) throw new Error("THEME_MAP_CHANGED_DURING_SEARCH");
+      // Lọc trùng ID
       const seen = new Set<string>();
-      const products = searchResults.flatMap((result) => {
-        const id = result.productId.match(/^(?:gid:\/\/shopify\/Product\/)?(\d+)$/)?.[1];
-        if (!id) throw new Error("INVALID_SHOPIFY_PRODUCT_ID");
+      const allProducts = rawSearchResults.flatMap((result) => {
+        const id =
+          result.productId.match(/^(?:gid:\/\/shopify\/Product\/)?(\d+)$/)?.[1] ||
+          result.productId;
+        if (!id) return [];
         if (seen.has(id)) return [];
         seen.add(id);
-        return [{id,handle:result.handle}];
+        return [{ id, handle: result.handle }];
       });
+
+      // Cắt mảng cho Trang 1
       const pageSize = Math.max(1, entitlement.resultLimit);
-      const totalProducts = products.length;
+      const totalProducts = allProducts.length;
       const totalPages = Math.max(1, Math.ceil(totalProducts / pageSize));
       const currentPage = Math.min(requestedPage, totalPages);
       const pageStart = (currentPage - 1) * pageSize;
-      const pageProducts = products.slice(pageStart, pageStart + pageSize);
+      const pageProducts = allProducts.slice(pageStart, pageStart + pageSize);
 
-      const response = Response.json({
-        status:"success",engine:"ai-search-v3",query,
-        theme_id:finalMap.theme.id,map_fingerprint:finalMap.fingerprint,
-        target_ids:pageProducts.map((product)=>`id:${product.id}`).join(" OR "),
-        products:pageProducts,
-        pagination:{current_page:currentPage,page_size:pageSize,total_products:totalProducts,total_pages:totalPages},
-      }, {headers:{"Cache-Control":"no-store"}});
+      const response = Response.json(
+        {
+          status: "success",
+          engine: "ai-search-v3",
+          query,
+          theme_id: preflightMap.theme.id,
+          map_fingerprint: preflightMap.fingerprint,
+          target_ids: pageProducts
+            .map((product) => `id:${product.id}`)
+            .join(" OR "),
+          products: pageProducts,
+          all_products: allProducts, // Trả về toàn bộ ID để Frontend lưu vào Session Storage
+          pagination: {
+            current_page: currentPage,
+            page_size: pageSize,
+            total_products: totalProducts,
+            total_pages: totalPages,
+          },
+        },
+        { headers: { "Cache-Control": "no-store" } },
+      );
 
       try {
         await markUsageReservationEffectApplied(reservation);
       } catch (usageError) {
-        console.error("[AI Search] Search reservation effect marker failed:", usageError);
+        console.error(
+          "[AI Search] Search reservation effect marker failed:",
+          usageError,
+        );
       }
 
       try {
         await commitSearchUsage(reservation, {
-          resultCount: searchResults.length,
+          resultCount: rawSearchResults.length,
           durationMs: Date.now() - startedAt,
-          themeId: finalMap.theme.gid,
-          rendererSource: finalMap.search.searchTemplate ?? "native-search",
+          themeId: preflightMap.theme.gid,
+          rendererSource: preflightMap.search.searchTemplate ?? "native-search",
         });
       } catch (usageError) {
-        console.error("[AI Search] Search usage commit logging failed:", usageError);
+        console.error(
+          "[AI Search] Search usage commit logging failed:",
+          usageError,
+        );
       }
 
       return response;
     } catch (error) {
-      console.error("[AI Search] AI execution failed; using Shopify native search:", {
-        shop: session.shop,
-        error: error instanceof Error ? error.message : String(error),
-      });
+      console.error(
+        "[AI Search] AI execution failed; using Shopify native search:",
+        {
+          shop: session.shop,
+          error: error instanceof Error ? error.message : String(error),
+        },
+      );
 
       try {
         await rollbackSearchUsage(reservation, error);
       } catch (usageError) {
-        console.error("[AI Search] Search usage rollback failed:", usageError);
+        console.error(
+          "[AI Search] Search usage rollback failed:",
+          usageError,
+        );
       }
 
       return fallback("AI_SEARCH_RUNTIME_ERROR");
@@ -379,5 +528,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     });
 
     return nativeRedirect(query, nativeSearchTarget, "APP_PROXY_FATAL_ERROR");
+  } finally {
+    console.timeEnd("[PERF-PROXY] TOTAL PROXY REQUEST");
   }
 };
