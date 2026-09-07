@@ -24,6 +24,7 @@ import {
 } from "../services/commerce/usage.server";
 
 const NATIVE_BYPASS_PARAM = "_ai_search_bypass";
+const SEARCH_LIMIT = 1000;
 
 // ==========================================
 // IN-MEMORY QUERY EMBEDDING CACHE (TTL 24 HOURS)
@@ -172,6 +173,68 @@ async function getCachedThemePreflight(admin: any, shop: string) {
     fromCache: false,
     embedEnabled: true,
     reason: null,
+  };
+}
+
+// ==========================================
+// KẾ THỪA LOGIC PHÂN TRANG ĐỘNG TỪ SEARCH.TSX
+// ==========================================
+type CandidateProduct = {
+  id: string;
+  handle?: string;
+};
+
+type PaginationResult = {
+  totalProducts: number;
+  totalPages: number;
+  currentPage: number;
+  pageSize: number;
+  targetIds: string;
+  pageProducts: CandidateProduct[];
+};
+
+function buildShopifyProductQuery(
+  products: CandidateProduct[],
+  page: number,
+  pageSize: number,
+): PaginationResult {
+  const totalProducts = products.length; // Kế thừa totalProducts từ độ dài thực tế[cite: 12]
+
+  const totalPages =
+    totalProducts > 0
+      ? Math.ceil(totalProducts / pageSize) // Kế thừa công thức tính tổng số trang[cite: 12]
+      : 0;
+
+  const currentPage =
+    Number.isInteger(page) && page >= 1
+      ? page // Kế thừa kiểm tra số trang hợp lệ[cite: 12]
+      : 1;
+
+  const offset =
+    (currentPage - 1) * pageSize; // Kế thừa cách tính vị trí cắt mảng[cite: 12]
+
+  const pageProducts = products.slice(
+    offset,
+    offset + pageSize,
+  ); // Kế thừa việc cắt mảng theo offset và pageSize[cite: 12]
+
+  const productTerms = pageProducts
+    .map((product) => product?.id)
+    .filter(Boolean)
+    .map((id) => `id:${id}`); // Kế thừa việc tạo mảng ID[cite: 12]
+
+  const targetIds =
+    productTerms.length > 0
+      ? productTerms.join(" OR ") // Kế thừa việc ghép chuỗi "id:1 OR id:2"[cite: 12]
+      : "id:0"; // Kế thừa việc fallback về "id:0" khi trống[cite: 12]
+
+  return {
+    totalProducts,
+    totalPages,
+    currentPage,
+    pageSize,
+    targetIds,
+    pageProducts,
   };
 }
 
@@ -407,15 +470,14 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         );
       }
 
-      // Lấy danh sách kết quả đủ lớn (Top 60 sản phẩm) để trả về cho Client
+      // 1. KẾ THỪA GIỐNG FILE SEARCH.TSX CŨ: Lấy tối đa 1000 candidates từ Qdrant
+      
+
       const rawSearchResults = await semanticSearch({
         shop: session.shop,
         query,
         vectorOverride: cachedVector ?? undefined,
-        limit: Math.min(
-          60,
-          Math.max(entitlement.resultLimit, entitlement.resultLimit * 3),
-        ),
+        limit: SEARCH_LIMIT, // Lấy toàn bộ kết quả phù hợp (up to 1000)
         onEmbeddingCreated: async (vector) => {
           if (vector) setCachedQueryEmbedding(session.shop, query, vector);
           try {
@@ -436,9 +498,9 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         throw new Error("NO_LIVE_AI_RESULTS");
       }
 
-      // Lọc trùng ID
+      // Lọc trùng ID để có danh sách candidate thực tế
       const seen = new Set<string>();
-      const allProducts = rawSearchResults.flatMap((result) => {
+      const allProducts: CandidateProduct[] = rawSearchResults.flatMap((result) => {
         const id =
           result.productId.match(/^(?:gid:\/\/shopify\/Product\/)?(\d+)$/)?.[1] ||
           result.productId;
@@ -448,13 +510,26 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         return [{ id, handle: result.handle }];
       });
 
-      // Cắt mảng cho Trang 1
-      const pageSize = Math.max(1, entitlement.resultLimit);
-      const totalProducts = allProducts.length;
-      const totalPages = Math.max(1, Math.ceil(totalProducts / pageSize));
-      const currentPage = Math.min(requestedPage, totalPages);
-      const pageStart = (currentPage - 1) * pageSize;
-      const pageProducts = allProducts.slice(pageStart, pageStart + pageSize);
+      // 2. PHÂN TRANG ĐỘNG HOÀN TOÀN:
+      // Lấy pageSize từ client gửi lên (nếu có), nếu không có thì lấy mặc định theo cài đặt shop.
+      // Không khống chế hay giới hạn tổng số trang nữa!
+      const clientPageSize = Number.parseInt(
+        requestUrl.searchParams.get("page_size") || "",
+        10,
+      );
+      const pageSize =
+        Number.isSafeInteger(clientPageSize) && clientPageSize > 0
+          ? clientPageSize
+          : entitlement.resultLimit;
+
+      // Kế thừa nguyên vẹn hàm buildShopifyProductQuery từ search.tsx
+      // totalProducts = allProducts.length (số sp thực tế)
+      // totalPages = Math.ceil(totalProducts / pageSize) (số trang tính động hoàn toàn)
+      const pagination = buildShopifyProductQuery(
+        allProducts,
+        requestedPage,
+        pageSize,
+      );
 
       const response = Response.json(
         {
@@ -463,16 +538,14 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
           query,
           theme_id: preflightMap.theme.id,
           map_fingerprint: preflightMap.fingerprint,
-          target_ids: pageProducts
-            .map((product) => `id:${product.id}`)
-            .join(" OR "),
-          products: pageProducts,
-          all_products: allProducts, // Trả về toàn bộ ID để Frontend lưu vào Session Storage
+          target_ids: pagination.targetIds,
+          products: pagination.pageProducts,
+          all_products: allProducts, // Trả về toàn bộ danh sách ID tìm được
           pagination: {
-            current_page: currentPage,
-            page_size: pageSize,
-            total_products: totalProducts,
-            total_pages: totalPages,
+            current_page: pagination.currentPage,
+            page_size: pagination.pageSize,
+            total_products: pagination.totalProducts, // Tổng sản phẩm thực tế
+            total_pages: pagination.totalPages,     // Tổng số trang tính động hoàn toàn
           },
         },
         { headers: { "Cache-Control": "no-store" } },
