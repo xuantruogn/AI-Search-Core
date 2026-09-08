@@ -243,3 +243,13 @@ model AiSearchCatalogSyncJob {
   @@index([status, createdAt])
   @@index([status, updatedAt])
 }
+
+
+model ShopThemeConfig {
+  shop            String   @id
+  themeId         String
+  appEmbedEnabled Boolean  @default(true)
+  activeThemeJson String
+  themeMapJson    String
+  updatedAt       DateTime @updatedAt
+}

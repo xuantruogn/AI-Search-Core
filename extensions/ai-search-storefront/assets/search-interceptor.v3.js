@@ -672,6 +672,7 @@ function hideNativeResults() {
       }
     }
 
+
     if (!targetElement) return;
 
     // 3. Thay thế an toàn bằng TreeWalker (Chống phá vỡ thẻ <style> hoặc mã CSS)

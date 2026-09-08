@@ -1,6 +1,7 @@
 import type { LoaderFunctionArgs } from "react-router";
 
 import { authenticate } from "../shopify.server";
+import db from "../db.server";
 import { getActiveThemeMap } from "../services/theme/theme-map-lifecycle.server";
 import type { ThemeMap } from "../services/theme-map.server";
 import { semanticSearch } from "../services/search/semantic-search.server";
@@ -25,40 +26,6 @@ import {
 
 const NATIVE_BYPASS_PARAM = "_ai_search_bypass";
 const SEARCH_LIMIT = 1000;
-
-// ==========================================
-// IN-MEMORY QUERY EMBEDDING CACHE (TTL 24 HOURS)
-// ==========================================
-const queryEmbeddingCache = new Map<
-  string,
-  { embedding: number[]; timestamp: number }
->();
-const EMBEDDING_CACHE_TTL = 24 * 60 * 60 * 1000; // 24 hours
-
-export function getCachedQueryEmbedding(
-  shop: string,
-  query: string,
-): number[] | null {
-  const key = `${shop}:${query.toLowerCase().trim()}`;
-  const cached = queryEmbeddingCache.get(key);
-  if (cached && Date.now() - cached.timestamp < EMBEDDING_CACHE_TTL) {
-    return cached.embedding;
-  }
-  return null;
-}
-
-export function setCachedQueryEmbedding(
-  shop: string,
-  query: string,
-  embedding: number[],
-) {
-  const key = `${shop}:${query.toLowerCase().trim()}`;
-  if (queryEmbeddingCache.size > 10000) {
-    const oldestKey = queryEmbeddingCache.keys().next().value;
-    if (oldestKey) queryEmbeddingCache.delete(oldestKey);
-  }
-  queryEmbeddingCache.set(key, { embedding, timestamp: Date.now() });
-}
 
 // ==========================================
 // HELPER FUNCTIONS
@@ -117,36 +84,40 @@ const MIN_SEMANTIC_QUERY_CHARS = readPositiveInteger(
 );
 
 // ==========================================
-// IN-MEMORY CACHE FOR THEME PREFLIGHT (TTL 60s)
+// PERSISTENT SQLITE CACHE FOR THEME PREFLIGHT
 // ==========================================
-interface CachedThemeData {
-  activeTheme: ActiveTheme;
-  preflightMap: ThemeMap;
-  timestamp: number;
-}
 
-const themeCache = new Map<string, CachedThemeData>();
-const THEME_CACHE_TTL_MS = 60 * 1000; // 60 seconds
-
-// Hàm xóa RAM cache khi người dùng bấm Sync Theme trên Admin Dashboard
-export function clearShopThemeCache(shop: string) {
-  themeCache.delete(shop);
+export async function clearShopThemeCache(shop: string) {
+  try {
+    await db.shopThemeConfig.deleteMany({
+      where: { shop },
+    });
+  } catch (error) {
+    console.error(`[AI Search] Clear SQLite theme cache failed for shop ${shop}:`, error);
+  }
 }
 
 async function getCachedThemePreflight(admin: any, shop: string) {
-  const cached = themeCache.get(shop);
-  const now = Date.now();
+  // BƯỚC 1: Truy vấn trực tiếp từ SQLite (chỉ mất ~2ms)
+  try {
+    const existingConfig = await db.shopThemeConfig.findUnique({
+      where: { shop },
+    });
 
-  if (cached && now - cached.timestamp < THEME_CACHE_TTL_MS) {
-    return {
-      activeTheme: cached.activeTheme,
-      preflightMap: cached.preflightMap,
-      fromCache: true,
-      embedEnabled: true,
-      reason: null,
-    };
+    if (existingConfig) {
+      return {
+        activeTheme: JSON.parse(existingConfig.activeThemeJson) as ActiveTheme,
+        preflightMap: JSON.parse(existingConfig.themeMapJson) as ThemeMap,
+        fromCache: true,
+        embedEnabled: existingConfig.appEmbedEnabled,
+        reason: existingConfig.appEmbedEnabled ? null : "APP_EMBED_DISABLED",
+      };
+    }
+  } catch (dbError) {
+    console.warn("[AI Search] SQLite Theme Cache read miss, fallback to API query:", dbError);
   }
 
+  // BƯỚC 2: Nếu chưa có trong SQLite (Lần đầu tiên/Sau khi Sync Theme), mới gọi Shopify Admin API
   const activeTheme = await getActiveTheme(admin);
   const appEmbed = await getAiSearchAppEmbedStatusForTheme(admin, activeTheme);
 
@@ -166,7 +137,29 @@ async function getCachedThemePreflight(admin: any, shop: string) {
     activeTheme,
   });
 
-  themeCache.set(shop, { activeTheme, preflightMap, timestamp: now });
+  // BƯỚC 3: Lưu thẳng kết quả vào SQLite để sử dụng vĩnh viễn cho tất cả lượt tìm kiếm sau
+  try {
+    await db.shopThemeConfig.upsert({
+      where: { shop },
+      update: {
+        themeId: String(activeTheme.id),
+        appEmbedEnabled: true,
+        activeThemeJson: JSON.stringify(activeTheme),
+        themeMapJson: JSON.stringify(preflightMap),
+        updatedAt: new Date(),
+      },
+      create: {
+        shop,
+        themeId: String(activeTheme.id),
+        appEmbedEnabled: true,
+        activeThemeJson: JSON.stringify(activeTheme),
+        themeMapJson: JSON.stringify(preflightMap),
+      },
+    });
+  } catch (dbSaveError) {
+    console.error("[AI Search] Failed to write theme preflight map to SQLite:", dbSaveError);
+  }
+
   return {
     activeTheme,
     preflightMap,
@@ -177,7 +170,7 @@ async function getCachedThemePreflight(admin: any, shop: string) {
 }
 
 // ==========================================
-// KẾ THỪA LOGIC PHÂN TRANG ĐỘNG TỪ SEARCH.TSX
+// LOGIC PHÂN TRANG ĐỘNG
 // ==========================================
 type CandidateProduct = {
   id: string;
@@ -198,35 +191,31 @@ function buildShopifyProductQuery(
   page: number,
   pageSize: number,
 ): PaginationResult {
-  const totalProducts = products.length; // Kế thừa totalProducts từ độ dài thực tế[cite: 12]
+  const totalProducts = products.length;
 
   const totalPages =
     totalProducts > 0
-      ? Math.ceil(totalProducts / pageSize) // Kế thừa công thức tính tổng số trang[cite: 12]
+      ? Math.ceil(totalProducts / pageSize)
       : 0;
 
   const currentPage =
     Number.isInteger(page) && page >= 1
-      ? page // Kế thừa kiểm tra số trang hợp lệ[cite: 12]
+      ? page
       : 1;
 
-  const offset =
-    (currentPage - 1) * pageSize; // Kế thừa cách tính vị trí cắt mảng[cite: 12]
+  const offset = (currentPage - 1) * pageSize;
 
-  const pageProducts = products.slice(
-    offset,
-    offset + pageSize,
-  ); // Kế thừa việc cắt mảng theo offset và pageSize[cite: 12]
+  const pageProducts = products.slice(offset, offset + pageSize);
 
   const productTerms = pageProducts
     .map((product) => product?.id)
     .filter(Boolean)
-    .map((id) => `id:${id}`); // Kế thừa việc tạo mảng ID[cite: 12]
+    .map((id) => `id:${id}`);
 
   const targetIds =
     productTerms.length > 0
-      ? productTerms.join(" OR ") // Kế thừa việc ghép chuỗi "id:1 OR id:2"[cite: 12]
-      : "id:0"; // Kế thừa việc fallback về "id:0" khi trống[cite: 12]
+      ? productTerms.join(" OR ")
+      : "id:0";
 
   return {
     totalProducts,
@@ -246,6 +235,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   console.time("[PERF-PROXY] TOTAL PROXY REQUEST");
   const requestUrl = new URL(request.url);
   const query = requestUrl.searchParams.get("q")?.trim() ?? "";
+  const cachedIdsRaw = requestUrl.searchParams.get("cached_ids"); // Client gửi dữ liệu ID đã lưu từ SessionStorage lên
+
   const nativeSearchTarget =
     requestUrl.searchParams.get("native_search_url") ??
     requestUrl.searchParams.get("native_search_path");
@@ -399,8 +390,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       return fallback("CATALOG_EMPTY");
     }
 
-    // BƯỚC 1: Theme Preflight Check (In-Memory Cached)
-    console.time("[PERF-PROXY] 1. Theme Preflight (Cached)");
+    // BƯỚC 1: Theme Preflight Check (Đọc từ SQLite)
+    console.time("[PERF-PROXY] 1. Theme Preflight (SQLite)");
     let preflightMap: ThemeMap;
     try {
       const themePreflight = await getCachedThemePreflight(
@@ -421,13 +412,11 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       const clientThemeId = requestUrl.searchParams.get("theme_id");
       const clientFingerprint = requestUrl.searchParams.get("map_fingerprint");
 
-      // Nếu Client gửi Theme ID hoặc Fingerprint khác với dữ liệu hiện tại ở Server
       if (
         clientThemeId && clientFingerprint &&
         (clientThemeId !== preflightMap.theme.id || clientFingerprint !== preflightMap.fingerprint)
       ) {
-        themeCache.delete(session.shop);
-        // Trả về JSON để Storefront JS tự động làm mới LocalStorage
+        await clearShopThemeCache(session.shop);
         return Response.json(
           {
             status: "theme_map_refreshed",
@@ -440,9 +429,68 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     } catch (error) {
       return fallback("THEME_MAP_UNAVAILABLE");
     } finally {
-      console.timeEnd("[PERF-PROXY] 1. Theme Preflight (Cached)");
+      console.timeEnd("[PERF-PROXY] 1. Theme Preflight (SQLite)");
     }
 
+    // Xác định Page Size
+    const clientPageSize = Number.parseInt(
+      requestUrl.searchParams.get("page_size") || "",
+      10,
+    );
+    const pageSize =
+      Number.isSafeInteger(clientPageSize) && clientPageSize > 0
+        ? clientPageSize
+        : entitlement.resultLimit;
+
+    // =========================================================================
+    // TRƯỜNG HỢP 1: CLIENT GỬI CACHED_IDS (NEXT TRANG / BỎ QUA SEARCH ENGINE)
+    // =========================================================================
+    if (cachedIdsRaw) {
+      try {
+        const cachedProducts: CandidateProduct[] = JSON.parse(cachedIdsRaw);
+
+        if (Array.isArray(cachedProducts) && cachedProducts.length > 0) {
+          console.log(
+            `[AI Search] Next trang ${requestedPage} dung Session Cache Client (${cachedProducts.length} items) - SKIP OpenAI & Qdrant!`,
+          );
+
+          const pagination = buildShopifyProductQuery(
+            cachedProducts,
+            requestedPage,
+            pageSize,
+          );
+
+          return Response.json(
+            {
+              status: "success",
+              engine: "client-session-cache",
+              query,
+              theme_id: preflightMap.theme.id,
+              map_fingerprint: preflightMap.fingerprint,
+              target_ids: pagination.targetIds,
+              products: pagination.pageProducts,
+              all_products: cachedProducts, // Trả lại để Client duy trì bộ nhớ
+              pagination: {
+                current_page: pagination.currentPage,
+                page_size: pagination.pageSize,
+                total_products: pagination.totalProducts,
+                total_pages: pagination.totalPages,
+              },
+            },
+            { headers: { "Cache-Control": "no-store" } },
+          );
+        }
+      } catch (e) {
+        console.warn(
+          "[AI Search] Parse cached_ids bị lỗi, tự động chuyển về search mới:",
+          e,
+        );
+      }
+    }
+
+    // =========================================================================
+    // TRƯỜNG HỢP 2: TÌM TỪ KHÓA MỚI (CHẠY AI / QDRANT)
+    // =========================================================================
     const reservationResult = await reserveSearchUsage({
       shop: session.shop,
       periodId: entitlement.usage.id,
@@ -458,28 +506,13 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     const startedAt = Date.now();
 
     try {
-      // BƯỚC 2: Semantic Search (Lấy danh sách Top kết quả)
-      console.time(
-        "[PERF-PROXY] 2. Semantic Search (OpenAI/Vector Cache + Qdrant)",
-      );
-
-      const cachedVector = getCachedQueryEmbedding(session.shop, query);
-      if (cachedVector) {
-        console.log(
-          `[AI Search] Cache Hit Vector cho từ khóa: "${query}" - BỎ QUA OpenAI API!`,
-        );
-      }
-
-      // 1. KẾ THỪA GIỐNG FILE SEARCH.TSX CŨ: Lấy tối đa 1000 candidates từ Qdrant
-      
+      console.time("[PERF-PROXY] 2. Semantic Search (Qdrant)");
 
       const rawSearchResults = await semanticSearch({
         shop: session.shop,
         query,
-        vectorOverride: cachedVector ?? undefined,
-        limit: SEARCH_LIMIT, // Lấy toàn bộ kết quả phù hợp (up to 1000)
-        onEmbeddingCreated: async (vector) => {
-          if (vector) setCachedQueryEmbedding(session.shop, query, vector);
+        limit: SEARCH_LIMIT,
+        onEmbeddingCreated: async (_vector) => {
           try {
             await recordQueryEmbeddingConsumed(reservation);
           } catch (usageError) {
@@ -490,9 +523,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
           }
         },
       });
-      console.timeEnd(
-        "[PERF-PROXY] 2. Semantic Search (OpenAI/Vector Cache + Qdrant)",
-      );
+      console.timeEnd("[PERF-PROXY] 2. Semantic Search (Qdrant)");
 
       if (rawSearchResults.length === 0) {
         throw new Error("NO_LIVE_AI_RESULTS");
@@ -500,31 +531,19 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
       // Lọc trùng ID để có danh sách candidate thực tế
       const seen = new Set<string>();
-      const allProducts: CandidateProduct[] = rawSearchResults.flatMap((result) => {
-        const id =
-          result.productId.match(/^(?:gid:\/\/shopify\/Product\/)?(\d+)$/)?.[1] ||
-          result.productId;
-        if (!id) return [];
-        if (seen.has(id)) return [];
-        seen.add(id);
-        return [{ id, handle: result.handle }];
-      });
-
-      // 2. PHÂN TRANG ĐỘNG HOÀN TOÀN:
-      // Lấy pageSize từ client gửi lên (nếu có), nếu không có thì lấy mặc định theo cài đặt shop.
-      // Không khống chế hay giới hạn tổng số trang nữa!
-      const clientPageSize = Number.parseInt(
-        requestUrl.searchParams.get("page_size") || "",
-        10,
+      const allProducts: CandidateProduct[] = rawSearchResults.flatMap(
+        (result) => {
+          const id =
+            result.productId.match(
+              /^(?:gid:\/\/shopify\/Product\/)?(\d+)$/,
+            )?.[1] || result.productId;
+          if (!id) return [];
+          if (seen.has(id)) return [];
+          seen.add(id);
+          return [{ id, handle: result.handle }];
+        },
       );
-      const pageSize =
-        Number.isSafeInteger(clientPageSize) && clientPageSize > 0
-          ? clientPageSize
-          : entitlement.resultLimit;
 
-      // Kế thừa nguyên vẹn hàm buildShopifyProductQuery từ search.tsx
-      // totalProducts = allProducts.length (số sp thực tế)
-      // totalPages = Math.ceil(totalProducts / pageSize) (số trang tính động hoàn toàn)
       const pagination = buildShopifyProductQuery(
         allProducts,
         requestedPage,
@@ -540,12 +559,12 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
           map_fingerprint: preflightMap.fingerprint,
           target_ids: pagination.targetIds,
           products: pagination.pageProducts,
-          all_products: allProducts, // Trả về toàn bộ danh sách ID tìm được
+          all_products: allProducts, // Mảng full CandidateProduct để Client lưu vào sessionStorage
           pagination: {
             current_page: pagination.currentPage,
             page_size: pagination.pageSize,
-            total_products: pagination.totalProducts, // Tổng sản phẩm thực tế
-            total_pages: pagination.totalPages,     // Tổng số trang tính động hoàn toàn
+            total_products: pagination.totalProducts,
+            total_pages: pagination.totalPages,
           },
         },
         { headers: { "Cache-Control": "no-store" } },
@@ -565,7 +584,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
           resultCount: rawSearchResults.length,
           durationMs: Date.now() - startedAt,
           themeId: preflightMap.theme.gid,
-          rendererSource: preflightMap.search.searchTemplate ?? "native-search",
+          rendererSource:
+            preflightMap.search.searchTemplate ?? "native-search",
         });
       } catch (usageError) {
         console.error(
