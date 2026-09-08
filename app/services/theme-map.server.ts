@@ -28,6 +28,7 @@ export type ThemeMap = {
     productGridCandidates: string[];
     productCardCandidates: string[];
     paginationCandidates: string[];
+    productCountCandidates: string[]; // <-- THÊM MỚI TẠI ĐÂY
     nativeSectionRendering: boolean;
   };
   generatedAt: string;
@@ -138,6 +139,9 @@ function isProductGridDependency(
       "product_grid",
     ) ||
     value.includes(
+      "facets"
+    ) || // THÊM MỚI: Quét cả file facets vì Dawn chứa Product Count ở đây
+    value.includes(
       "productgrid",
     )
   );
@@ -174,213 +178,163 @@ function isPaginationDependency(
     )
   );
 }
+
+//// Hàm nhận diện từ khóa
+function isProductCountDependency(
+  dependency: string,
+  resolvedFilename: string,
+) {
+  const value = `${dependency} ${resolvedFilename}`.toLowerCase();
+  return (
+    value.includes("count") ||
+    value.includes("results-header") ||
+    value.includes("search-header") ||
+    value.includes("facet-header") ||
+    value.includes("header")
+  );
+}
+/////
 function analyzeSearchRenderPath(
   files: ThemeFileNode[],
   searchSections: string[],
 ) {
-  const productGridCandidates =
-    new Set<string>();
-  const productCardCandidates =
-    new Set<string>();
-  const paginationCandidates =
-    new Set<string>();
-  for (
-    const sectionFilename of searchSections
-  ) {
-    const sectionFile =
-      getFile(
-        files,
-        sectionFilename,
-      );
-    if (!sectionFile) {
-      continue;
+  const productGridCandidates = new Set<string>();
+  const productCardCandidates = new Set<string>();
+  const paginationCandidates = new Set<string>();
+  const productCountCandidates = new Set<string>();
+
+  // // Regex Level 1: Bắt Class/ID/Data-attribute chứa từ khóa liên quan đến Count
+  // const countRegex = /(id|class|data-[\w-]+)=["']([^"']*(?:product-count|ProductCount|results-count|search-count|search__count|search-results__count|results-title|facet-count|filter-count|search-result-count)[^"']*)["']/gi;
+  // Mở rộng Regex bắt thêm các class/id chứa item, items, product-item-count
+  const countRegex = /(id|class|data-[\w-]+)=["']([^"']*(?:product-count|ProductCount|results-count|search-count|search__count|search-results__count|results-title|facet-count|filter-count|search-result-count|item-count|items-count|products-count|product-items)[^"']*)["']/gi;
+
+
+  // =========================================================================
+  // BƯỚC 1: QUÉT TOÀN BỘ FILE LIQUID
+  // =========================================================================
+  for (const file of files) {
+    const content = file.body?.content || "";
+    if (!content) continue;
+
+    // --- LEVEL 1: QUÉT CLASS / ID / ATTRIBUTE ---
+    const matches = content.match(countRegex);
+    if (matches && matches.length > 0) {
+      console.log(`[THEME MAP DEBUG] 🎯 [Level 1] Tìm thấy Class/ID Count trong: ${file.filename}`);
+      matches.forEach((match) => {
+        if (match.includes('id="')) {
+          const id = match.split('id="')[1].split('"')[0].trim();
+          if (id) productCountCandidates.add(`#${id}`);
+        } else if (match.includes("id='")) {
+          const id = match.split("id='")[1].split("'")[0].trim();
+          if (id) productCountCandidates.add(`#${id}`);
+        } else if (match.includes('class="')) {
+          const cls = match.split('class="')[1].split('"')[0].split(' ')[0].trim();
+          if (cls) productCountCandidates.add(`.${cls}`);
+        } else if (match.includes("class='")) {
+          const cls = match.split("class='")[1].split("'")[0].split(' ')[0].trim();
+          if (cls) productCountCandidates.add(`.${cls}`);
+        }
+      });
     }
-    const dependencies =
-      extractLiquidDependencies(
-        sectionFile.body?.content,
-      );
-    console.log(
-      "[THEME MAP V3] Search Section dependencies:",
-      {
-        file:
-          sectionFilename,
-        dependencies,
-      },
-    );
-    for (
-      const dependency of dependencies
-    ) {
-      const resolved =
-        resolveSnippetFilename(
-          files,
-          dependency,
-        );
-      if (!resolved) {
-        continue;
-      }
-      if (
-        isProductGridDependency(
-          dependency,
-          resolved,
-        )
-      ) {
-        productGridCandidates.add(
-          resolved,
-        );
-      }
-      if (
-        isPaginationDependency(
-          dependency,
-          resolved,
-        )
-      ) {
-        paginationCandidates.add(
-          resolved,
-        );
+
+    // --- LEVEL 2: QUÉT THEME CỔ ĐIỂN (BIẾN LIQUID search.results_count) ---
+    if (content.includes("search.results_count") || content.includes("search.results.size")) {
+      console.log(`[THEME MAP DEBUG] 🎯 [Level 2] Tìm thấy biến Liquid search.results_count trong: ${file.filename}`);
+      
+      // Tìm thẻ HTML bọc biến (ví dụ: <h2>{{ search.results_count }} kết quả</h2>)
+      const tagMatch = content.match(/<([a-z1-6]+)[^>]*>[^<]*\{\{\s*search\.(?:results_count|results\.size)/i);
+      if (tagMatch && tagMatch[1]) {
+        const tagName = tagMatch[1].toLowerCase();
+        // Tránh bắt nhầm các thẻ vô hiệu như script, style
+        if (!["script", "style", "option"].includes(tagName)) {
+          console.log(`[THEME MAP DEBUG] └── Thẻ HTML bọc biến đếm: <${tagName}>`);
+          productCountCandidates.add(`main ${tagName}`);
+          productCountCandidates.add(`.search-template ${tagName}`);
+          productCountCandidates.add(`template-search ${tagName}`);
+        }
       }
     }
   }
-  if (
-    productGridCandidates.size ===
-    0
-  ) {
-    const priorities = [
-      "snippets/product-grid.liquid",
-      "snippets/product_grid.liquid",
-    ];
-    for (
-      const filename of priorities
-    ) {
-      const file =
-        findFileByName(
-          files,
-          filename,
-        );
+
+  // =========================================================================
+  // BƯỚC 2: PHÂN TÍCH DEPENDENCIES CỦA SECTION
+  // =========================================================================
+  for (const sectionFilename of searchSections) {
+    const sectionFile = getFile(files, sectionFilename);
+    if (!sectionFile) continue;
+
+    const dependencies = extractLiquidDependencies(sectionFile.body?.content);
+    console.log("[THEME MAP DEBUG] 📌 Phân tích Section File:", sectionFilename);
+    console.log("[THEME MAP DEBUG] └── Liquid Dependencies tìm thấy:", dependencies);
+
+    for (const dependency of dependencies) {
+      const resolved = resolveSnippetFilename(files, dependency);
+      if (!resolved) continue;
+
+      if (isProductGridDependency(dependency, resolved)) productGridCandidates.add(resolved);
+      if (isPaginationDependency(dependency, resolved)) paginationCandidates.add(resolved);
+    }
+  }
+
+  if (productGridCandidates.size === 0) {
+    const priorities = ["snippets/product-grid.liquid", "snippets/product_grid.liquid"];
+    for (const filename of priorities) {
+      const file = findFileByName(files, filename);
       if (file) {
-        productGridCandidates.add(
-          file.filename,
-        );
+        productGridCandidates.add(file.filename);
         break;
       }
     }
   }
-  for (
-    const gridFilename of productGridCandidates
-  ) {
-    const gridFile =
-      getFile(
-        files,
-        gridFilename,
-      );
-    if (!gridFile) {
-      continue;
-    }
-    const dependencies =
-      extractLiquidDependencies(
-        gridFile.body?.content,
-      );
-    console.log(
-      "[THEME MAP V3] Product Grid dependencies:",
-      {
-        file:
-          gridFilename,
-        dependencies,
-      },
-    );
-    for (
-      const dependency of dependencies
-    ) {
-      const resolved =
-        resolveSnippetFilename(
-          files,
-          dependency,
-        );
-      if (!resolved) {
-        continue;
-      }
-      if (
-        isProductCardDependency(
-          dependency,
-          resolved,
-        )
-      ) {
-        productCardCandidates.add(
-          resolved,
-        );
-      }
-      if (
-        isPaginationDependency(
-          dependency,
-          resolved,
-        )
-      ) {
-        paginationCandidates.add(
-          resolved,
-        );
-      }
+
+  for (const gridFilename of productGridCandidates) {
+    const gridFile = getFile(files, gridFilename);
+    if (!gridFile) continue;
+
+    const dependencies = extractLiquidDependencies(gridFile.body?.content);
+    console.log("[THEME MAP V3] Product Grid dependencies:", { file: gridFilename, dependencies });
+
+    for (const dependency of dependencies) {
+      const resolved = resolveSnippetFilename(files, dependency);
+      if (!resolved) continue;
+
+      if (isProductCardDependency(dependency, resolved)) productCardCandidates.add(resolved);
+      if (isPaginationDependency(dependency, resolved)) paginationCandidates.add(resolved);
     }
   }
-  if (
-    productCardCandidates.size ===
-    0
-  ) {
-    const priorities = [
-      "snippets/product-card.liquid",
-      "snippets/product_card.liquid",
-    ];
-    for (
-      const filename of priorities
-    ) {
-      const file =
-        findFileByName(
-          files,
-          filename,
-        );
+
+  if (productCardCandidates.size === 0) {
+    const priorities = ["snippets/product-card.liquid", "snippets/product_card.liquid"];
+    for (const filename of priorities) {
+      const file = findFileByName(files, filename);
       if (file) {
-        productCardCandidates.add(
-          file.filename,
-        );
+        productCardCandidates.add(file.filename);
         break;
       }
     }
   }
-  if (
-    paginationCandidates.size ===
-    0
-  ) {
-    const priorities = [
-      "snippets/pagination-controls.liquid",
-      "snippets/pagination.liquid",
-    ];
-    for (
-      const filename of priorities
-    ) {
-      const file =
-        findFileByName(
-          files,
-          filename,
-        );
+
+  if (paginationCandidates.size === 0) {
+    const priorities = ["snippets/pagination-controls.liquid", "snippets/pagination.liquid"];
+    for (const filename of priorities) {
+      const file = findFileByName(files, filename);
       if (file) {
-        paginationCandidates.add(
-          file.filename,
-        );
+        paginationCandidates.add(file.filename);
         break;
       }
     }
   }
+
+  console.log("==================================================");
+  console.log("[THEME MAP DEBUG] 🎯 TỔNG HỢP CANDIDATES BẮT ĐƯỢC CHO THEME NÀY:");
+  console.log("[THEME MAP DEBUG]", Array.from(productCountCandidates));
+  console.log("==================================================");
+
   return {
-    productGridCandidates:
-      Array.from(
-        productGridCandidates,
-      ),
-    productCardCandidates:
-      Array.from(
-        productCardCandidates,
-      ),
-    paginationCandidates:
-      Array.from(
-        paginationCandidates,
-      ),
+    productGridCandidates: Array.from(productGridCandidates),
+    productCardCandidates: Array.from(productCardCandidates),
+    paginationCandidates: Array.from(paginationCandidates),
+    productCountCandidates: Array.from(productCountCandidates),
   };
 }
 
@@ -405,9 +359,7 @@ export async function buildThemeMapForTheme(admin: AdminGraphqlClient, theme: Ac
       searchTemplate:graph.template, searchSections:graph.sectionFiles,
       searchSectionTypes:graph.sectionFiles.map((name)=>name.slice(9,-7)),
       searchTemplateStructure:[{filename:graph.template,sectionIds:graph.sectionIds,sectionTypes:graph.sectionFiles.map((name)=>name.slice(9,-7))}],
-      ...renderPath,
-      // The storefront runtime fetches Shopify's native search HTML and
-      // reorders its theme-rendered product cards; it never hand-renders cards.
+      ...renderPath, // <-- ĐÃ BAO GỒM productCountCandidates TỪ analyzeSearchRenderPath
       nativeSectionRendering:true,
     },
     generatedAt:new Date().toISOString(),

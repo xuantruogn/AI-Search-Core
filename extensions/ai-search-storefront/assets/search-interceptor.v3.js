@@ -457,30 +457,93 @@
 
     return bestCandidate;
   }
+// //////////////////
+//   function hideNativeResults() {
+//     if (!isAiSearchPage()) return null;
+//     const map = getThemeMap();
+//     const grid = findProductGrid(document, map);
+//     if (!grid) return null;
 
-  function hideNativeResults() {
+//     grid.dataset.aiSearchV3Hidden = "true";
+//     grid.style.visibility = "hidden";
+//     grid.style.opacity = "0";
+//     grid.setAttribute("aria-hidden", "true");
+//     return grid;
+//   }
+
+//   function showAiResults(grid) {
+//     if (!grid) return;
+//     grid.style.visibility = "";
+//     grid.style.opacity = "";
+//     grid.removeAttribute("aria-hidden");
+//     delete grid.dataset.aiSearchV3Hidden;
+
+//     document.documentElement.classList.remove("ai-search-v3-pending");
+//     document.documentElement.classList.add("ai-search-v3-ready");
+//   }
+// /////////////////
+
+function hideNativeResults() {
     if (!isAiSearchPage()) return null;
     const map = getThemeMap();
     const grid = findProductGrid(document, map);
-    if (!grid) return null;
 
-    grid.dataset.aiSearchV3Hidden = "true";
-    grid.style.visibility = "hidden";
-    grid.style.opacity = "0";
-    grid.setAttribute("aria-hidden", "true");
+    // 1. GIỮ NGUYÊN CODE GỐC: Ẩn Product Grid
+    if (grid) {
+      grid.dataset.aiSearchV3Hidden = "true";
+      grid.style.visibility = "hidden";
+      grid.style.opacity = "0";
+      grid.setAttribute("aria-hidden", "true");
+    }
+
+    // 2. BỔ SUNG: Ẩn thẻ đếm số lượng kết quả cũ trong lúc chờ AI
+    const candidates = map?.productCountCandidates || [
+      "#ProductCountDesktop",
+      "#ProductCount",
+      ".product-count",
+      ".product-count__text"
+    ];
+
+    for (const selector of candidates) {
+      const countEl = safeQuery(document, selector);
+      if (countEl) {
+        countEl.style.visibility = "hidden";
+      }
+    }
+
     return grid;
   }
 
   function showAiResults(grid) {
-    if (!grid) return;
-    grid.style.visibility = "";
-    grid.style.opacity = "";
-    grid.removeAttribute("aria-hidden");
-    delete grid.dataset.aiSearchV3Hidden;
+    const map = getThemeMap();
+
+    // 1. GIỮ NGUYÊN CODE GỐC: Hiện lại Product Grid
+    if (grid) {
+      grid.style.visibility = "";
+      grid.style.opacity = "";
+      grid.removeAttribute("aria-hidden");
+      delete grid.dataset.aiSearchV3Hidden;
+    }
+
+    // 2. BỔ SUNG: Hiện lại thẻ đếm (đã được AI cập nhật con số mới)
+    const candidates = map?.productCountCandidates || [
+      "#ProductCountDesktop",
+      "#ProductCount",
+      ".product-count",
+      ".product-count__text"
+    ];
+
+    for (const selector of candidates) {
+      const countEl = safeQuery(document, selector);
+      if (countEl) {
+        countEl.style.visibility = "";
+      }
+    }
 
     document.documentElement.classList.remove("ai-search-v3-pending");
     document.documentElement.classList.add("ai-search-v3-ready");
   }
+
 
   function restoreNativeResults() {
     document.querySelectorAll('[data-ai-search-v3-hidden="true"]').forEach((grid) => {
@@ -510,6 +573,8 @@
       element.remove();
     });
   }
+
+
 
   function hideNativePagination(root) {
     if (!root) return;
@@ -546,6 +611,95 @@
         }
       });
   }
+
+  // ==========================================
+  // THÊM MỚI HÀM CẬP NHẬT SỐ LƯỢNG KẾT QUẢ TẠI ĐÂY
+  // ==========================================
+  function updateProductCount(totalProducts) {
+    if (!Number.isFinite(totalProducts)) return;
+
+    const map = getThemeMap();
+    // Ưu tiên danh sách candidate trích xuất từ Theme Map Server gửi xuống
+    const candidates = map?.productCountCandidates || [
+      "#ProductCountDesktop",
+      "#ProductCount",
+      ".product-count__text",
+      ".product-count",
+      ".main-search__count",
+      "[data-product-count]"
+    ];
+
+    let targetElement = null;
+
+    // 1. Tìm theo Selector đã map
+    for (const selector of candidates) {
+      targetElement = safeQuery(document, selector);
+      if (targetElement) break;
+    }
+
+    // // 2. Fallback nếu Selector không khớp
+    // if (!targetElement) {
+    //   const grid = findProductGrid(document, map);
+    //   const root = findSearchRoot(grid, map) || document.body;
+    //   const nodes = root.querySelectorAll("p, span, h1, h2");
+    //   const countPattern = /(\d+)\s*(sản phẩm|kết quả|result|results|product|products)/i;
+
+    //   for (const el of nodes) {
+    //     if (el.closest(".ai-search-v3-pagination") || el.closest("a[href*='/products/']")) continue;
+    //     if (countPattern.test(el.textContent || "")) {
+    //       targetElement = el;
+    //       break;
+    //     }
+    //   }
+    // }
+
+    // Fallback: Tìm các text node chứa từ khóa kết quả bao gồm cả "items" / "item"
+    if (!targetElement) {
+      const grid = findProductGrid(document, map);
+      const root = findSearchRoot(grid, map) || document.body;
+      const nodes = root.querySelectorAll("p, span, div, h1, h2");
+      const countPattern = /(\d+)\s*(sản phẩm|kết quả|result|results|product|products|item|items)/i;
+
+      for (const el of nodes) {
+        if (el.closest(".ai-search-v3-pagination") || el.closest("a[href*='/products/']")) continue;
+        // Bỏ qua các button filter bọc con số
+        if (el.tagName.toLowerCase() === "button" || el.closest("button")) continue;
+
+        if (countPattern.test(el.textContent || "")) {
+          targetElement = el;
+          break;
+        }
+      }
+    }
+
+    if (!targetElement) return;
+
+    // 3. Thay thế an toàn bằng TreeWalker (Chống phá vỡ thẻ <style> hoặc mã CSS)
+    const walker = document.createTreeWalker(
+      targetElement,
+      NodeFilter.SHOW_TEXT,
+      {
+        acceptNode: function (node) {
+          const parent = node.parentElement;
+          if (!parent) return NodeFilter.FILTER_SKIP;
+          const parentTag = parent.tagName.toLowerCase();
+          if (parentTag === "style" || parentTag === "script" || parentTag === "button") {
+            return NodeFilter.FILTER_REJECT;
+          }
+          return /\d+/.test(node.nodeValue || "")
+            ? NodeFilter.FILTER_ACCEPT
+            : NodeFilter.FILTER_SKIP;
+        },
+      }
+    );
+
+    const textNode = walker.nextNode();
+    if (textNode) {
+      textNode.nodeValue = textNode.nodeValue.replace(/\d+/, String(totalProducts));
+    }
+  }
+
+
 
   function setLoading(isLoading) {
     const map = getThemeMap();
@@ -600,6 +754,102 @@
     return Array.from(pages).sort((a, b) => a - b);
   }
 
+  // ==========================================
+  // INJECT STYLES CHO PAGINATION (KẾ THỪA MÀU THEME)
+  // ==========================================
+  function injectPaginationStyles() {
+    if (document.getElementById("ai-search-v3-pagination-style")) return;
+
+    const style = document.createElement("style");
+    style.id = "ai-search-v3-pagination-style";
+    style.textContent = `
+      .ai-search-v3-pagination {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 12px;
+        margin: 40px 0 20px 0;
+        padding: 16px 0;
+        width: 100%;
+        font-family: inherit;
+      }
+
+      .ai-search-v3-pagination-container {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+
+      .ai-search-v3-page-btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 40px;
+        height: 40px;
+        padding: 0 14px;
+        border: 1px solid rgba(255, 255, 255, 0.2);
+        background-color: transparent;
+        color: currentColor;
+        font-size: 14px;
+        font-weight: 500;
+        border-radius: 6px;
+        cursor: pointer;
+        transition: all 0.2s ease-in-out;
+        outline: none;
+        line-height: 1;
+      }
+
+      .ai-search-v3-page-btn:hover:not(:disabled) {
+        border-color: currentColor;
+        background-color: rgba(255, 255, 255, 0.12);
+        transform: translateY(-1px);
+      }
+
+      .ai-search-v3-page-btn[aria-current="page"] {
+        background-color: currentColor;
+        border-color: currentColor;
+        color: #000000;
+        font-weight: 700;
+        cursor: default;
+      }
+
+      @media (prefers-color-scheme: light) {
+        .ai-search-v3-page-btn {
+          border-color: rgba(0, 0, 0, 0.2);
+        }
+        .ai-search-v3-page-btn:hover:not(:disabled) {
+          background-color: rgba(0, 0, 0, 0.06);
+        }
+        .ai-search-v3-page-btn[aria-current="page"] {
+          color: #ffffff;
+          background-color: #000000;
+        }
+      }
+
+      .ai-search-v3-pagination-ellipsis {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 32px;
+        height: 40px;
+        color: currentColor;
+        opacity: 0.6;
+        font-size: 14px;
+      }
+
+      .ai-search-v3-pagination-info {
+        font-size: 13px;
+        opacity: 0.75;
+        letter-spacing: 0.5px;
+        text-align: center;
+      }
+    `;
+    document.head.appendChild(style);
+  }
+
   function createPaginationButton(text, page, options = {}) {
     const button = document.createElement("button");
     button.type = "button";
@@ -640,24 +890,33 @@
     const currentPage = Number(pagination?.current_page || 1);
     const totalProducts = Number(pagination?.total_products || 0);
 
+    // Bỏ qua nếu chỉ có 1 trang
     if (!Number.isFinite(totalPages) || totalPages <= 1) return;
+
+    // Tự động inject CSS làm đẹp
+    injectPaginationStyles();
 
     const nav = document.createElement("nav");
     nav.className = "ai-search-v3-pagination";
     nav.setAttribute("aria-label", "AI Search pagination");
 
+    const btnContainer = document.createElement("div");
+    btnContainer.className = "ai-search-v3-pagination-container";
+
+    // Nút Trang trước
     if (currentPage > 1) {
-      nav.appendChild(createPaginationButton("←", currentPage - 1));
+      btnContainer.appendChild(createPaginationButton("←", currentPage - 1));
     }
 
+    // Các nút số trang
     const pages = getVisiblePages(totalPages, currentPage);
     let previousPage = null;
 
     pages.forEach((page) => {
       if (previousPage !== null && page > previousPage + 1) {
-        nav.appendChild(createPaginationEllipsis());
+        btnContainer.appendChild(createPaginationEllipsis());
       }
-      nav.appendChild(
+      btnContainer.appendChild(
         createPaginationButton(String(page), page, {
           current: page === currentPage,
         })
@@ -665,14 +924,18 @@
       previousPage = page;
     });
 
+    // Nút Trang kế tiếp
     if (currentPage < totalPages) {
-      nav.appendChild(createPaginationButton("→", currentPage + 1));
+      btnContainer.appendChild(createPaginationButton("→", currentPage + 1));
     }
 
+    nav.appendChild(btnContainer);
+
+    // Dòng thông tin phân trang căn giữa bên dưới
     if (totalProducts > 0) {
-      const info = document.createElement("span");
+      const info = document.createElement("div");
       info.className = "ai-search-v3-pagination-info";
-      info.textContent = `${totalProducts} sản phẩm`;
+      info.textContent = `Hiển thị trang ${currentPage} / ${totalPages} (${totalProducts} sản phẩm)`;
       nav.appendChild(info);
     }
 
@@ -825,6 +1088,10 @@
             activateImages(liveGrid);
             hideNativePagination(findSearchRoot(liveGrid, map));
             renderPagination(query, localPagedData.pagination, liveGrid);
+
+            // 🎯 THÊM DÒNG NÀY TẠI ĐÂY:
+            updateProductCount(localPagedData.pagination?.total_products || 0);
+
             updateSearchInputs(query);
             updateBrowserUrl(query, page, true);
             showAiResults(liveGrid);
@@ -882,6 +1149,10 @@
       activateImages(liveGrid);
       hideNativePagination(findSearchRoot(liveGrid, map));
       renderPagination(query, data.pagination || {}, liveGrid);
+
+      // 🎯 THÊM DÒNG NÀY TẠI ĐÂY:
+      updateProductCount(data.pagination?.total_products || 0);
+
       updateSearchInputs(query);
       updateBrowserUrl(query, page, true);
       showAiResults(liveGrid);
