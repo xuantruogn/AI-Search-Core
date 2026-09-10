@@ -1,0 +1,17 @@
+<script>
+  window.AI_SEARCH_CONFIG = window.AI_SEARCH_CONFIG || {};
+  window.AI_SEARCH_CONFIG.version = 3;
+  window.AI_SEARCH_CONFIG.search_endpoint = {{ block.settings.proxy_path | default: "/apps/ai-search" | json }};
+  window.AI_SEARCH_CONFIG.unscopedSearchMode = {{ block.settings.unscoped_search_mode | json }};
+</script>
+{% schema %}
+{
+  "name": "AI Search Bridge",
+  "target": "head",
+  "javascript": "search-interceptor.v3.js",
+  "settings": [
+    {"type":"select","id":"unscoped_search_mode","label":"Searches without an explicit resource type","default":"product_only","options":[{"value":"product_only","label":"Use AI as product-only search (recommended)"},{"value":"respect_store","label":"Respect store search types"}]},
+    {"type":"text","id":"proxy_path","label":"App proxy path","default":"/apps/ai-search"}
+  ]
+}
+{% endschema %}
