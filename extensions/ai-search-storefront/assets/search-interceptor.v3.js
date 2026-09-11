@@ -10,7 +10,6 @@
   )
     return;
 
-  console.log("[AI SEARCH V3] Search Interceptor V3 loaded (ID Paging Optimized)");
   const config = window.AI_SEARCH_CONFIG || {};
   const SEARCH_ENDPOINT = config.search_endpoint || "/apps/ai-search";
   const AI_SEARCH_PARAM = "ai_search";
@@ -49,6 +48,78 @@
   const THEME_MAP_TTL = 24 * 60 * 60 * 1000; // 24 Hours
   const ID_CACHE_KEY_PREFIX = "ai_search_ids_";
 
+  const GENERIC_FALLBACK_THEME_MAP = {
+    v: 3,
+    fp: 'generic_fallback',
+    grid: [
+      '#product-grid',
+      '.product-grid',
+      '.grid-products',
+      '[id*="product-grid"]',
+      '.collection__grid',
+      '.main-search__results'
+    ],
+    card: [
+      '.card-wrapper',
+      '.product-card',
+      '.grid__item',
+      '.product-item'
+    ],
+    page: [
+      '.pagination-wrapper',
+      '.pagination',
+      '.paginate',
+      'nav[role="navigation"]'
+    ],
+    cnt: [
+      '.product-count',
+      '#ProductCount',
+      '.results-count',
+      '#products-count',
+      '.search-count'
+    ]
+  };
+
+  function getEffectiveThemeMap() {
+    const configMap = (window.AI_SEARCH_CONFIG && (window.AI_SEARCH_CONFIG.themeMap || window.AI_SEARCH_CONFIG.theme_map)) 
+                   || (window.AI_SEARCH_CONFIG && window.AI_SEARCH_CONFIG.schema && window.AI_SEARCH_CONFIG.schema.search);
+
+    if (configMap && typeof configMap === 'object') {
+      return {
+        v: configMap.v || configMap.version || 3,
+        fp: configMap.fp || configMap.fingerprint || '',
+        grid: Array.isArray(configMap.grid) ? configMap.grid : (configMap.productGridCandidates || []),
+        card: Array.isArray(configMap.card) ? configMap.card : (configMap.productCardCandidates || []),
+        page: Array.isArray(configMap.page) ? configMap.page : (configMap.paginationCandidates || []),
+        cnt: Array.isArray(configMap.cnt) ? configMap.cnt : (configMap.productCountCandidates || [])
+      };
+    }
+
+    console.warn('[AI SEARCH] ⚠️ Không tìm thấy Metafield Theme Map. Sử dụng Generic Fallback.');
+    return GENERIC_FALLBACK_THEME_MAP;
+  }
+
+  function reportStaleThemeMap(currentFingerprint) {
+    try {
+      const endpoint = (window.AI_SEARCH_CONFIG && window.AI_SEARCH_CONFIG.search_endpoint) || '/apps/ai-search';
+      const telemetryUrl = `${endpoint}/telemetry/theme-stale`;
+
+      const payload = JSON.stringify({
+        fp: currentFingerprint,
+        url: window.location.href,
+        timestamp: Date.now()
+      });
+
+      if (navigator.sendBeacon) {
+        navigator.sendBeacon(telemetryUrl, payload);
+      } else {
+        fetch(telemetryUrl, { method: 'POST', body: payload, keepalive: true }).catch(function() {});
+      }
+    } catch (e) {
+      // Ignore errors
+    }
+  }
+
   function getCachedThemeMap() {
     try {
       const item = localStorage.getItem(THEME_MAP_CACHE_KEY);
@@ -75,7 +146,6 @@
     }
   }
 
-  // Xóa toàn bộ ID cũ trong sessionStorage khi tìm từ khóa mới
   function clearProductIdsCache() {
     try {
       Object.keys(sessionStorage).forEach((key) => {
@@ -88,7 +158,6 @@
     }
   }
 
-  // Lưu mảng ID/Handle của từ khóa vào sessionStorage
   function saveProductIdsForQuery(query, allProducts) {
     clearProductIdsCache();
     try {
@@ -99,27 +168,40 @@
     }
   }
 
-  // Cắt mảng ID sản phẩm từ sessionStorage khi Next trang
-  function getPagedProductsFromStorage(query, page, pageSize = 20) {
+  function getPagedProductsFromStorage(query, page, customPageSize) {
     try {
       const key = `${ID_CACHE_KEY_PREFIX}${query.toLowerCase().trim()}`;
       const raw = sessionStorage.getItem(key);
       if (!raw) return null;
 
       const allProducts = JSON.parse(raw);
+      if (!Array.isArray(allProducts) || allProducts.length === 0) return null;
+
+      const pageSize = Number(customPageSize) || window.AI_SEARCH_CONFIG?.pageSize || 5;
       const totalProducts = allProducts.length;
       const totalPages = Math.ceil(totalProducts / pageSize);
 
       if (page > totalPages) return null;
 
       const start = (page - 1) * pageSize;
-      const pageProducts = allProducts.slice(start, start + pageSize);
+      const end = start + pageSize;
+      const pageProducts = allProducts.slice(start, end);
 
       if (pageProducts.length === 0) return null;
 
+      const targetIds = pageProducts
+        .map((p) => {
+          const idVal = typeof p === 'object' && p !== null ? p.id : p;
+          return idVal ? `id:${idVal}` : null;
+        })
+        .filter(Boolean)
+        .join(" OR ");
+
+      console.log(`[AI SEARCH V3] 🎯 Trang ${page}/${totalPages} - Render ${pageProducts.length} SP. IDs:`, targetIds);
+
       return {
         products: pageProducts,
-        target_ids: pageProducts.map((p) => `id:${p.id}`).join(" OR "),
+        target_ids: targetIds,
         pagination: {
           current_page: page,
           page_size: pageSize,
@@ -127,14 +209,12 @@
           total_pages: totalPages,
         },
       };
-    } catch {
+    } catch (e) {
+      console.error("[AI SEARCH V3] Lỗi đọc Cache sessionStorage:", e);
       return null;
     }
   }
 
-  // ==========================================
-  // HELPER & ROUTING FUNCTIONS
-  // ==========================================
   function isNativeSearchPath(pathname) {
     return /\/search\/?$/i.test(pathname);
   }
@@ -237,6 +317,9 @@
   }
 
   function getThemeSchema() {
+    if (window.AI_SEARCH_CONFIG?.theme_map) {
+      return window.AI_SEARCH_CONFIG.theme_map;
+    }
     return window.AI_SEARCH_CONFIG?.schema || null;
   }
 
@@ -293,43 +376,109 @@
 
     const schema = getThemeSchema();
     if (schema) {
-      url.searchParams.set("theme_id", schema.theme.id);
-      url.searchParams.set("map_fingerprint", schema.fingerprint);
+      const themeId = schema.theme?.id || config.theme_id || window.AI_SEARCH_CONFIG?.theme_id || "";
+      const fingerprint = schema.fp || schema.fingerprint || "";
+
+      if (themeId) url.searchParams.set("theme_id", themeId);
+      if (fingerprint) url.searchParams.set("map_fingerprint", fingerprint);
     }
 
     return url.pathname + url.search;
   }
 
-  async function ensureThemeMap(query, signal) {
-    const cachedSchema = getCachedThemeMap();
-    if (cachedSchema) {
-      config.theme_id = cachedSchema.theme.id;
-      config.schema = cachedSchema;
-      return cachedSchema;
-    }
+  // async function ensureThemeMap(query, signal) {
+  //   const availableSchema = getThemeSchema() || getCachedThemeMap();
+    
+  //   if (availableSchema && availableSchema.theme?.id) {
+  //     config.theme_id = availableSchema.theme.id;
+  //     config.schema = availableSchema;
+  //     setCachedThemeMap(availableSchema);
+  //     return availableSchema;
+  //   }
 
-    const url = new URL(buildAiBackendUrl(query, 1), location.origin);
-    url.searchParams.set("mode", "theme-map");
+  //   const url = new URL(buildAiBackendUrl(query, 1), location.origin);
+  //   url.searchParams.set("mode", "theme-map");
 
-    const response = await fetch(url, {
-      signal,
-      credentials: "same-origin",
-      headers: { Accept: "application/json" },
-    });
+  //   const response = await fetch(url, {
+  //     signal,
+  //     credentials: "same-origin",
+  //     headers: { Accept: "application/json" },
+  //   });
 
-    if (!response.ok) throw new Error("Theme Map unavailable");
-    const data = await response.json();
 
-    if (data.status !== "success" || !data.theme_map) {
-      throw new Error("Theme Map unavailable");
-    }
+    
+  //   if (!response.ok) throw new Error("Theme Map unavailable");
+  //   const data = await response.json();
 
-    config.theme_id = data.theme_map.theme.id;
-    config.schema = data.theme_map;
+  //   if (data.status !== "success" || !data.theme_map) {
+  //     throw new Error("Theme Map unavailable");
+  //   }
 
-    setCachedThemeMap(data.theme_map);
-    return data.theme_map;
-  }
+  //   config.theme_id = data.theme_map.theme.id;
+  //   config.schema = data.theme_map;
+
+  //   setCachedThemeMap(data.theme_map);
+  //   return data.theme_map;
+  // }
+
+       function ensureThemeMap() {
+        // ============================================================
+        // THEME MAP CHỈ ĐỌC TỪ BROWSER
+        //
+        // Nguồn ưu tiên:
+        // 1. window.AI_SEARCH_CONFIG.theme_map
+        // 2. localStorage
+        //
+        // TUYỆT ĐỐI KHÔNG FETCH BACKEND THEME MAP
+        // ============================================================
+
+        const directMap =
+          window.AI_SEARCH_CONFIG?.theme_map ||
+          window.AI_SEARCH_CONFIG?.themeMap;
+
+        if (directMap && typeof directMap === "object") {
+          config.theme_id =
+            directMap.theme?.id ||
+            config.theme_id ||
+            "";
+
+          config.schema = directMap;
+
+          return directMap;
+        }
+
+        const cachedMap = getCachedThemeMap();
+
+        if (cachedMap && typeof cachedMap === "object") {
+          config.theme_id =
+            cachedMap.theme?.id ||
+            config.theme_id ||
+            "";
+
+          config.schema = cachedMap;
+
+          // Khôi phục lại vào runtime
+          window.AI_SEARCH_CONFIG.theme_map = cachedMap;
+          window.AI_SEARCH_CONFIG.schema = cachedMap;
+
+          return cachedMap;
+        }
+
+        console.warn(
+          "[AI SEARCH THEME MAP] ⚠️ Không có Theme Map trên browser. " +
+          "Không gọi backend để lấy Theme Map."
+        );
+
+        return {
+          version: 3,
+          fingerprint: "generic_fallback",
+          search: {},
+          theme: {
+            id: "",
+          },
+        };
+      }
+
 
   function fallbackToNative(query) {
     restoreNativeResults();
@@ -350,12 +499,12 @@
     return url.pathname + url.search;
   }
 
-  function buildNativeRenderUrl(targetIds, page = 1) {
+  // KHÔNG DÙNG PARAM PAGE TẠI ĐÂY - LUÔN LUÔN FETCH PAGE 1 CHO CÁC TARGET_IDS ĐÃ DỰT SẴN
+  function buildNativeRenderUrl(targetIds) {
     const url = new URL(config.search_url || "/search", location.origin);
     url.searchParams.set("q", targetIds);
     url.searchParams.set("type", "product");
     url.searchParams.set("_ai_search_bypass", "1");
-    if (page > 1) url.searchParams.set("page", String(page));
     return url.pathname + url.search;
   }
 
@@ -405,90 +554,85 @@
   }
 
   function findProductGridWithin(root, map) {
-    if (!root || typeof root.querySelector !== "function") return null;
-    if (map && map.grid_selector) {
-      const mapped = safeQuery(root, map.grid_selector);
-      if (mapped) return mapped;
+  if (!root || typeof root.querySelector !== "function") return null;
+
+  const activeMap = getEffectiveThemeMap();
+
+  if (activeMap.grid && activeMap.grid.length > 0) {
+    for (let i = 0; i < activeMap.grid.length; i++) {
+      const selector = activeMap.grid[i];
+      if (!selector) continue;
+
+      const elInRoot = safeQuery(root, selector);
+      if (elInRoot) return elInRoot;
     }
-
-    const selectors = [
-      "#product-grid",
-      ".product-grid",
-      ".collection-product-list",
-      ".product-list",
-      ".search-results__products",
-      ".template-search__results .grid",
-      ".template-search .grid",
-      "[data-product-grid]",
-      "[id*='product-grid']",
-    ];
-
-    for (const selector of selectors) {
-      const element = safeQuery(root, selector);
-      if (element) return element;
-    }
-
-    const links = Array.from(root.querySelectorAll('a[href*="/products/"]'));
-    if (links.length < 1) return null;
-
-    let bestCandidate = null;
-    let bestScore = 0;
-
-    links.forEach((link) => {
-      let current = link.parentElement;
-      let depth = 0;
-
-      while (current && depth < 8) {
-        const tag = current.tagName ? current.tagName.toLowerCase() : "";
-        if (tag === "main" || tag === "body" || current.id === "MainContent") break;
-
-        const productCount = current.querySelectorAll('a[href*="/products/"]').length;
-        if (productCount >= 1) {
-          const score = productCount * 10 - depth;
-          if (score > bestScore) {
-            bestScore = score;
-            bestCandidate = current;
-          }
-        }
-        current = current.parentElement;
-        depth++;
-      }
-    });
-
-    return bestCandidate;
   }
-// //////////////////
-//   function hideNativeResults() {
-//     if (!isAiSearchPage()) return null;
-//     const map = getThemeMap();
-//     const grid = findProductGrid(document, map);
-//     if (!grid) return null;
 
-//     grid.dataset.aiSearchV3Hidden = "true";
-//     grid.style.visibility = "hidden";
-//     grid.style.opacity = "0";
-//     grid.setAttribute("aria-hidden", "true");
-//     return grid;
-//   }
+  console.warn(
+    '[AI SEARCH V3] ⚠️ Theme Map Selector không khớp DOM. Đang kích hoạt Self-Healing...'
+  );
 
-//   function showAiResults(grid) {
-//     if (!grid) return;
-//     grid.style.visibility = "";
-//     grid.style.opacity = "";
-//     grid.removeAttribute("aria-hidden");
-//     delete grid.dataset.aiSearchV3Hidden;
+  if (activeMap.fp && activeMap.fp !== 'generic_fallback') {
+    reportStaleThemeMap(activeMap.fp);
+  }
 
-//     document.documentElement.classList.remove("ai-search-v3-pending");
-//     document.documentElement.classList.add("ai-search-v3-ready");
-//   }
-// /////////////////
+  for (let j = 0; j < GENERIC_FALLBACK_THEME_MAP.grid.length; j++) {
+    const fallbackSelector = GENERIC_FALLBACK_THEME_MAP.grid[j];
+    const fallbackEl = safeQuery(root, fallbackSelector);
+    if (fallbackEl) return fallbackEl;
+  }
 
-function hideNativeResults() {
+  const targetRoot = root || document;
+  const links = Array.from(
+    targetRoot.querySelectorAll('a[href*="/products/"]')
+  );
+
+  if (links.length < 1) return null;
+
+  let bestCandidate = null;
+  let bestScore = 0;
+
+  links.forEach((link) => {
+    let current = link.parentElement;
+    let depth = 0;
+
+    while (current && depth < 8) {
+      const tag = current.tagName ? current.tagName.toLowerCase() : "";
+
+      if (
+        tag === "main" ||
+        tag === "body" ||
+        current.id === "MainContent"
+      ) {
+        break;
+      }
+
+      const productCount = current.querySelectorAll(
+        'a[href*="/products/"]'
+      ).length;
+
+      if (productCount >= 1) {
+        const score = productCount * 10 - depth;
+
+        if (score > bestScore) {
+          bestScore = score;
+          bestCandidate = current;
+        }
+      }
+
+      current = current.parentElement;
+      depth++;
+    }
+  });
+
+  return bestCandidate;
+}
+
+  function hideNativeResults() {
     if (!isAiSearchPage()) return null;
     const map = getThemeMap();
     const grid = findProductGrid(document, map);
 
-    // 1. GIỮ NGUYÊN CODE GỐC: Ẩn Product Grid
     if (grid) {
       grid.dataset.aiSearchV3Hidden = "true";
       grid.style.visibility = "hidden";
@@ -496,13 +640,10 @@ function hideNativeResults() {
       grid.setAttribute("aria-hidden", "true");
     }
 
-    // 2. BỔ SUNG: Ẩn thẻ đếm số lượng kết quả cũ trong lúc chờ AI
-    const candidates = map?.productCountCandidates || [
-      "#ProductCountDesktop",
-      "#ProductCount",
-      ".product-count",
-      ".product-count__text"
-    ];
+    const activeMap = getEffectiveThemeMap();
+    const candidates = (activeMap.cnt && activeMap.cnt.length > 0) 
+      ? activeMap.cnt 
+      : GENERIC_FALLBACK_THEME_MAP.cnt;
 
     for (const selector of candidates) {
       const countEl = safeQuery(document, selector);
@@ -515,9 +656,6 @@ function hideNativeResults() {
   }
 
   function showAiResults(grid) {
-    const map = getThemeMap();
-
-    // 1. GIỮ NGUYÊN CODE GỐC: Hiện lại Product Grid
     if (grid) {
       grid.style.visibility = "";
       grid.style.opacity = "";
@@ -525,13 +663,10 @@ function hideNativeResults() {
       delete grid.dataset.aiSearchV3Hidden;
     }
 
-    // 2. BỔ SUNG: Hiện lại thẻ đếm (đã được AI cập nhật con số mới)
-    const candidates = map?.productCountCandidates || [
-      "#ProductCountDesktop",
-      "#ProductCount",
-      ".product-count",
-      ".product-count__text"
-    ];
+    const activeMap = getEffectiveThemeMap();
+    const candidates = (activeMap.cnt && activeMap.cnt.length > 0) 
+      ? activeMap.cnt 
+      : GENERIC_FALLBACK_THEME_MAP.cnt;
 
     for (const selector of candidates) {
       const countEl = safeQuery(document, selector);
@@ -543,7 +678,6 @@ function hideNativeResults() {
     document.documentElement.classList.remove("ai-search-v3-pending");
     document.documentElement.classList.add("ai-search-v3-ready");
   }
-
 
   function restoreNativeResults() {
     document.querySelectorAll('[data-ai-search-v3-hidden="true"]').forEach((grid) => {
@@ -573,8 +707,6 @@ function hideNativeResults() {
       element.remove();
     });
   }
-
-
 
   function hideNativePagination(root) {
     if (!root) return;
@@ -612,49 +744,28 @@ function hideNativeResults() {
       });
   }
 
-  // ==========================================
-  // THÊM MỚI HÀM CẬP NHẬT SỐ LƯỢNG KẾT QUẢ TẠI ĐÂY
-  // ==========================================
   function updateProductCount(totalProducts) {
     if (!Number.isFinite(totalProducts)) return;
 
-    const map = getThemeMap();
-    // Ưu tiên danh sách candidate trích xuất từ Theme Map Server gửi xuống
-    const candidates = map?.productCountCandidates || [
-      "#ProductCountDesktop",
-      "#ProductCount",
-      ".product-count__text",
-      ".product-count",
-      ".main-search__count",
-      "[data-product-count]"
-    ];
-
+    const activeMap = getEffectiveThemeMap();
     let targetElement = null;
 
-    // 1. Tìm theo Selector đã map
-    for (const selector of candidates) {
-      targetElement = safeQuery(document, selector);
-      if (targetElement) break;
+    if (activeMap.cnt && activeMap.cnt.length > 0) {
+      for (let i = 0; i < activeMap.cnt.length; i++) {
+        targetElement = safeQuery(document, activeMap.cnt[i]);
+        if (targetElement) break;
+      }
     }
 
-    // // 2. Fallback nếu Selector không khớp
-    // if (!targetElement) {
-    //   const grid = findProductGrid(document, map);
-    //   const root = findSearchRoot(grid, map) || document.body;
-    //   const nodes = root.querySelectorAll("p, span, h1, h2");
-    //   const countPattern = /(\d+)\s*(sản phẩm|kết quả|result|results|product|products)/i;
-
-    //   for (const el of nodes) {
-    //     if (el.closest(".ai-search-v3-pagination") || el.closest("a[href*='/products/']")) continue;
-    //     if (countPattern.test(el.textContent || "")) {
-    //       targetElement = el;
-    //       break;
-    //     }
-    //   }
-    // }
-
-    // Fallback: Tìm các text node chứa từ khóa kết quả bao gồm cả "items" / "item"
     if (!targetElement) {
+      for (let j = 0; j < GENERIC_FALLBACK_THEME_MAP.cnt.length; j++) {
+        targetElement = safeQuery(document, GENERIC_FALLBACK_THEME_MAP.cnt[j]);
+        if (targetElement) break;
+      }
+    }
+
+    if (!targetElement) {
+      const map = getThemeMap();
       const grid = findProductGrid(document, map);
       const root = findSearchRoot(grid, map) || document.body;
       const nodes = root.querySelectorAll("p, span, div, h1, h2");
@@ -662,7 +773,6 @@ function hideNativeResults() {
 
       for (const el of nodes) {
         if (el.closest(".ai-search-v3-pagination") || el.closest("a[href*='/products/']")) continue;
-        // Bỏ qua các button filter bọc con số
         if (el.tagName.toLowerCase() === "button" || el.closest("button")) continue;
 
         if (countPattern.test(el.textContent || "")) {
@@ -672,10 +782,8 @@ function hideNativeResults() {
       }
     }
 
-
     if (!targetElement) return;
 
-    // 3. Thay thế an toàn bằng TreeWalker (Chống phá vỡ thẻ <style> hoặc mã CSS)
     const walker = document.createTreeWalker(
       targetElement,
       NodeFilter.SHOW_TEXT,
@@ -699,8 +807,6 @@ function hideNativeResults() {
       textNode.nodeValue = textNode.nodeValue.replace(/\d+/, String(totalProducts));
     }
   }
-
-
 
   function setLoading(isLoading) {
     const map = getThemeMap();
@@ -755,9 +861,6 @@ function hideNativeResults() {
     return Array.from(pages).sort((a, b) => a - b);
   }
 
-  // ==========================================
-  // INJECT STYLES CHO PAGINATION (KẾ THỪA MÀU THEME)
-  // ==========================================
   function injectPaginationStyles() {
     if (document.getElementById("ai-search-v3-pagination-style")) return;
 
@@ -891,10 +994,8 @@ function hideNativeResults() {
     const currentPage = Number(pagination?.current_page || 1);
     const totalProducts = Number(pagination?.total_products || 0);
 
-    // Bỏ qua nếu chỉ có 1 trang
     if (!Number.isFinite(totalPages) || totalPages <= 1) return;
 
-    // Tự động inject CSS làm đẹp
     injectPaginationStyles();
 
     const nav = document.createElement("nav");
@@ -904,12 +1005,10 @@ function hideNativeResults() {
     const btnContainer = document.createElement("div");
     btnContainer.className = "ai-search-v3-pagination-container";
 
-    // Nút Trang trước
     if (currentPage > 1) {
       btnContainer.appendChild(createPaginationButton("←", currentPage - 1));
     }
 
-    // Các nút số trang
     const pages = getVisiblePages(totalPages, currentPage);
     let previousPage = null;
 
@@ -925,14 +1024,12 @@ function hideNativeResults() {
       previousPage = page;
     });
 
-    // Nút Trang kế tiếp
     if (currentPage < totalPages) {
       btnContainer.appendChild(createPaginationButton("→", currentPage + 1));
     }
 
     nav.appendChild(btnContainer);
 
-    // Dòng thông tin phân trang căn giữa bên dưới
     if (totalProducts > 0) {
       const info = document.createElement("div");
       info.className = "ai-search-v3-pagination-info";
@@ -956,7 +1053,6 @@ function hideNativeResults() {
     return String(targetIds || "").trim();
   }
 
-  // --- THAY BẰNG HÀM MỚI NÀY ---
   async function fetchAiResults(query, page, signal) {
     const url = buildAiBackendUrl(query, page);
     const response = await fetch(url, {
@@ -969,14 +1065,12 @@ function hideNativeResults() {
     if (!response.ok) throw new Error(`AI Search HTTP ${response.status}`);
     const data = await response.json();
 
-    // Tự động làm mới Theme Map khi Server báo đổi Theme
     if (data.status === "theme_map_refreshed" && data.theme_map) {
       console.warn("[AI SEARCH V3] Phát hiện đổi Theme, đang tự động cập nhật lại Theme Map...");
       setCachedThemeMap(data.theme_map);
       config.theme_id = data.theme_map.theme.id;
       config.schema = data.theme_map;
 
-      // Gọi lại search ngay lập tức
       return fetchAiResults(query, page, signal);
     }
 
@@ -985,10 +1079,10 @@ function hideNativeResults() {
     }
     return data;
   }
-  // -----------------------------
 
-  async function fetchNativeSearchHtml(targetIds, signal, page = 1) {
-    const response = await fetch(buildNativeRenderUrl(targetIds, page), {
+  // LUÔN LUÔN BỎ PAGE KHI FETCH NATIVE TỪ TARGET_IDS
+  async function fetchNativeSearchHtml(targetIds, signal) {
+    const response = await fetch(buildNativeRenderUrl(targetIds), {
       signal,
       credentials: "same-origin",
       headers: { Accept: "text/html" },
@@ -1043,6 +1137,90 @@ function hideNativeResults() {
     const pageRaw = Number.parseInt(String(rawPage), 10);
     const page = Number.isSafeInteger(pageRaw) && pageRaw > 0 ? pageRaw : 1;
 
+    // =========================================================================
+    // BƯỚC 1: ĐỌC CACHE TỪ SESSIONSTORAGE NGAY LẬP TỨC (NẾU PAGE > 1)
+    // =========================================================================
+    if (page >= 1) {
+      const localPagedData = getPagedProductsFromStorage(query, page, window.AI_SEARCH_CONFIG?.pageSize || 5);
+
+      if (localPagedData && localPagedData.products.length > 0) {
+        activeController?.abort();
+        const controller = new AbortController();
+        activeController = controller;
+        const requestId = ++activeRequestId;
+        const signal = controller.signal;
+
+        try {
+          // const schema = await ensureThemeMap(query, signal);
+          const schema = ensureThemeMap();
+          if (requestId !== activeRequestId) return;
+          const map = schema.search || getThemeMap() || {};
+
+          const currentGrid = hideNativeResults() || findProductGrid(document, map);
+          if (!currentGrid) throw new Error("Current Product Grid not found");
+
+          setLoading(true);
+          showLoadingMessage();
+
+          // SỬA TẠI ĐÂY: KHÔNG TRUYỀN PARAM PAGE VÀO FETCH NATIVE HTML
+          const html = await fetchNativeSearchHtml(localPagedData.target_ids, signal);
+          if (requestId !== activeRequestId) return;
+
+          const nativeDocument = parseHtmlDocument(html);
+          const nativeGrid = findProductGrid(nativeDocument, map);
+          const liveGrid = findProductGrid(document, map);
+
+          console.log("[AI SEARCH DEBUG] nativeDocument:", nativeDocument);
+          console.log("[AI SEARCH DEBUG] nativeGrid:", nativeGrid);
+          console.log("[AI SEARCH DEBUG] liveGrid:", liveGrid);
+          console.log("[AI SEARCH DEBUG] same grid:", nativeGrid === liveGrid);
+
+          if (nativeGrid) {
+            console.log(
+              "[AI SEARCH DEBUG] nativeGrid text:",
+              nativeGrid.innerText?.slice(0, 300)
+            );
+          }
+
+          if (liveGrid) {
+            console.log(
+              "[AI SEARCH DEBUG] liveGrid text:",
+              liveGrid.innerText?.slice(0, 300)
+            );
+          }
+
+          if (liveGrid && nativeGrid) {
+            replaceProductGrid(liveGrid, nativeGrid);
+            activateImages(liveGrid);
+            hideNativePagination(findSearchRoot(liveGrid, map));
+            renderPagination(query, localPagedData.pagination, liveGrid);
+            updateProductCount(localPagedData.pagination?.total_products || 0);
+
+            updateSearchInputs(query);
+            updateBrowserUrl(query, page, true);
+            showAiResults(liveGrid);
+            setLoading(false);
+            hideLoadingMessage();
+
+            dispatchSearchUpdated({
+              query,
+              page,
+              pagination: localPagedData.pagination,
+              targetIds: localPagedData.target_ids,
+              products: localPagedData.products,
+            });
+
+            return; // KẾT THÚC NGAY, KHÔNG GỌI BACKEND PROXY / AI
+          }
+        } catch (err) {
+          console.warn("[AI SEARCH V3] Cache render fallback:", err);
+        }
+      }
+    }
+
+    // =========================================================================
+    // BƯỚC 2: TRANG 1 HOẶC KHÔNG CÓ CACHE THÌ GỌI PROXY BACKEND
+    // =========================================================================
     const policyUrl = nativeTarget(query);
     policyUrl.searchParams.set("page", String(page));
 
@@ -1059,62 +1237,15 @@ function hideNativeResults() {
     const signal = controller.signal;
 
     try {
-      const schema = await ensureThemeMap(query, signal);
+      // if (page === 1) {
+      //   clearProductIdsCache();
+      // }
+
+      // const schema = await ensureThemeMap(query, signal);
+      const schema = ensureThemeMap();
+      
       if (requestId !== activeRequestId) return;
-
       const map = schema.search || getThemeMap() || {};
-
-      // BƯỚC 1: BẤM NEXT TRANG -> ĐỌC ID TỪ BỘ NHỚ TRÌNH DUYỆT (Skip Backend hoàn toàn!)
-      if (page > 1) {
-        const localPagedData = getPagedProductsFromStorage(query, page);
-
-        if (localPagedData && localPagedData.products.length > 0) {
-          console.log(`[AI SEARCH V3] Hit Client ID Cache cho Trang ${page} -> Bỏ qua Server Proxy!`);
-
-          const currentGrid = hideNativeResults() || findProductGrid(document, map);
-          if (!currentGrid) throw new Error("Current Product Grid not found");
-
-          setLoading(true);
-          showLoadingMessage();
-
-          const html = await fetchNativeSearchHtml(localPagedData.target_ids, signal, page);
-          if (requestId !== activeRequestId) return;
-
-          const nativeDocument = parseHtmlDocument(html);
-          const nativeGrid = findProductGrid(nativeDocument, map);
-          const liveGrid = findProductGrid(document, map);
-
-          if (liveGrid && nativeGrid) {
-            replaceProductGrid(liveGrid, nativeGrid);
-            activateImages(liveGrid);
-            hideNativePagination(findSearchRoot(liveGrid, map));
-            renderPagination(query, localPagedData.pagination, liveGrid);
-
-            // 🎯 THÊM DÒNG NÀY TẠI ĐÂY:
-            updateProductCount(localPagedData.pagination?.total_products || 0);
-
-            updateSearchInputs(query);
-            updateBrowserUrl(query, page, true);
-            showAiResults(liveGrid);
-            setLoading(false);
-            hideLoadingMessage();
-
-            dispatchSearchUpdated({
-              query,
-              page,
-              pagination: localPagedData.pagination,
-              targetIds: localPagedData.target_ids,
-              products: localPagedData.products,
-            });
-            return; // KẾT THÚC NGAY, KHÔNG GỌI VỀ BACKEND SERVER
-          }
-        }
-      }
-
-      // BƯỚC 2: TÌM KÍẾM MỚI (PAGE 1) -> TỰ ĐỘNG XÓA CACHE CỦ & GỌI SERVER BACKEND
-      if (page === 1) {
-        clearProductIdsCache();
-      }
 
       const currentGrid = hideNativeResults() || findProductGrid(document, map);
       if (!currentGrid) throw new Error("Current Product Grid not found");
@@ -1125,7 +1256,6 @@ function hideNativeResults() {
       const data = await fetchAiResults(query, page, signal);
       if (requestId !== activeRequestId) return;
 
-      // Lưu toàn bộ danh sách ID trả về vào sessionStorage
       if (data.all_products && Array.isArray(data.all_products)) {
         saveProductIdsForQuery(query, data.all_products);
       }
@@ -1150,8 +1280,6 @@ function hideNativeResults() {
       activateImages(liveGrid);
       hideNativePagination(findSearchRoot(liveGrid, map));
       renderPagination(query, data.pagination || {}, liveGrid);
-
-      // 🎯 THÊM DÒNG NÀY TẠI ĐÂY:
       updateProductCount(data.pagination?.total_products || 0);
 
       updateSearchInputs(query);
@@ -1296,6 +1424,7 @@ function hideNativeResults() {
 
   function initOnPageLoad() {
     if (!isNativeSearchPage()) return;
+
     const url = new URL(location.href);
 
     if (url.searchParams.get(NATIVE_BYPASS_PARAM) === "1") {

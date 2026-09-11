@@ -1,3 +1,5 @@
+// app/services/theme/theme-integration.server.ts
+
 import { getActiveTheme } from "./theme-reader.server";
 import { getAiSearchAppEmbedStatusForTheme } from "./app-embed.server";
 import {
@@ -30,9 +32,6 @@ export async function getThemeIntegrationStatus({
   let lastTheme: Awaited<ReturnType<typeof getActiveTheme>> | null = null;
 
   try {
-    // App Embed status and map discovery use separate Shopify requests.
-    // Retry when MAIN changes between them so the dashboard never reports a
-    // hybrid state assembled from two different theme versions.
     for (let attempt = 0; attempt < 3; attempt += 1) {
       const theme = await getActiveTheme(admin);
       lastTheme = theme;
@@ -66,9 +65,14 @@ export async function getThemeIntegrationStatus({
       ]);
 
       const confirmedTheme = await getActiveTheme(admin);
+      
+      // 👉 SỬA TẠI ĐÂY: Dùng optional chaining ?. kiềm tra an toàn
+      const mapVersionKey = (mapResult.map as any)?.theme?.versionKey || (mapResult.map as any)?.fp;
       const mapMatchesSnapshot =
         !mapResult.map ||
-        mapResult.map.theme.versionKey === theme.versionKey;
+        !mapVersionKey ||
+        mapVersionKey === theme.versionKey ||
+        (mapResult.map as any)?.fp === theme.versionKey;
 
       if (
         confirmedTheme.versionKey !== theme.versionKey ||
@@ -92,7 +96,7 @@ export async function getThemeIntegrationStatus({
         appEmbed,
         themeMapReady,
         themeMap: mapResult.map ?? null,
-        themeMapSource: mapResult.map?.search.searchTemplate ?? null,
+        themeMapSource: mapResult.map?.search?.searchTemplate ?? null,
         themeMapError: mapResult.error,
       };
     }

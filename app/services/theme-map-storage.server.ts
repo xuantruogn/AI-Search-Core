@@ -1,41 +1,82 @@
-// App-installation metafield storage from the supplied ai-search architecture.
-// Numeric keys match Liquid theme.id; compareDigest prevents stale overwrites.
-import { numericThemeId, type AdminGraphqlClient, type ThemeMap } from "./theme-map.server";
+import { buildClientThemeMapDTO, type AdminGraphqlClient, type ThemeMap } from "./theme-map.server";
 
-export async function readThemeMapStorage(admin: AdminGraphqlClient, themeId: string) {
-  const key = `theme_map_${numericThemeId(themeId)}`;
+export async function readThemeMapStorage(admin: AdminGraphqlClient, _themeId?: string) {
   const response = await admin.graphql(`#graphql
-    query ReadThemeMapStorage($key: String!) {
-      currentAppInstallation {
+    query ReadThemeMapShopStorage {
+      shop {
         id
-        metafield(namespace: "ai_search", key: $key) { value compareDigest }
+        metafield(namespace: "app", key: "theme_map") {
+          id
+          namespace
+          key
+          type
+          value
+          compareDigest
+        }
       }
-    }`, {variables:{key}});
+    }`);
+
   const json = await response.json();
-  if (!response.ok || json.errors?.length || !json.data?.currentAppInstallation?.id) throw new Error("THEME_MAP_STORAGE_READ_FAILED");
-  const installation = json.data.currentAppInstallation;
-  let map: ThemeMap | null = null;
+  if (!response.ok || json.errors?.length || !json.data?.shop?.id) {
+    throw new Error("THEME_MAP_STORAGE_READ_FAILED");
+  }
+
+  const shop = json.data.shop;
+  let map: any = null;
   try {
-    const parsed = JSON.parse(installation.metafield?.value ?? "null");
-    if (parsed?.version === 3 && parsed.theme?.id === numericThemeId(themeId) && parsed.theme?.gid === themeId &&
-        Array.isArray(parsed.sources) && parsed.sources.length > 0 && parsed.sources.length <= 1003 &&
-        typeof parsed.fingerprint === "string" && parsed.search?.searchTemplate) map = parsed;
-  } catch { /* Rebuild maps written with an earlier schema. */ }
-  return {ownerId:installation.id as string, key, compareDigest:installation.metafield?.compareDigest ?? null, map};
+    map = JSON.parse(shop.metafield?.value ?? "null");
+  } catch {
+    /* JSON parse error */
+  }
+
+  return {
+    ownerId: shop.id as string,
+    key: "theme_map",
+    compareDigest: shop.metafield?.compareDigest ?? null,
+    map,
+  };
 }
 
-export async function saveThemeMap(admin: AdminGraphqlClient, themeMap: ThemeMap, previous: Awaited<ReturnType<typeof readThemeMapStorage>>) {
-  if (previous.key !== `theme_map_${themeMap.theme.id}`) throw new Error("THEME_MAP_STORAGE_ID_MISMATCH");
-  const response = await admin.graphql(`#graphql
-    mutation SaveThemeMap($metafields: [MetafieldsSetInput!]!) {
-      metafieldsSet(metafields: $metafields) {
-        metafields { id key }
-        userErrors { message code }
-      }
-    }`, {variables:{metafields:[{ownerId:previous.ownerId,namespace:"ai_search",key:previous.key,type:"json",value:JSON.stringify(themeMap),compareDigest:previous.compareDigest}]}});
-  const json = await response.json();
-  if (!response.ok || json.errors?.length || json.data?.metafieldsSet?.userErrors?.length || !json.data?.metafieldsSet?.metafields?.[0]?.id) {
-    throw new Error("THEME_MAP_SAVE_FAILED_OR_CONCURRENT_UPDATE");
+export async function saveThemeMap(
+  admin: AdminGraphqlClient,
+  themeMap: ThemeMap,
+  _previous?: Awaited<ReturnType<typeof readThemeMapStorage>>
+) {
+  const shopQuery = await admin.graphql(`query { shop { id } }`);
+  const shopData = await shopQuery.json();
+  const shopGid = shopData.data?.shop?.id;
+
+  if (!shopGid) {
+    throw new Error("SHOP_ID_NOT_FOUND");
   }
+
+  const clientDto = buildClientThemeMapDTO(themeMap);
+
+  const response = await admin.graphql(`#graphql
+    mutation SaveThemeMapToShop($metafields: [MetafieldsSetInput!]!) {
+      metafieldsSet(metafields: $metafields) {
+        metafields { id key namespace }
+        userErrors { message code field }
+      }
+    }`, {
+      variables: {
+        metafields: [
+          {
+            ownerId: shopGid,
+            namespace: "app",
+            key: "theme_map",
+            type: "json",
+            value: JSON.stringify(clientDto),
+          }
+        ]
+      }
+    });
+
+  const json = await response.json();
+  if (json.data?.metafieldsSet?.userErrors?.length > 0) {
+    console.error("[STORAGE] Errors writing Shop Metafield:", json.data.metafieldsSet.userErrors);
+    throw new Error(`METAFIELD_WRITE_FAILED: ${json.data.metafieldsSet.userErrors[0].message}`);
+  }
+
   return themeMap;
 }

@@ -1,17 +1,112 @@
 <script>
   window.AI_SEARCH_CONFIG = window.AI_SEARCH_CONFIG || {};
+
   window.AI_SEARCH_CONFIG.version = 3;
-  window.AI_SEARCH_CONFIG.search_endpoint = {{ block.settings.proxy_path | default: "/apps/ai-search" | json }};
-  window.AI_SEARCH_CONFIG.unscopedSearchMode = {{ block.settings.unscoped_search_mode | json }};
+
+  window.AI_SEARCH_CONFIG.search_endpoint =
+    {{ block.settings.proxy_path | default: "/apps/ai-search" | json }};
+
+  window.AI_SEARCH_CONFIG.unscopedSearchMode =
+    {{ block.settings.unscoped_search_mode | json }};
+
+
+  {% comment %}
+    ============================================================
+    THEME MAP BOOTSTRAP
+    ============================================================
+
+    Nguồn chính:
+      Shopify Shop Metafield
+      namespace = app
+      key       = theme_map
+
+    Sau khi nhận được Theme Map:
+      1. Đưa vào window.AI_SEARCH_CONFIG
+      2. Lưu vào localStorage
+
+    Các trang tiếp theo có thể dùng lại localStorage,
+    không cần gọi Theme Map từ backend.
+  {% endcomment %}
+
+  {% assign theme_map_data = shop.metafields.app.theme_map.value %}
+
+  {% if theme_map_data != blank %}
+
+    window.AI_SEARCH_CONFIG.theme_map =
+      {{ theme_map_data | json }};
+
+    window.AI_SEARCH_CONFIG.schema =
+      {{ theme_map_data | json }};
+
+    window.AI_SEARCH_CONFIG.theme_id =
+      {{ theme_map_data.theme.id | json }};
+
+
+    try {
+      localStorage.setItem(
+        "ai_search_theme_map_v3",
+        JSON.stringify({
+          schema: {{ theme_map_data | json }},
+          timestamp: Date.now()
+        })
+      );
+
+      console.log(
+        "[AI SEARCH THEME MAP] ✅ Bootstrap từ Shopify Metafield → localStorage"
+      );
+
+    } catch (e) {
+      console.warn(
+        "[AI SEARCH THEME MAP] ⚠️ Không thể lưu Theme Map vào localStorage",
+        e
+      );
+    }
+
+  {% else %}
+
+    console.warn(
+      "[AI SEARCH THEME MAP] ⚠️ Shopify Metafield không có Theme Map"
+    );
+
+  {% endif %}
 </script>
+
+
+{% comment %} Nạp script duy nhất 1 lần {% endcomment %}
+
+<script
+  src="{{ 'search-interceptor.v3.js' | asset_url }}"
+  defer>
+</script>
+
+
 {% schema %}
 {
   "name": "AI Search Bridge",
   "target": "head",
-  "javascript": "search-interceptor.v3.js",
   "settings": [
-    {"type":"select","id":"unscoped_search_mode","label":"Searches without an explicit resource type","default":"product_only","options":[{"value":"product_only","label":"Use AI as product-only search (recommended)"},{"value":"respect_store","label":"Respect store search types"}]},
-    {"type":"text","id":"proxy_path","label":"App proxy path","default":"/apps/ai-search"}
+    {
+      "type": "select",
+      "id": "unscoped_search_mode",
+      "label": "Searches without an explicit resource type",
+      "default": "product_only",
+      "options": [
+        {
+          "value": "product_only",
+          "label": "Use AI as product-only search (recommended)"
+        },
+        {
+          "value": "respect_store",
+          "label": "Respect store search types"
+        }
+      ]
+    },
+    {
+      "type": "text",
+      "id": "proxy_path",
+      "label": "App proxy path",
+      "default": "/apps/ai-search"
+    }
   ]
 }
 {% endschema %}

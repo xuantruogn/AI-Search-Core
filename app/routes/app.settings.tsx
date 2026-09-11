@@ -12,7 +12,8 @@ import { getThemeIntegrationStatus } from "../services/theme/theme-integration.s
 import { canUseQuotaOverrideUi } from "../services/commerce/support-access.server";
 import { clearShopThemeCache } from "./proxy.ai-search";
 import { getActiveTheme } from "../services/theme/theme-reader.server";
-import { getActiveThemeMap } from "../services/theme/theme-map-lifecycle.server";
+import { buildMainThemeMap, buildClientThemeMapDTO } from "../services/theme-map.server";
+import { readThemeMapStorage, saveThemeMap } from "../services/theme-map-storage.server";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { admin, session } = await authenticate.admin(request);
@@ -36,28 +37,36 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
   const intent = String(form.get("intent") || "settings");
 
-  // ĐỒNG BỘ THEME MAP
+  // ĐÃ MỞ VÀ THÊM LOG ĐỂ SOI DỮ LIỆU TẠI VS CODE
   if (intent === "sync_theme_map") {
     try {
-      // 1. Clear RAM cache ở App Proxy
-      clearShopThemeCache(session.shop);
-
-      // 2. Ép quét lại Theme Map của Active Theme
+      await clearShopThemeCache(session.shop);
       const activeTheme = await getActiveTheme(admin);
-      await getActiveThemeMap({
-        admin,
-        shop: session.shop,
-        activeTheme,
-      });
+      const themeMap = await buildMainThemeMap(admin);
+      const clientDto = buildClientThemeMapDTO(themeMap);
+
+      console.log(`\n================== [VS CODE DEBUG: THEME MAP BEFORE SAVE] ==================`);
+      console.log(`Shop: ${session.shop} | Active Theme: ${activeTheme.name} (ID: ${activeTheme.id})`);
+      
+      console.log(`\n--- 📄 1. FULL THEME MAP (Dữ liệu quét từ Liquid Source Graph) ---`);
+      console.log(JSON.stringify(themeMap, null, 2));
+
+      console.log(`\n--- 📦 2. CLIENT DTO PAYLOAD (Dữ liệu sẽ stringify gửi vào Metafield) ---`);
+      console.log(JSON.stringify(clientDto, null, 2));
+      console.log(`===========================================================================\n`);
+
+      const previous = await readThemeMapStorage(admin, activeTheme.id);
+      await saveThemeMap(admin, themeMap, previous);
 
       return {
         success: true,
-        message: "Đã đồng bộ lại Theme Map thành công!",
+        message: "Đồng bộ Theme Map vào Shop Metafield thành công!",
       };
     } catch (error) {
+      console.error("[Settings] Sync Theme Map error:", error);
       return {
         success: false,
-        message: `Đồng bộ Theme Map thất bại: ${error instanceof Error ? error.message : String(error)}`,
+        message: `Lỗi đồng bộ: ${error instanceof Error ? error.message : String(error)}`,
       };
     }
   }
@@ -181,15 +190,23 @@ export default function SettingsPage() {
           </s-text>
           <s-text>Integration: {data.themeIntegration.status}</s-text>
 
-          {/* Nút bấm ĐỒNG BỘ THEME MAP */}
           <fetcher.Form method="post" style={{ marginTop: 12, marginBottom: 12 }}>
             <input type="hidden" name="intent" value="sync_theme_map" />
-            <s-button
+            <button
               type="submit"
-              {...(fetcher.state !== "idle" && fetcher.formData?.get("intent") === "sync_theme_map" ? { loading: true } : {})}
+              disabled={fetcher.state !== "idle"}
+              style={{
+                padding: "8px 16px",
+                backgroundColor: "#008060",
+                color: "#ffffff",
+                border: "none",
+                borderRadius: "4px",
+                cursor: "pointer",
+                fontWeight: "bold"
+              }}
             >
-              Đồng bộ lại Theme Map
-            </s-button>
+              {fetcher.state !== "idle" ? "Đang đồng bộ..." : "Đồng bộ lại Theme Map & Metafield"}
+            </button>
           </fetcher.Form>
 
           {fetcher.data?.message && fetcher.formData?.get("intent") === "sync_theme_map" ? (

@@ -27,6 +27,35 @@ import {
 const NATIVE_BYPASS_PARAM = "_ai_search_bypass";
 const SEARCH_LIMIT = 1000;
 
+
+
+// Thêm ở đầu file app/routes/proxy.ai-search.ts
+
+class SearchProfiler {
+  private timings: Record<string, number> = {};
+  private startTime = performance.now();
+  private markTime = performance.now();
+
+  step(stageName: string) {
+    const now = performance.now();
+    const duration = Math.round(now - this.markTime);
+    this.timings[stageName] = duration;
+    this.markTime = now;
+  }
+
+  endAndLog(query: string) {
+    const total = Math.round(performance.now() - this.startTime);
+    console.log(`\n================ [AI SEARCH PROFILE: "${query}"] ================`);
+    for (const [stage, duration] of Object.entries(this.timings)) {
+      console.log(`${stage.padEnd(35)}: ${duration} ms`);
+    }
+    console.log(`----------------------------------------------------------------`);
+    console.log(`${"TOTAL BACKEND DURATION".padEnd(35)}: ${total} ms`);
+    console.log(`================================================================\n`);
+  }
+}
+
+
 // ==========================================
 // HELPER FUNCTIONS
 // ==========================================
@@ -84,7 +113,7 @@ const MIN_SEMANTIC_QUERY_CHARS = readPositiveInteger(
 );
 
 // ==========================================
-// PERSISTENT SQLITE CACHE FOR THEME PREFLIGHT
+// SQLITE CACHE (CHỈ DÙNG KHI FALLBACK)
 // ==========================================
 
 export async function clearShopThemeCache(shop: string) {
@@ -98,7 +127,6 @@ export async function clearShopThemeCache(shop: string) {
 }
 
 async function getCachedThemePreflight(admin: any, shop: string) {
-  // BƯỚC 1: Truy vấn trực tiếp từ SQLite (chỉ mất ~2ms)
   try {
     const existingConfig = await db.shopThemeConfig.findUnique({
       where: { shop },
@@ -117,7 +145,6 @@ async function getCachedThemePreflight(admin: any, shop: string) {
     console.warn("[AI Search] SQLite Theme Cache read miss, fallback to API query:", dbError);
   }
 
-  // BƯỚC 2: Nếu chưa có trong SQLite (Lần đầu tiên/Sau khi Sync Theme), mới gọi Shopify Admin API
   const activeTheme = await getActiveTheme(admin);
   const appEmbed = await getAiSearchAppEmbedStatusForTheme(admin, activeTheme);
 
@@ -137,7 +164,6 @@ async function getCachedThemePreflight(admin: any, shop: string) {
     activeTheme,
   });
 
-  // BƯỚC 3: Lưu thẳng kết quả vào SQLite để sử dụng vĩnh viễn cho tất cả lượt tìm kiếm sau
   try {
     await db.shopThemeConfig.upsert({
       where: { shop },
@@ -235,7 +261,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   console.time("[PERF-PROXY] TOTAL PROXY REQUEST");
   const requestUrl = new URL(request.url);
   const query = requestUrl.searchParams.get("q")?.trim() ?? "";
-  const cachedIdsRaw = requestUrl.searchParams.get("cached_ids"); // Client gửi dữ liệu ID đã lưu từ SessionStorage lên
+  const cachedIdsRaw = requestUrl.searchParams.get("cached_ids");
 
   const nativeSearchTarget =
     requestUrl.searchParams.get("native_search_url") ??
@@ -280,21 +306,12 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     }
 
     if (wantsJson && requestUrl.searchParams.get("mode") === "theme-map") {
-      console.time("[PERF-PROXY] Mode Theme-Map Processing");
       const theme = await getActiveTheme(admin);
-      const embed = await getAiSearchAppEmbedStatusForTheme(admin, theme);
-      if (embed.enabled !== true)
-        return nativeRedirect(
-          query,
-          nativeSearchTarget,
-          "APP_EMBED_DISABLED_ON_ACTIVE_THEME",
-        );
       const map = await getActiveThemeMap({
         admin,
         shop: session.shop,
         activeTheme: theme,
       });
-      console.timeEnd("[PERF-PROXY] Mode Theme-Map Processing");
       return Response.json(
         { status: "success", theme_map: map },
         { headers: { "Cache-Control": "no-store" } },
@@ -320,7 +337,6 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     }
 
     // Billing Check & Reconciliation
-    console.time("[PERF-PROXY] Billing Check & Reconciliation");
     let billingChanged = false;
     try {
       const billing = await refreshShopifyAppPricingIfStale({
@@ -329,28 +345,17 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       });
       billingChanged = billing.changed;
     } catch (error) {
-      console.error("[AI Search] Storefront billing refresh failed:", {
-        shop: session.shop,
-        error: error instanceof Error ? error.message : String(error),
-      });
+      console.error("[AI Search] Storefront billing refresh failed:", error);
     }
 
     if (billingChanged) {
       void reconcileShopCommercialState({
         shop: session.shop,
         forceCatalogRefresh: true,
-      }).catch((error) => {
-        console.error(
-          "[AI Search] Storefront plan reconciliation failed:",
-          error,
-        );
-      });
+      }).catch(() => {});
     }
-    console.timeEnd("[PERF-PROXY] Billing Check & Reconciliation");
 
-    console.time("[PERF-PROXY] Entitlement Check");
     const entitlement = await getShopEntitlement(session.shop);
-    console.timeEnd("[PERF-PROXY] Entitlement Check");
 
     const fallback = async (reason: string) => {
       try {
@@ -368,21 +373,6 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     };
 
     if (!entitlement.searchAllowed) {
-      if (
-        entitlement.disabledReason === "CATALOG_STALE_QUOTA" ||
-        entitlement.disabledReason === "CATALOG_STALE_SUBSCRIPTION" ||
-        entitlement.disabledReason === "PRODUCT_LIMIT_RECONCILIATION_REQUIRED"
-      ) {
-        void reconcileShopCommercialState({ shop: session.shop }).catch(
-          (error) => {
-            console.error(
-              "[AI Search] Entitlement reconciliation trigger failed:",
-              error,
-            );
-          },
-        );
-      }
-
       return fallback(entitlement.disabledReason ?? "AI_SEARCH_UNAVAILABLE");
     }
 
@@ -390,47 +380,41 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       return fallback("CATALOG_EMPTY");
     }
 
-    // BƯỚC 1: Theme Preflight Check (Đọc từ SQLite)
-    console.time("[PERF-PROXY] 1. Theme Preflight (SQLite)");
-    let preflightMap: ThemeMap;
-    try {
-      const themePreflight = await getCachedThemePreflight(
-        admin,
-        session.shop,
-      );
+    // BƯỚC 1: Theme Preflight Check (Ưu tiên dùng Client Fingerprint)
+    console.time("[PERF-PROXY] 1. Theme Preflight Check");
+    // let preflightMap: { theme: { id: string; gid: string }; fingerprint: string; search?: { searchTemplate?: string } };
+    let preflightMap: any;
 
-      if (themePreflight.embedEnabled === false) {
-        return fallback(
-          themePreflight.reason === "APP_EMBED_DISABLED"
-            ? "APP_EMBED_DISABLED_ON_ACTIVE_THEME"
-            : "APP_EMBED_STATUS_UNKNOWN",
+    const clientThemeId = requestUrl.searchParams.get("theme_id");
+    const clientFingerprint = requestUrl.searchParams.get("map_fingerprint");
+
+    if (clientThemeId && clientFingerprint) {
+      // BỎ QUA PREFLIGHT HOÀN TOÀN KHI CLIENT MANG THEO THEME MAP TỪ METAFIELD!
+      preflightMap = {
+        theme: { id: clientThemeId, gid: `gid://shopify/Theme/${clientThemeId}` },
+        fingerprint: clientFingerprint,
+      };
+    } else {
+      // Fallback duy nhất khi client không gửi param: Đọc SQLite
+      try {
+        const themePreflight = await getCachedThemePreflight(
+          admin,
+          session.shop,
         );
+
+        if (themePreflight.embedEnabled === false) {
+          return fallback(
+            themePreflight.reason === "APP_EMBED_DISABLED"
+              ? "APP_EMBED_DISABLED_ON_ACTIVE_THEME"
+              : "APP_EMBED_STATUS_UNKNOWN",
+          );
+        }
+        preflightMap = themePreflight.preflightMap!;
+      } catch (error) {
+        return fallback("THEME_MAP_UNAVAILABLE");
       }
-
-      preflightMap = themePreflight.preflightMap!;
-
-      const clientThemeId = requestUrl.searchParams.get("theme_id");
-      const clientFingerprint = requestUrl.searchParams.get("map_fingerprint");
-
-      if (
-        clientThemeId && clientFingerprint &&
-        (clientThemeId !== preflightMap.theme.id || clientFingerprint !== preflightMap.fingerprint)
-      ) {
-        await clearShopThemeCache(session.shop);
-        return Response.json(
-          {
-            status: "theme_map_refreshed",
-            reason: "STOREFRONT_THEME_MAP_STALE",
-            theme_map: preflightMap,
-          },
-          { headers: { "Cache-Control": "no-store" } }
-        );
-      }
-    } catch (error) {
-      return fallback("THEME_MAP_UNAVAILABLE");
-    } finally {
-      console.timeEnd("[PERF-PROXY] 1. Theme Preflight (SQLite)");
     }
+    console.timeEnd("[PERF-PROXY] 1. Theme Preflight Check");
 
     // Xác định Page Size
     const clientPageSize = Number.parseInt(
@@ -450,10 +434,6 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         const cachedProducts: CandidateProduct[] = JSON.parse(cachedIdsRaw);
 
         if (Array.isArray(cachedProducts) && cachedProducts.length > 0) {
-          console.log(
-            `[AI Search] Next trang ${requestedPage} dung Session Cache Client (${cachedProducts.length} items) - SKIP OpenAI & Qdrant!`,
-          );
-
           const pagination = buildShopifyProductQuery(
             cachedProducts,
             requestedPage,
@@ -469,7 +449,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
               map_fingerprint: preflightMap.fingerprint,
               target_ids: pagination.targetIds,
               products: pagination.pageProducts,
-              all_products: cachedProducts, // Trả lại để Client duy trì bộ nhớ
+              all_products: cachedProducts,
               pagination: {
                 current_page: pagination.currentPage,
                 page_size: pagination.pageSize,
@@ -481,15 +461,12 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
           );
         }
       } catch (e) {
-        console.warn(
-          "[AI Search] Parse cached_ids bị lỗi, tự động chuyển về search mới:",
-          e,
-        );
+        console.warn("[AI Search] Parse cached_ids bị lỗi:", e);
       }
     }
 
     // =========================================================================
-    // TRƯỜNG HỢP 2: TÌM TỪ KHÓA MỚI (CHẠY AI / QDRANT)
+    // TRƯỜNG HỢP 2: TÌM TỪ KHÓA MỚI (CHẠY AI / QDRANT THUẦN TÚY)
     // =========================================================================
     const reservationResult = await reserveSearchUsage({
       shop: session.shop,
@@ -516,10 +493,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
           try {
             await recordQueryEmbeddingConsumed(reservation);
           } catch (usageError) {
-            console.error(
-              "[AI Search] Query embedding usage logging failed:",
-              usageError,
-            );
+            console.error("[AI Search] Query embedding usage logging failed:", usageError);
           }
         },
       });
@@ -529,7 +503,6 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         throw new Error("NO_LIVE_AI_RESULTS");
       }
 
-      // Lọc trùng ID để có danh sách candidate thực tế
       const seen = new Set<string>();
       const allProducts: CandidateProduct[] = rawSearchResults.flatMap(
         (result) => {
@@ -559,7 +532,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
           map_fingerprint: preflightMap.fingerprint,
           target_ids: pagination.targetIds,
           products: pagination.pageProducts,
-          all_products: allProducts, // Mảng full CandidateProduct để Client lưu vào sessionStorage
+          all_products: allProducts,
           pagination: {
             current_page: pagination.currentPage,
             page_size: pagination.pageSize,
@@ -573,10 +546,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       try {
         await markUsageReservationEffectApplied(reservation);
       } catch (usageError) {
-        console.error(
-          "[AI Search] Search reservation effect marker failed:",
-          usageError,
-        );
+        console.error("[AI Search] Search reservation effect marker failed:", usageError);
       }
 
       try {
@@ -585,41 +555,23 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
           durationMs: Date.now() - startedAt,
           themeId: preflightMap.theme.gid,
           rendererSource:
-            preflightMap.search.searchTemplate ?? "native-search",
+            preflightMap.search?.searchTemplate ?? "native-search",
         });
       } catch (usageError) {
-        console.error(
-          "[AI Search] Search usage commit logging failed:",
-          usageError,
-        );
+        console.error("[AI Search] Search usage commit logging failed:", usageError);
       }
 
       return response;
     } catch (error) {
-      console.error(
-        "[AI Search] AI execution failed; using Shopify native search:",
-        {
-          shop: session.shop,
-          error: error instanceof Error ? error.message : String(error),
-        },
-      );
-
       try {
         await rollbackSearchUsage(reservation, error);
       } catch (usageError) {
-        console.error(
-          "[AI Search] Search usage rollback failed:",
-          usageError,
-        );
+        console.error("[AI Search] Search usage rollback failed:", usageError);
       }
 
       return fallback("AI_SEARCH_RUNTIME_ERROR");
     }
   } catch (error) {
-    console.error("[AI Search] App Proxy fatal error; native fallback:", {
-      error: error instanceof Error ? error.message : String(error),
-    });
-
     return nativeRedirect(query, nativeSearchTarget, "APP_PROXY_FATAL_ERROR");
   } finally {
     console.timeEnd("[PERF-PROXY] TOTAL PROXY REQUEST");
