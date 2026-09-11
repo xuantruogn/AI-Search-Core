@@ -79,6 +79,7 @@ model AiSearchShop {
   usagePeriods AiSearchUsagePeriod[]
   usageEvents  AiSearchUsageEvent[]
   usageReservations AiSearchUsageReservation[]
+  queryLogs    AiSearchQueryLog[]
   products     AiSearchIndexedProduct[]
   catalogJobs  AiSearchCatalogSyncJob[]
 }
@@ -103,6 +104,7 @@ model AiSearchSubscription {
 }
 
 model AiSearchShopSettings {
+  searchLanguage            String?
   shop                      String   @id
   aiSearchEnabled           Boolean  @default(true)
   fallbackEnabled           Boolean  @default(true)
@@ -160,6 +162,49 @@ model AiSearchUsageEvent {
 
   @@index([shop, type, createdAt])
   @@index([periodId, createdAt])
+}
+
+model AiSearchQueryLog {
+  id                     String   @id @default(cuid())
+  shop                   String
+  query                  String
+  normalizedQuery        String
+  queryHash              String
+  queryVectorJson        String?
+  rankedProductsJson     String
+  resultCount            Int      @default(0)
+  candidateCount         Int      @default(0)
+  topScore               Float?
+  topCandidateScore      Float?
+  vectorThreshold        Float
+  embeddingCacheHit      Boolean  @default(false)
+  llmStatus              String
+  llmFallbackReason      String?
+  totalDurationMs        Int
+  createdAt              DateTime @default(now())
+
+  shopRecord AiSearchShop         @relation(fields: [shop], references: [shop], onDelete: Cascade)
+  clicks     AiSearchQueryClick[]
+
+  @@index([shop, createdAt])
+  @@index([shop, normalizedQuery, createdAt])
+  @@index([shop, resultCount, createdAt])
+}
+
+model AiSearchQueryClick {
+  id          Int      @id @default(autoincrement())
+  searchLogId String
+  shop        String
+  productId   String
+  rank        Int
+  score       Float?
+  createdAt   DateTime @default(now())
+
+  searchLog AiSearchQueryLog @relation(fields: [searchLogId], references: [id], onDelete: Cascade)
+
+  @@unique([searchLogId, productId])
+  @@index([shop, createdAt])
+  @@index([searchLogId, createdAt])
 }
 
 

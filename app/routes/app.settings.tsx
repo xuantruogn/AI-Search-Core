@@ -99,6 +99,14 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   }
 
   const aiSearchEnabled = form.get("aiSearchEnabled") === "on";
+  const searchLanguage = String(form.get("searchLanguage") ?? "").trim();
+  try {
+    if (!searchLanguage || Intl.getCanonicalLocales(searchLanguage).length !== 1) {
+      throw new Error();
+    }
+  } catch {
+    return { success: false, message: "Chọn ngôn ngữ shop hợp lệ." };
+  }
   const resultLimit = Number.parseInt(
     String(form.get("resultLimit") || "20"),
     10,
@@ -107,6 +115,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   await updateShopSettings({
     shop: session.shop,
     aiSearchEnabled,
+    searchLanguage,
     resultLimit: Number.isFinite(resultLimit) ? resultLimit : 20,
   });
 
@@ -126,6 +135,33 @@ export default function SettingsPage() {
         <fetcher.Form method="post">
           <input type="hidden" name="intent" value="settings" />
           <div style={{ display: "grid", gap: 16, maxWidth: 620 }}>
+            <label>
+              Ngôn ngữ tìm kiếm của shop
+              <input
+                name="searchLanguage"
+                list="search-languages"
+                required
+                defaultValue={data.searchLanguage ?? ""}
+                placeholder="vi, en, zh-Hans…"
+                style={{ display: "block", padding: 8, marginTop: 6 }}
+              />
+              <datalist id="search-languages">
+                <option value="vi">Tiếng Việt</option>
+                <option value="en">English</option>
+                <option value="zh-Hans">中文 giản thể</option>
+                <option value="zh-Hant">中文 phồn thể</option>
+                <option value="ja">日本語</option>
+                <option value="ko">한국어</option>
+                <option value="fr">Français</option>
+                <option value="de">Deutsch</option>
+                <option value="es">Español</option>
+                <option value="th">ไทย</option>
+              </datalist>
+            </label>
+            <s-text>
+              Sau khi đổi ngôn ngữ, vào Catalog &amp; Vector Index và quét lại
+              toàn bộ catalog để đồng bộ sản phẩm.
+            </s-text>
             <label style={{ display: "flex", gap: 10, alignItems: "center" }}>
               <input
                 type="checkbox"

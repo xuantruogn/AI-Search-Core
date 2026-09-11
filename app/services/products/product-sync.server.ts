@@ -390,6 +390,9 @@ export type SearchableProductSnapshot = {
   productId: string;
   handle: string;
   title: string;
+  minVariantPrice: number;
+  maxVariantPrice: number;
+  currencyCode: string;
 };
 
 /**
@@ -419,6 +422,16 @@ export async function fetchSearchableProductSnapshotsByIds(
             title
             status
             publishedAt
+            priceRangeV2 {
+              minVariantPrice {
+                amount
+                currencyCode
+              }
+              maxVariantPrice {
+                amount
+                currencyCode
+              }
+            }
           }
         }
       }
@@ -434,6 +447,10 @@ export async function fetchSearchableProductSnapshotsByIds(
         title?: string;
         status?: string;
         publishedAt?: string | null;
+        priceRangeV2?: {
+          minVariantPrice?: { amount?: string; currencyCode?: string };
+          maxVariantPrice?: { amount?: string; currencyCode?: string };
+        };
       } | null>;
     };
     errors?: Array<{ message?: string }>;
@@ -452,10 +469,21 @@ export async function fetchSearchableProductSnapshotsByIds(
   }
 
   for (const node of json.data?.nodes ?? []) {
+    const minVariantPrice = Number.parseFloat(
+      node?.priceRangeV2?.minVariantPrice?.amount ?? "",
+    );
+    const maxVariantPrice = Number.parseFloat(
+      node?.priceRangeV2?.maxVariantPrice?.amount ?? "",
+    );
+    const currencyCode =
+      node?.priceRangeV2?.minVariantPrice?.currencyCode?.toUpperCase() ?? "";
     if (
       !node?.id ||
       !node.handle ||
       !node.title ||
+      !Number.isFinite(minVariantPrice) ||
+      !Number.isFinite(maxVariantPrice) ||
+      !currencyCode ||
       !isSearchableOnlineStoreProduct({
         status: node.status,
         publishedAt: node.publishedAt,
@@ -468,6 +496,9 @@ export async function fetchSearchableProductSnapshotsByIds(
       productId: node.id,
       handle: node.handle,
       title: node.title,
+      minVariantPrice,
+      maxVariantPrice,
+      currencyCode,
     });
   }
 

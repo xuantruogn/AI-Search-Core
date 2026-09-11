@@ -7,7 +7,7 @@ export function isOpenAiConfigured() {
   return Boolean(process.env.OPENAI_API_KEY?.trim());
 }
 
-function getOpenAiClient() {
+export function getOpenAiClient() {
   const apiKey = process.env.OPENAI_API_KEY?.trim();
 
   if (!apiKey) {

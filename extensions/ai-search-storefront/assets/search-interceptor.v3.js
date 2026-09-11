@@ -12,6 +12,7 @@
 
   const config = window.AI_SEARCH_CONFIG || {};
   const SEARCH_ENDPOINT = config.search_endpoint || "/apps/ai-search";
+  const CLICK_ENDPOINT = SEARCH_ENDPOINT.replace(/\/+$/, "") + "/click";
   const AI_SEARCH_PARAM = "ai_search";
   const STATE_KEY = "aiSearchV3";
   let activeController = null;
@@ -47,6 +48,7 @@
   const THEME_MAP_CACHE_KEY = "ai_search_theme_map_v3";
   const THEME_MAP_TTL = 24 * 60 * 60 * 1000; // 24 Hours
   const ID_CACHE_KEY_PREFIX = "ai_search_ids_";
+  const CLICK_CACHE_KEY_PREFIX = "ai_search_click_";
 
   const GENERIC_FALLBACK_THEME_MAP = {
     v: 3,
@@ -158,23 +160,48 @@
     }
   }
 
-  function saveProductIdsForQuery(query, allProducts) {
+  function saveProductIdsForQuery(query, allProducts, searchLogId) {
     clearProductIdsCache();
     try {
       const key = `${ID_CACHE_KEY_PREFIX}${query.toLowerCase().trim()}`;
-      sessionStorage.setItem(key, JSON.stringify(allProducts));
+      sessionStorage.setItem(
+        key,
+        JSON.stringify({
+          searchLogId: searchLogId || null,
+          products: allProducts,
+        })
+      );
     } catch {
       console.warn("[AI SEARCH V3] Failed to save product IDs to sessionStorage");
     }
   }
 
-  function getPagedProductsFromStorage(query, page, customPageSize) {
+  function getSearchCacheRecord(query) {
     try {
       const key = `${ID_CACHE_KEY_PREFIX}${query.toLowerCase().trim()}`;
       const raw = sessionStorage.getItem(key);
       if (!raw) return null;
+      const parsed = JSON.parse(raw);
 
-      const allProducts = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        return { searchLogId: null, products: parsed };
+      }
+      if (!parsed || !Array.isArray(parsed.products)) return null;
+      return {
+        searchLogId:
+          typeof parsed.searchLogId === "string" ? parsed.searchLogId : null,
+        products: parsed.products,
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  function getPagedProductsFromStorage(query, page, customPageSize) {
+    try {
+      const record = getSearchCacheRecord(query);
+      if (!record) return null;
+      const allProducts = record.products;
       if (!Array.isArray(allProducts) || allProducts.length === 0) return null;
 
       const pageSize = Number(customPageSize) || window.AI_SEARCH_CONFIG?.pageSize || 5;
@@ -201,6 +228,7 @@
 
       return {
         products: pageProducts,
+        searchLogId: record.searchLogId,
         target_ids: targetIds,
         pagination: {
           current_page: page,
@@ -1256,8 +1284,16 @@
       const data = await fetchAiResults(query, page, signal);
       if (requestId !== activeRequestId) return;
 
-      if (data.all_products && Array.isArray(data.all_products)) {
-        saveProductIdsForQuery(query, data.all_products);
+      if (
+        page === 1 &&
+        data.all_products &&
+        Array.isArray(data.all_products)
+      ) {
+        saveProductIdsForQuery(
+          query,
+          data.all_products,
+          data.search_log_id
+        );
       }
 
       const targetIds = normalizeTargetIds(data.target_ids);
@@ -1292,6 +1328,7 @@
         pagination: data.pagination || {},
         targetIds,
         products: data.products || [],
+        searchLogId: data.search_log_id || null,
       });
     } catch (error) {
       if (requestId !== activeRequestId || error?.name === "AbortError") return;
@@ -1422,6 +1459,62 @@
     );
   }
 
+  function installSearchClickTracking() {
+    document.addEventListener(
+      "click",
+      (event) => {
+        if (!isAiSearchPage()) return;
+        const link = event.target?.closest?.('a[href*="/products/"]');
+        if (!link) return;
+
+        const query = getQueryFromUrl();
+        const record = getSearchCacheRecord(query);
+        if (!record?.searchLogId) return;
+
+        let handle = "";
+        try {
+          const target = new URL(link.href, location.origin);
+          const match = target.pathname.match(/\/products\/([^/?#]+)/i);
+          handle = match ? decodeURIComponent(match[1]) : "";
+        } catch {
+          return;
+        }
+
+        const product = record.products.find(
+          (candidate) => String(candidate.handle || "") === handle
+        );
+        if (!product?.id) return;
+
+        const dedupeKey = `${CLICK_CACHE_KEY_PREFIX}${record.searchLogId}_${product.id}`;
+        try {
+          if (sessionStorage.getItem(dedupeKey)) return;
+          sessionStorage.setItem(dedupeKey, "1");
+        } catch {
+          // Click logging must never interfere with product navigation.
+        }
+
+        const body = new URLSearchParams({
+          searchLogId: record.searchLogId,
+          productId: String(product.id),
+        });
+        void fetch(CLICK_ENDPOINT, {
+          method: "POST",
+          credentials: "same-origin",
+          keepalive: true,
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: body.toString(),
+        }).catch(() => {
+          try {
+            sessionStorage.removeItem(dedupeKey);
+          } catch {
+            // Ignore storage failures.
+          }
+        });
+      },
+      true
+    );
+  }
+
   function initOnPageLoad() {
     if (!isNativeSearchPage()) return;
 
@@ -1467,6 +1560,7 @@
   };
 
   installSearchInterception();
+  installSearchClickTracking();
 
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", initOnPageLoad, { once: true });

@@ -74,6 +74,10 @@ export async function runAiSearchHousekeeping() {
     "AI_SEARCH_USAGE_EVENT_RETENTION_DAYS",
     90,
   );
+  const queryLogRetentionDays = readPositiveInteger(
+    "AI_SEARCH_QUERY_LOG_RETENTION_DAYS",
+    90,
+  );
   const productJobRetentionDays = readPositiveInteger(
     "AI_SEARCH_SYNC_JOB_RETENTION_DAYS",
     30,
@@ -92,6 +96,7 @@ export async function runAiSearchHousekeeping() {
   );
 
   const usageCutoff = daysAgo(usageRetentionDays);
+  const queryLogCutoff = daysAgo(queryLogRetentionDays);
   const productJobCutoff = daysAgo(productJobRetentionDays);
   const catalogJobCutoff = daysAgo(catalogJobRetentionDays);
   const failedProductJobCutoff = daysAgo(failedProductJobRetentionDays);
@@ -99,6 +104,7 @@ export async function runAiSearchHousekeeping() {
 
   const [
     usageEventsDeleted,
+    queryLogsDeleted,
     productJobsDeleted,
     catalogJobsDeleted,
     failedProductJobsDeleted,
@@ -107,6 +113,10 @@ export async function runAiSearchHousekeeping() {
     db.$executeRaw`
         DELETE FROM "AiSearchUsageEvent"
         WHERE "createdAt" < ${usageCutoff}
+      `,
+    db.$executeRaw`
+        DELETE FROM "AiSearchQueryLog"
+        WHERE "createdAt" < ${queryLogCutoff}
       `,
     db.$executeRaw`
         DELETE FROM "AiSearchSyncJob"
@@ -164,6 +174,7 @@ export async function runAiSearchHousekeeping() {
 
   console.log("[AI Search] Housekeeping completed:", {
     usageEventsDeleted,
+    queryLogsDeleted,
     productJobsDeleted,
     catalogJobsDeleted,
     failedProductJobsDeleted,
@@ -176,6 +187,7 @@ export async function runAiSearchHousekeeping() {
 
   return {
     usageEventsDeleted,
+    queryLogsDeleted,
     productJobsDeleted,
     catalogJobsDeleted,
     failedProductJobsDeleted,

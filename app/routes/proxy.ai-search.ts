@@ -4,7 +4,14 @@ import { authenticate } from "../shopify.server";
 import db from "../db.server";
 import { getActiveThemeMap } from "../services/theme/theme-map-lifecycle.server";
 import type { ThemeMap } from "../services/theme-map.server";
-import { semanticSearch } from "../services/search/semantic-search.server";
+import {
+  semanticSearch,
+  type SemanticSearchDiagnostics,
+} from "../services/search/semantic-search.server";
+import { recordSearchQueryLog } from "../services/search/search-analytics.server";
+import { parsePriceConstraint } from "../services/search/query-constraints.server";
+import { rewriteSearchQuery } from "../services/search/query-rewriter.server";
+import { filterSearchResultsByPrice } from "../services/search/search-price-filter.server";
 import { classifySearchRequest } from "../services/search/search-request-router.server";
 import {
   getActiveTheme,
@@ -26,6 +33,42 @@ import {
 
 const NATIVE_BYPASS_PARAM = "_ai_search_bypass";
 const SEARCH_LIMIT = 1000;
+
+const queryEmbeddingCache = new Map<
+  string,
+  { embedding: number[]; timestamp: number }
+>();
+const EMBEDDING_CACHE_TTL = 24 * 60 * 60 * 1000;
+const EMBEDDING_QUERY_PIPELINE_VERSION = "semantic-expansion-v3";
+
+function buildEmbeddingCacheKey(shop: string, query: string) {
+  return `${EMBEDDING_QUERY_PIPELINE_VERSION}:${shop}:${query.toLowerCase().trim()}`;
+}
+
+export function getCachedQueryEmbedding(
+  shop: string,
+  query: string,
+): number[] | null {
+  const key = buildEmbeddingCacheKey(shop, query);
+  const cached = queryEmbeddingCache.get(key);
+  if (cached && Date.now() - cached.timestamp < EMBEDDING_CACHE_TTL) {
+    return cached.embedding;
+  }
+  return null;
+}
+
+export function setCachedQueryEmbedding(
+  shop: string,
+  query: string,
+  embedding: number[],
+) {
+  const key = buildEmbeddingCacheKey(shop, query);
+  if (queryEmbeddingCache.size > 10000) {
+    const oldestKey = queryEmbeddingCache.keys().next().value;
+    if (oldestKey) queryEmbeddingCache.delete(oldestKey);
+  }
+  queryEmbeddingCache.set(key, { embedding, timestamp: Date.now() });
+}
 
 
 
@@ -200,7 +243,9 @@ async function getCachedThemePreflight(admin: any, shop: string) {
 // ==========================================
 type CandidateProduct = {
   id: string;
-  handle?: string;
+  handle: string;
+  rank: number;
+  score: number;
 };
 
 type PaginationResult = {
@@ -483,28 +528,70 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     const startedAt = Date.now();
 
     try {
-      console.time("[PERF-PROXY] 2. Semantic Search (Qdrant)");
+      console.time(
+        "[PERF-PROXY] 2. Semantic Search (OpenAI/Vector Cache + Qdrant)",
+      );
 
-      const rawSearchResults = await semanticSearch({
+      const preparedRewrite = await rewriteSearchQuery({
         shop: session.shop,
         query,
+      });
+      const sortIntent = preparedRewrite.analysis.sortIntent;
+      const cachedVector =
+        preparedRewrite.catalogRelevant && !preparedRewrite.fallbackReason
+          ? getCachedQueryEmbedding(session.shop, preparedRewrite.query)
+          : null;
+      let queryVectorForAnalytics: number[] | null = cachedVector;
+      let searchDiagnostics: SemanticSearchDiagnostics | null = null;
+
+      const rawSearchResults = await semanticSearch({
+        preparedRewrite,
+        shop: session.shop,
+        query,
+        vectorOverride: cachedVector ?? undefined,
         limit: SEARCH_LIMIT,
-        onEmbeddingCreated: async (_vector) => {
+        onEmbeddingCreated: async (vector, metadata) => {
+          queryVectorForAnalytics = vector;
+          if (vector && metadata.cacheable) {
+            setCachedQueryEmbedding(session.shop, preparedRewrite.query, vector);
+          }
           try {
             await recordQueryEmbeddingConsumed(reservation);
           } catch (usageError) {
             console.error("[AI Search] Query embedding usage logging failed:", usageError);
           }
         },
+        onDiagnostics: (diagnostics) => {
+          searchDiagnostics = diagnostics;
+        },
       });
-      console.timeEnd("[PERF-PROXY] 2. Semantic Search (Qdrant)");
+      console.timeEnd(
+        "[PERF-PROXY] 2. Semantic Search (OpenAI/Vector Cache + Qdrant)",
+      );
 
-      if (rawSearchResults.length === 0) {
-        throw new Error("NO_LIVE_AI_RESULTS");
+      const priceConstraint = parsePriceConstraint(query);
+      let searchResults = rawSearchResults;
+      if (priceConstraint || sortIntent !== "RELEVANCE") {
+        try {
+          searchResults = await filterSearchResultsByPrice({
+            admin,
+            shop: session.shop,
+            results: rawSearchResults,
+            constraint: priceConstraint,
+            sortIntent,
+          });
+        } catch (error) {
+          searchResults = priceConstraint ? [] : rawSearchResults;
+          console.error("[AI Search] Hard price filter failed closed", {
+            shop: session.shop,
+            priceConstraint,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
       }
 
       const seen = new Set<string>();
-      const allProducts: CandidateProduct[] = rawSearchResults.flatMap(
+      const allProducts: CandidateProduct[] = searchResults.flatMap(
         (result) => {
           const id =
             result.productId.match(
@@ -513,9 +600,44 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
           if (!id) return [];
           if (seen.has(id)) return [];
           seen.add(id);
-          return [{ id, handle: result.handle }];
+          return [
+            {
+              id,
+              handle: result.handle,
+              rank: seen.size,
+              score: result.score,
+            },
+          ];
         },
       );
+
+      let searchLogId: string | null = null;
+      if (requestedPage === 1 && searchDiagnostics) {
+        try {
+          searchLogId = await recordSearchQueryLog({
+            shop: session.shop,
+            query,
+            queryVector:
+              allProducts.length === 0 ? queryVectorForAnalytics : null,
+            rankedProducts: allProducts.map((product) => ({
+              productId: product.id,
+              handle: product.handle,
+              rank: product.rank,
+              score: product.score,
+            })),
+            diagnostics: searchDiagnostics,
+            totalDurationMs: Date.now() - startedAt,
+          });
+        } catch (analyticsError) {
+          console.error("[AI Search] Search analytics log failed:", {
+            shop: session.shop,
+            error:
+              analyticsError instanceof Error
+                ? analyticsError.message
+                : String(analyticsError),
+          });
+        }
+      }
 
       const pagination = buildShopifyProductQuery(
         allProducts,
@@ -533,6 +655,11 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
           target_ids: pagination.targetIds,
           products: pagination.pageProducts,
           all_products: allProducts,
+          applied_filters: {
+            sort_intent: sortIntent,
+            price: priceConstraint,
+          },
+          search_log_id: searchLogId,
           pagination: {
             current_page: pagination.currentPage,
             page_size: pagination.pageSize,
@@ -551,7 +678,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
       try {
         await commitSearchUsage(reservation, {
-          resultCount: rawSearchResults.length,
+          resultCount: allProducts.length,
           durationMs: Date.now() - startedAt,
           themeId: preflightMap.theme.gid,
           rendererSource:
