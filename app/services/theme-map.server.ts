@@ -7,7 +7,7 @@ export type AdminGraphqlClient = Parameters<typeof getActiveTheme>[0];
 export type ThemeMap = {
   version: 3;
   fingerprint: string;
-  sources: Array<{filename: string; digest: string | null}>;
+  sources: Array<{ filename: string; digest: string | null }>;
   theme: {
     id: string;
     gid: string;
@@ -104,7 +104,6 @@ function transformCandidatesToCssSelectors(
       .replace(/_/g, "-");
 
     if (type === "grid") {
-      // ❌ Bỏ qua nếu tên snippet chứa facet/filter
       if (cleanName.includes("facet") || cleanName.includes("filter")) {
         continue;
       }
@@ -136,30 +135,113 @@ export function buildClientThemeMapDTO(
   const cardCandidates = transformCandidatesToCssSelectors(rawCard, files, "card");
   const pageCandidates = transformCandidatesToCssSelectors(rawPage, files, "page");
 
-  // Lọc sạch lại mảng gridCandidates một lần nữa để chắc chắn 100% không dính facet
+  // Lọc sạch lại mảng gridCandidates một lần nữa
   const cleanGrid = gridCandidates.filter(
     (s) => !s.includes("facet") && !s.includes("filter")
   );
 
-  const dto: ClientThemeMapDTO = {
-    v: 3,
-    fp: fullMap.fingerprint || "",
-    // 💡 MỞ RỘNG MẢNG FALLBACK DÀNH CHO DÒNG THEME DỊ BIỆT
-    grid: cleanGrid.length > 0 ? cleanGrid : [
-      "#product-grid", 
-      ".product-grid", 
-      ".product-grid-container", 
-      ".grid-products", 
-      ".products-grid", 
-      "[data-products-grid]",
-      ".main-search__results",
-      "#SearchResults",
-      ".collection__grid"
+  // const dto: ClientThemeMapDTO = {
+  //   v: 3,
+  //   fp: fullMap.fingerprint || "",
+  //   // 💡 MẢNG FALLBACK RỘNG BẢO ĐẢM CHO BẤT KỲ THEME/VERSION LẠ NÀO
+  //   grid: cleanGrid.length > 0 ? cleanGrid : [
+  //     "#product-grid", 
+  //     ".product-grid", 
+  //     ".product-grid-container", 
+  //     ".product-list",           // 👈 Dùng cho Prestige / Paid Themes
+  //      "product-list",            // 👈 Custom Web Component
+  //     ".grid-products", 
+  //     ".products-grid", 
+  //     "[data-products-grid]",
+  //     ".main-search__results",
+  //     "#SearchResults",
+  //     ".collection__grid",
+  //     ".list-view-items" // 👈 BỔ SUNG CHO THEME DEBUT / VINTAGE
+  //   ],
+  //   card: cardCandidates.length > 0 ? cardCandidates : [
+  //     ".card-wrapper", 
+  //     ".product-card", 
+  //     ".grid__item", 
+  //     ".product-item",
+  //     ".product-card-wrapper",
+  //     "[data-product-card]",
+  //     ".list-view-item"  // 👈 BỔ SUNG CHO THEME DEBUT / VINTAGE
+  //   ],
+  //   page: pageCandidates.length > 0 ? pageCandidates : [
+  //     ".pagination-wrapper", 
+  //     ".pagination", 
+  //     ".paginate", 
+  //     "nav[role='navigation']",
+  //     ".pagination-controls"
+  //   ],
+  //   cnt: fullMap.search?.productCountCandidates || [".product-count", "#ProductCount", ".results-count"],
+  // };
+
+  // Trong hàm buildClientThemeMapDTO (theme-map.server.ts)
+const dto: ClientThemeMapDTO = {
+  v: 3,
+  fp: fullMap.fingerprint || "",
+  grid: cleanGrid.length > 0 ? cleanGrid : [
+    // --- Dawn / OS 2.0 Themes ---
+    "#product-grid", 
+    ".product-grid", 
+    ".product-grid-container", 
+    ".grid-products", 
+    ".products-grid", 
+    "[data-products-grid]",
+    ".main-search__results",
+    "#SearchResults",
+    ".collection__grid",
+    
+    // --- Debut / Vintage Themes ---
+    ".list-view-items",
+
+    // --- Prestige / Soft / Impact / Paid Themes ---
+    ".product-list",
+    "product-list",             // Custom Web Component (<product-list>)
+    "product-grid",             // Custom Web Component (<product-grid>)
+    ".product-facet__grid",
+    ".collection__product-list"
+  ],
+
+  card: cardCandidates.length > 0 ? cardCandidates : [
+    // --- Dawn / OS 2.0 Themes ---
+    ".card-wrapper", 
+    ".product-card", 
+    ".grid__item", 
+    ".product-card-wrapper",
+    "[data-product-card]",
+
+    // --- Debut / Vintage Themes ---
+    ".product-item",
+    ".list-view-item",
+
+    // --- Prestige / Soft / Impact / Paid Themes ---
+    "product-card",            // Custom Web Component (<product-card>)
+    "product-item",            // Custom Web Component (<product-item>)
+    ".product-item__image-wrapper",
+    ".product-list__inner"
+  ],
+
+  page: pageCandidates.length > 0 ? pageCandidates : [
+    ".pagination-wrapper", 
+    ".pagination", 
+    ".paginate", 
+    "nav[role='navigation']",
+    ".pagination-controls",
+    "facet-pagination"         // Custom Web Component cho paid themes
+  ],
+
+  cnt: fullMap.search?.productCountCandidates?.length > 0 
+    ? fullMap.search.productCountCandidates 
+    : [
+      ".product-count", 
+      "#ProductCount", 
+      ".results-count", 
+      "#ProductCountDesktop", 
+      ".product-count-vertical"
     ],
-    card: cardCandidates.length > 0 ? cardCandidates : [".card-wrapper", ".product-card", ".grid__item", ".product-item"],
-    page: pageCandidates.length > 0 ? pageCandidates : [".pagination-wrapper", ".pagination", ".paginate", "nav[role='navigation']"],
-    cnt: fullMap.search?.productCountCandidates || [".product-count", "#ProductCount", ".results-count"],
-  };
+};
 
   // 📦 LOG DỮ LIỆU ĐÃ CHUYỂN ĐỔI SANG DTO
   console.log("\n📦 ================== [TRANSFORMED CSS SELECTORS DTO] ==================");
@@ -172,7 +254,6 @@ export function buildClientThemeMapDTO(
 
   return dto;
 }
-
 
 type ThemeFileNode = {
   filename: string;
@@ -228,7 +309,7 @@ function resolveSnippetFilename(files: ThemeFileNode[], dependency: string) {
 function isProductGridDependency(dependency: string, resolvedFilename: string) {
   const value = `${dependency} ${resolvedFilename}`.toLowerCase();
 
-  // ❌ LOẠI TRỪ KHỎI GRID: Không bao giờ coi snippets bộ lọc/sắp xếp là Product Grid
+  // ❌ LOẠI TRỪ KHỎI GRID: Không bao giờ lấy bộ lọc làm grid
   if (value.includes("facets") || value.includes("filter") || value.includes("sorting")) {
     return false;
   }
@@ -237,13 +318,33 @@ function isProductGridDependency(dependency: string, resolvedFilename: string) {
     value.includes("product-grid") ||
     value.includes("product_grid") ||
     value.includes("productgrid") ||
-    value.includes("main-search")
+    value.includes("main-search") ||
+    value.includes("search-results")
   );
 }
 
+// 🟢 HÀM ĐÃ ĐƯỢC NÂNG CẤP ĐỂ CHỐNG LỖI MỌI VERSION/VENDOR
 function isProductCardDependency(dependency: string, resolvedFilename: string) {
   const value = `${dependency} ${resolvedFilename}`.toLowerCase();
-  return value.includes("product-card") || value.includes("product_card");
+
+  // ❌ LOẠI TRỪ CÁC FILE CHỈ CHỨA CSS / STYLE / GALLERY / MEDIA
+  if (
+    value.includes("style") || 
+    value.includes("styles") || 
+    value.includes("gallery") || 
+    value.includes("zoom") ||
+    value.includes("media")
+  ) {
+    return false;
+  }
+
+  return (
+    value.includes("product-card") || 
+    value.includes("product_card") ||
+    value.includes("card-product") ||
+    value.includes("product-item") ||
+    value.includes("product-card-list")
+  );
 }
 
 function isPaginationDependency(dependency: string, resolvedFilename: string) {
@@ -267,21 +368,40 @@ function analyzeSearchRenderPath(
     if (!content) continue;
 
     // 1. Quét Product Count
+    // 1. Quét Product Count
     const matches = content.match(countRegex);
     if (matches && matches.length > 0) {
       matches.forEach((match) => {
+        let rawValue = "";
+        let prefix = ".";
+
         if (match.includes('id="')) {
-          const id = match.split('id="')[1].split('"')[0].trim();
-          if (id) productCountCandidates.add(`#${id}`);
+          rawValue = match.split('id="')[1].split('"')[0].trim();
+          prefix = "#";
         } else if (match.includes("id='")) {
-          const id = match.split("id='")[1].split("'")[0].trim();
-          if (id) productCountCandidates.add(`#${id}`);
+          rawValue = match.split("id='")[1].split("'")[0].trim();
+          prefix = "#";
         } else if (match.includes('class="')) {
-          const cls = match.split('class="')[1].split('"')[0].split(' ')[0].trim();
-          if (cls) productCountCandidates.add(`.${cls}`);
+          rawValue = match.split('class="')[1].split('"')[0].split(' ')[0].trim();
+          prefix = ".";
         } else if (match.includes("class='")) {
-          const cls = match.split("class='")[1].split("'")[0].split(' ')[0].trim();
-          if (cls) productCountCandidates.add(`.${cls}`);
+          rawValue = match.split("class='")[1].split("'")[0].split(' ')[0].trim();
+          prefix = ".";
+        }
+
+        if (rawValue) {
+          const lower = rawValue.toLowerCase();
+          // ❌ LOẠI TRỪ BONG BÓNG BỘ LỌC: Bỏ qua các class rác hiển thị số lượng filter đang tick
+          if (
+            lower.includes("bubble") || 
+            lower.includes("badge") || 
+            lower.includes("toggle") ||
+            lower.includes("icon")
+          ) {
+            return;
+          }
+
+          productCountCandidates.add(`${prefix}${rawValue}`);
         }
       });
     }
@@ -298,14 +418,14 @@ function analyzeSearchRenderPath(
       }
     }
 
-    // 2. BỔ SUNG QUÉT TRỰC TIẾP GRID & CARD TỪ FILE LIQUID (CHO THEME DAWN/MAIN-SEARCH)
+    // 2. BỔ SUNG QUÉT TRỰC TIẾP GRID & CARD TỪ CODE LIQUID
     if (content.includes('id="ProductGridContainer"') || content.includes('product-grid-container')) {
       productGridCandidates.add('.product-grid-container');
     }
     if (content.includes('id="product-grid"')) {
       productGridCandidates.add('#product-grid');
     }
-    if (content.includes('class="grid product-grid') || content.includes('product-grid')) {
+    if (content.includes('class="grid product-grid"') || content.includes('product-grid')) {
       productGridCandidates.add('.product-grid');
     }
 
@@ -363,7 +483,12 @@ function analyzeSearchRenderPath(
   }
 
   if (productCardCandidates.size === 0) {
-    const priorities = ["snippets/product-card.liquid", "snippets/product_card.liquid"];
+    const priorities = [
+      "snippets/product-card.liquid", 
+      "snippets/product_card.liquid",
+      "snippets/product-card-list.liquid",
+      "snippets/card-product.liquid"
+    ];
     for (const filename of priorities) {
       const file = findFileByName(files, filename);
       if (file) {
@@ -384,7 +509,7 @@ function analyzeSearchRenderPath(
     }
   }
 
-  // 4. Khai báo DUY NHẤT một biến result
+  // 4. Khai báo result
   const result = {
     productGridCandidates: Array.from(productGridCandidates),
     productCardCandidates: Array.from(productCardCandidates),
@@ -414,22 +539,31 @@ export async function buildThemeMapForTheme(admin: AdminGraphqlClient, theme: Ac
   
   const sourceFiles = await readSearchThemeFiles(admin, theme.id);
   
-  // 🔴 THÊM LOG NÀY ĐỂ XEM DẠNG TÓM TẮT TOÀN BỘ FILE THEME ĐÃ TẢI VỀ:
+  // 🔴 LOG TƯỜNG MINH KIỂM TRA MÃ NGUỒN FILE
+  const getSafeContent = (key: string) => {
+    const content = sourceFiles.get(key)?.content;
+    return content ? content : `❌ KHÔNG TÌM THẤY FILE ${key}`;
+  };
+
   console.log("\n📁 ================== [TẤT CẢ FILE THEME ĐÃ TẢI TỪ SHOPIFY] ==================");
   console.log(`Tổng số file tải được: ${sourceFiles.size}`);
   console.log("Danh sách file:", Array.from(sourceFiles.keys()));
   console.log("============================================================================\n");
 
   console.log("\n📄 ================== [NỘI DUNG FILE TEMPLATES/SEARCH.JSON] ==================");
-  console.log("\n📄 [TEMPLATES/SEARCH.JSON]:\n", sourceFiles.get("templates/search.json")?.content || "❌ KHÔNG TÌM THẤY FILE templates/search.json");
+  console.log("\n📄 [TEMPLATES/SEARCH.JSON]:\n", getSafeContent("templates/search.json"));
   console.log("============================================================================\n");
 
   console.log("\n📄 ================== [NỘI DUNG FILE sections/main-search.liquid] ==================");
-  console.log("\n📄 [TEMPLATES/SEARCH.JSON]:\n", sourceFiles.get("sections/main-search.liquid")?.content || "❌ KHÔNG TÌM THẤY FILE sections/main-search.liquid");
+  console.log("\n📄 [sections/main-search.liquid]:\n", getSafeContent("sections/main-search.liquid"));
+  console.log("============================================================================\n");
+
+  console.log("\n📄 ================== [NỘI DUNG FILE templates/search.liquid] ==================");
+  console.log("\n📄 [templates/search.liquid]:\n", getSafeContent("templates/search.liquid"));
   console.log("============================================================================\n");
 
   const graph = buildSearchThemeMap(sourceFiles);
-  const files: ThemeFileNode[] = [...sourceFiles.values()].map((file) => ({filename: file.filename, body: {content: file.content}}));
+  const files: ThemeFileNode[] = [...sourceFiles.values()].map((file) => ({ filename: file.filename, body: { content: file.content } }));
   const renderPath = analyzeSearchRenderPath(files, graph.sectionFiles.length ? graph.sectionFiles : [graph.template]);
   
   return {
