@@ -32,6 +32,7 @@ type SubscriptionRow = {
 };
 
 type SettingsRow = {
+  searchLanguage: string | null;
   shop: string;
   aiSearchEnabled: boolean | number;
   fallbackEnabled: boolean | number;
@@ -393,6 +394,7 @@ export async function getShopSettings(
     SELECT
       "shop",
       "aiSearchEnabled",
+      "searchLanguage",
       "fallbackEnabled",
       "productLimitOverride",
       "searchLimitOverride",
@@ -412,6 +414,7 @@ export async function getShopSettings(
   return {
     shop: row.shop,
     aiSearchEnabled: Boolean(row.aiSearchEnabled),
+    searchLanguage: row.searchLanguage,
     fallbackEnabled: Boolean(row.fallbackEnabled),
     productLimitOverride: row.productLimitOverride,
     searchLimitOverride: row.searchLimitOverride,
@@ -421,6 +424,7 @@ export async function getShopSettings(
 }
 
 export async function updateShopSettings({
+  searchLanguage,
   shop,
   aiSearchEnabled,
   resultLimit,
@@ -428,6 +432,7 @@ export async function updateShopSettings({
   shop: string;
   aiSearchEnabled: boolean;
   resultLimit: number;
+  searchLanguage?: string | null;
 }) {
   await ensureShopRecord({ shop });
 
@@ -439,6 +444,7 @@ export async function updateShopSettings({
       "aiSearchEnabled" = ${aiSearchEnabled},
       "fallbackEnabled" = true,
       "resultLimit" = ${safeLimit},
+      "searchLanguage" = COALESCE(${searchLanguage ?? null}, "searchLanguage"),
       "updatedAt" = CURRENT_TIMESTAMP
     WHERE "shop" = ${shop}
   `;

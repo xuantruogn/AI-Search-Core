@@ -13,6 +13,7 @@
   console.log("[AI SEARCH V3] Search Interceptor V3 loaded (ID Paging Optimized)");
   const config = window.AI_SEARCH_CONFIG || {};
   const SEARCH_ENDPOINT = config.search_endpoint || "/apps/ai-search";
+  const CLICK_ENDPOINT = SEARCH_ENDPOINT.replace(/\/+$/, "") + "/click";
   const AI_SEARCH_PARAM = "ai_search";
   const STATE_KEY = "aiSearchV3";
   let activeController = null;
@@ -48,6 +49,7 @@
   const THEME_MAP_CACHE_KEY = "ai_search_theme_map_v3";
   const THEME_MAP_TTL = 24 * 60 * 60 * 1000; // 24 Hours
   const ID_CACHE_KEY_PREFIX = "ai_search_ids_";
+  const CLICK_CACHE_KEY_PREFIX = "ai_search_click_";
 
   function getCachedThemeMap() {
     try {
@@ -89,24 +91,50 @@
   }
 
   // Lưu mảng ID/Handle của từ khóa vào sessionStorage
-  function saveProductIdsForQuery(query, allProducts) {
+  function saveProductIdsForQuery(query, allProducts, searchLogId) {
     clearProductIdsCache();
     try {
       const key = `${ID_CACHE_KEY_PREFIX}${query.toLowerCase().trim()}`;
-      sessionStorage.setItem(key, JSON.stringify(allProducts));
+      sessionStorage.setItem(
+        key,
+        JSON.stringify({
+          searchLogId: searchLogId || null,
+          products: allProducts,
+        })
+      );
     } catch {
       console.warn("[AI SEARCH V3] Failed to save product IDs to sessionStorage");
+    }
+  }
+
+  function getSearchCacheRecord(query) {
+    try {
+      const key = `${ID_CACHE_KEY_PREFIX}${query.toLowerCase().trim()}`;
+      const raw = sessionStorage.getItem(key);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+
+      // Backward compatibility for cache entries written before analytics.
+      if (Array.isArray(parsed)) {
+        return { searchLogId: null, products: parsed };
+      }
+      if (!parsed || !Array.isArray(parsed.products)) return null;
+      return {
+        searchLogId:
+          typeof parsed.searchLogId === "string" ? parsed.searchLogId : null,
+        products: parsed.products,
+      };
+    } catch {
+      return null;
     }
   }
 
   // Cắt mảng ID sản phẩm từ sessionStorage khi Next trang
   function getPagedProductsFromStorage(query, page, pageSize = 20) {
     try {
-      const key = `${ID_CACHE_KEY_PREFIX}${query.toLowerCase().trim()}`;
-      const raw = sessionStorage.getItem(key);
-      if (!raw) return null;
-
-      const allProducts = JSON.parse(raw);
+      const record = getSearchCacheRecord(query);
+      if (!record) return null;
+      const allProducts = record.products;
       const totalProducts = allProducts.length;
       const totalPages = Math.ceil(totalProducts / pageSize);
 
@@ -119,6 +147,7 @@
 
       return {
         products: pageProducts,
+        searchLogId: record.searchLogId,
         target_ids: pageProducts.map((p) => `id:${p.id}`).join(" OR "),
         pagination: {
           current_page: page,
@@ -378,6 +407,15 @@
     }
   }
 
+  function safeQueryAll(root, selector) {
+    if (!root || !selector) return [];
+    try {
+      return Array.from(root.querySelectorAll(selector));
+    } catch {
+      return [];
+    }
+  }
+
   function mappedRoots(root, map) {
     const ids = map.searchTemplateStructure?.[0]?.sectionIds || [];
     const types = map.searchSectionTypes || [];
@@ -540,6 +578,10 @@ function hideNativeResults() {
       }
     }
 
+    // The native "no results" message often sits outside the product grid,
+    // so replacing the grid alone leaves a contradictory empty-state visible.
+    hideNativeEmptyStates(grid, map);
+
     document.documentElement.classList.remove("ai-search-v3-pending");
     document.documentElement.classList.add("ai-search-v3-ready");
   }
@@ -552,6 +594,8 @@ function hideNativeResults() {
       grid.removeAttribute("aria-hidden");
       delete grid.dataset.aiSearchV3Hidden;
     });
+
+    restoreNativeEmptyStates();
 
     document.documentElement.classList.remove("ai-search-v3-pending");
     document.documentElement.classList.remove("ai-search-v3-ready");
@@ -566,6 +610,83 @@ function hideNativeResults() {
       );
     }
     return mappedRoots(document, map)[0] || null;
+  }
+
+  const NATIVE_EMPTY_TEXT_PATTERNS = [
+    /no results/i,
+    /no products? (?:found|match)/i,
+    /not find any/i,
+    /không (?:tìm thấy|có) (?:kết quả|sản phẩm)/i,
+    /未找到|没有找到|沒有找到|无结果|無結果|找不到/,
+    /aucun résultat/i,
+    /keine ergebnisse/i,
+    /sin resultados/i,
+    /nessun risultato/i,
+    /nenhum resultado/i,
+    /結果が見つかりません/,
+  ];
+
+  function hideNativeEmptyStates(grid, map) {
+    const root = findSearchRoot(grid, map) || document.querySelector("main");
+    if (!root) return;
+
+    const selectors = [
+      '[role="status"]',
+      "[data-search-empty]",
+      "[data-empty-state]",
+      ".search-empty",
+      ".search__empty",
+      ".search-no-results",
+      ".no-results",
+      ".template-search__empty",
+      '[class*="search-empty"]',
+      '[class*="no-result"]',
+    ];
+    const candidates = new Set();
+    for (const selector of selectors) {
+      safeQueryAll(root, selector).forEach((element) => candidates.add(element));
+    }
+
+    for (const element of candidates) {
+      if (!(element instanceof HTMLElement) || grid?.contains(element)) continue;
+
+      const classHint = /(?:search[-_ ]?empty|no[-_ ]?results?)/i.test(
+        String(element.className || ""),
+      );
+      const textHint = NATIVE_EMPTY_TEXT_PATTERNS.some((pattern) =>
+        pattern.test(element.textContent || ""),
+      );
+      if (!classHint && !textHint) continue;
+
+      element.dataset.aiSearchV3EmptyHidden = "true";
+      element.dataset.aiSearchV3PreviousDisplay = element.style.display;
+      element.dataset.aiSearchV3PreviousAriaHidden =
+        element.getAttribute("aria-hidden") ?? "__missing__";
+      element.style.display = "none";
+      element.setAttribute("aria-hidden", "true");
+    }
+  }
+
+  function restoreNativeEmptyStates() {
+    document
+      .querySelectorAll('[data-ai-search-v3-empty-hidden="true"]')
+      .forEach((element) => {
+        if (!(element instanceof HTMLElement)) return;
+
+        element.style.display =
+          element.dataset.aiSearchV3PreviousDisplay || "";
+        const previousAriaHidden =
+          element.dataset.aiSearchV3PreviousAriaHidden;
+        if (previousAriaHidden === "__missing__") {
+          element.removeAttribute("aria-hidden");
+        } else if (previousAriaHidden !== undefined) {
+          element.setAttribute("aria-hidden", previousAriaHidden);
+        }
+
+        delete element.dataset.aiSearchV3EmptyHidden;
+        delete element.dataset.aiSearchV3PreviousDisplay;
+        delete element.dataset.aiSearchV3PreviousAriaHidden;
+      });
   }
 
   function removeAiPagination() {
@@ -1125,8 +1246,16 @@ function hideNativeResults() {
       if (requestId !== activeRequestId) return;
 
       // Lưu toàn bộ danh sách ID trả về vào sessionStorage
-      if (data.all_products && Array.isArray(data.all_products)) {
-        saveProductIdsForQuery(query, data.all_products);
+      if (
+        page === 1 &&
+        data.all_products &&
+        Array.isArray(data.all_products)
+      ) {
+        saveProductIdsForQuery(
+          query,
+          data.all_products,
+          data.search_log_id
+        );
       }
 
       const targetIds = normalizeTargetIds(data.target_ids);
@@ -1163,6 +1292,7 @@ function hideNativeResults() {
         pagination: data.pagination || {},
         targetIds,
         products: data.products || [],
+        searchLogId: data.search_log_id || null,
       });
     } catch (error) {
       if (requestId !== activeRequestId || error?.name === "AbortError") return;
@@ -1293,6 +1423,62 @@ function hideNativeResults() {
     );
   }
 
+  function installSearchClickTracking() {
+    document.addEventListener(
+      "click",
+      (event) => {
+        if (!isAiSearchPage()) return;
+        const link = event.target?.closest?.('a[href*="/products/"]');
+        if (!link) return;
+
+        const query = getQueryFromUrl();
+        const record = getSearchCacheRecord(query);
+        if (!record?.searchLogId) return;
+
+        let handle = "";
+        try {
+          const target = new URL(link.href, location.origin);
+          const match = target.pathname.match(/\/products\/([^/?#]+)/i);
+          handle = match ? decodeURIComponent(match[1]) : "";
+        } catch {
+          return;
+        }
+
+        const product = record.products.find(
+          (candidate) => String(candidate.handle || "") === handle
+        );
+        if (!product?.id) return;
+
+        const dedupeKey = `${CLICK_CACHE_KEY_PREFIX}${record.searchLogId}_${product.id}`;
+        try {
+          if (sessionStorage.getItem(dedupeKey)) return;
+          sessionStorage.setItem(dedupeKey, "1");
+        } catch {
+          // Click logging remains useful even when storage is unavailable.
+        }
+
+        const body = new URLSearchParams({
+          searchLogId: record.searchLogId,
+          productId: String(product.id),
+        });
+        void fetch(CLICK_ENDPOINT, {
+          method: "POST",
+          credentials: "same-origin",
+          keepalive: true,
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: body.toString(),
+        }).catch(() => {
+          try {
+            sessionStorage.removeItem(dedupeKey);
+          } catch {
+            // Ignore storage failures; never interfere with navigation.
+          }
+        });
+      },
+      true
+    );
+  }
+
   function initOnPageLoad() {
     if (!isNativeSearchPage()) return;
     const url = new URL(location.href);
@@ -1337,6 +1523,7 @@ function hideNativeResults() {
   };
 
   installSearchInterception();
+  installSearchClickTracking();
 
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", initOnPageLoad, { once: true });

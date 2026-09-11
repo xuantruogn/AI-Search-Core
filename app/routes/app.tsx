@@ -77,6 +77,7 @@ export default function App() {
         <s-link href="/app">Dashboard</s-link>
         <s-link href="/app/catalog-sync">Catalog</s-link>
         <s-link href="/app/usage">Usage</s-link>
+        <s-link href="/app/search-analytics">Search Analytics</s-link>
         <s-link href="/app/billing">Plans &amp; Billing</s-link>
         <s-link href="/app/settings">Settings</s-link>
       </nav>

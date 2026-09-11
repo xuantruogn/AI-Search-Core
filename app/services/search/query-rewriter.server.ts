@@ -1,4 +1,5 @@
 import db from "../../db.server";
+import { getShopSettings } from "../commerce/shop-registry.server";
 import { getOpenAiClient } from "./embeddings.server";
 
 type CacheEntry<T> = {
@@ -16,6 +17,7 @@ export type QueryRewriteResult = {
 };
 
 export type QueryRewriteAnalysis = {
+  sortIntent: "RELEVANCE" | "PRICE_ASC" | "PRICE_DESC" | "PREMIUM" | "BUDGET";
   intent: string;
   productType: string;
   attributes: string[];
@@ -27,7 +29,7 @@ export type QueryRewriteAnalysis = {
   decisionReason: string;
 };
 
-const QUERY_REWRITE_CACHE_VERSION = "semantic-expansion-v1";
+const QUERY_REWRITE_CACHE_VERSION = "semantic-expansion-v3-ranking";
 const catalogContextCache = new Map<string, CacheEntry<string>>();
 const rewrittenQueryCache = new Map<string, CacheEntry<QueryRewriteResult>>();
 
@@ -143,13 +145,14 @@ function fallback(
     rewritten: false,
     catalogRelevant: true,
     analysis: {
+      sortIntent: "RELEVANCE",
       intent: "unknown",
       productType: "",
       attributes: [],
       semanticExpansions: [],
       shopLanguage: "unknown",
       shopLanguageTerms: [],
-      englishTerms: [],
+    englishTerms: [],
       matchedCatalogTerms: [],
       decisionReason: `LLM analysis unavailable: ${reason}`,
     },
@@ -193,11 +196,14 @@ function composeEmbeddingQuery(originalQuery: string, groups: string[][]) {
     terms.push(cleaned);
   }
 
-  return terms.join(" | ").slice(0, 500).trim();
+  // Preserve both language groups; the old 500-character cut could discard
+  // the entire translation after the original query and expansions.
+  return terms.join(" | ").trim();
 }
 
 function parseRewrittenQuery(outputText: string, originalQuery: string) {
   const parsed = JSON.parse(outputText) as {
+    sortIntent?: unknown;
     catalogRelevant?: unknown;
     intent?: unknown;
     productType?: unknown;
@@ -210,6 +216,7 @@ function parseRewrittenQuery(outputText: string, originalQuery: string) {
     decisionReason?: unknown;
   };
   const intent = parseShortString(parsed.intent, 100);
+  const sortIntent = parsed.sortIntent as QueryRewriteAnalysis["sortIntent"];
   const productType = parseShortString(parsed.productType, 160);
   const attributes = parseShortStringArray(parsed.attributes, 12, 120);
   const semanticExpansions = parseShortStringArray(
@@ -232,6 +239,7 @@ function parseRewrittenQuery(outputText: string, originalQuery: string) {
   const decisionReason = parseShortString(parsed.decisionReason, 500);
 
   if (
+    !["RELEVANCE", "PRICE_ASC", "PRICE_DESC", "PREMIUM", "BUDGET"].includes(sortIntent) ||
     typeof parsed.catalogRelevant !== "boolean" ||
     !intent ||
     productType === null ||
@@ -250,7 +258,6 @@ function parseRewrittenQuery(outputText: string, originalQuery: string) {
     ? composeEmbeddingQuery(originalQuery, [
         semanticExpansions,
         shopLanguageTerms,
-        englishTerms,
       ])
     : originalQuery;
 
@@ -261,6 +268,7 @@ function parseRewrittenQuery(outputText: string, originalQuery: string) {
       originalQuery.toLocaleLowerCase("en-US"),
     catalogRelevant: parsed.catalogRelevant,
     analysis: {
+      sortIntent,
       intent,
       productType,
       attributes,
@@ -287,8 +295,10 @@ export async function rewriteSearchQuery({
   if (!isEnabled()) return fallback(cleanQuery, "DISABLED");
 
   const model = getRewriteModel();
+  const { searchLanguage } = await getShopSettings(shop);
+  if (!searchLanguage) return fallback(cleanQuery, "SHOP_LANGUAGE_NOT_CONFIGURED", model);
   const timeoutMs = getRewriteTimeoutMs();
-  const cacheKey = `${QUERY_REWRITE_CACHE_VERSION}\u0000${shop}\u0000${cleanQuery.toLocaleLowerCase("en-US")}`;
+  const cacheKey = `merchant-language-v1:${searchLanguage}:${QUERY_REWRITE_CACHE_VERSION}\u0000${shop}\u0000${cleanQuery.toLocaleLowerCase("en-US")}`;
   const cached = getCached(rewrittenQueryCache, cacheKey);
   if (cached) return cached;
 
@@ -303,6 +313,7 @@ export async function rewriteSearchQuery({
         rewritten: false,
         catalogRelevant: false,
         analysis: {
+          sortIntent: "RELEVANCE",
           intent: "find_product",
           productType: "",
           attributes: [],
@@ -322,14 +333,15 @@ export async function rewriteSearchQuery({
       {
         model,
         instructions: [
+          "Extract sortIntent: explicit cheapest/ascending price = PRICE_ASC; most expensive/descending price = PRICE_DESC; premium/luxury/cao cấp = PREMIUM; affordable/budget/giá rẻ = BUDGET; otherwise RELEVANCE. Negated premium or cheap preferences must not activate those modes. A numeric budget alone does not imply sorting. Never invent a numeric price boundary for premium or budget.",
+          "Preserve requested attributes in each useful translated product phrase. Keep expansions concise, at most 6 per language. For specific products use equivalents only; broader needs may include supported subcategories. Preserve negations. Premium describes a preference, not proof of quality from price. Do not claim catalog availability based solely on this title sample.",
           "You analyze and expand a shopper query for semantic product retrieval.",
-          "The result will be embedded and compared with product documents containing title, product type, vendor, tags, description, variants, and SKU.",
+          "The result will be embedded and compared with product documents containing title, product type, vendor, tags, description, variants, SKU, a faithful semantic identity, and English equivalents.",
           "Preserve the shopper's original terms and exact intent, including brand, model, audience, material, color, size, occasion, numeric constraints, and negation.",
           "First perform flexible semantic expansion in the shopper's language. Expand broad concepts into plausible product families, subcategories, aliases, and close shopping expressions instead of following one fixed synonym path.",
           "For example, 'áo mùa đông' may expand to áo khoác, áo len, áo nỉ, hoodie, áo phao, or other contextually suitable winter clothing; select expansions dynamically from the meaning and catalog evidence.",
           "Keep breadth proportional to the query: broaden umbrella needs, but do not replace a specific brand, model, product type, attribute, constraint, or negation with unrelated alternatives.",
-          "Then infer the dominant shop catalog language from the catalog title sample. Translate the useful semantic expansions and requested attributes into that shop language.",
-          "Also provide English equivalents, even when English is not the shopper or shop language. If the shop language is English, shopLanguageTerms and englishTerms may overlap.",
+          `The merchant explicitly selected shop language ${searchLanguage}. Always set shopLanguage to this exact code. Never infer shop language from catalog titles. semanticExpansions must stay in the shopper language. shopLanguageTerms must translate the original query and useful expansions with all attributes into the selected language when different; otherwise return an empty array. Return englishTerms as an empty array: no mandatory English translation.`,
           "Catalog titles are vocabulary clues and relevance evidence, not proof that a particular item exists or matches every requested attribute.",
           "Set catalogRelevant to false when the shopper clearly requests a product or category outside this shop's catalog, even if some words have weak similarity.",
           "When catalogRelevant is false, return empty semanticExpansions, shopLanguageTerms, and englishTerms.",
@@ -341,7 +353,7 @@ export async function rewriteSearchQuery({
           "Do not answer the shopper. The server will compose the final embedding input from all returned term groups.",
         ].join(" "),
         input: `SHOPPER_QUERY:\n${cleanQuery}\n\nSHOP_CATALOG_TITLE_SAMPLE:\n${catalogContext}`,
-        max_output_tokens: 480,
+        max_output_tokens: 1000,
         store: false,
         temperature: 0,
         text: {
@@ -352,6 +364,7 @@ export async function rewriteSearchQuery({
             schema: {
               type: "object",
               properties: {
+                sortIntent: { type: "string", enum: ["RELEVANCE", "PRICE_ASC", "PRICE_DESC", "PREMIUM", "BUDGET"] },
                 catalogRelevant: { type: "boolean" },
                 intent: { type: "string" },
                 productType: { type: "string" },
@@ -379,6 +392,7 @@ export async function rewriteSearchQuery({
                 decisionReason: { type: "string" },
               },
               required: [
+                "sortIntent",
                 "catalogRelevant",
                 "intent",
                 "productType",

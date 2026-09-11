@@ -13,6 +13,7 @@ export type SubscriptionSnapshot = {
 };
 
 export type ShopSettingsSnapshot = {
+  searchLanguage: string | null;
   shop: string;
   aiSearchEnabled: boolean;
   fallbackEnabled: boolean;

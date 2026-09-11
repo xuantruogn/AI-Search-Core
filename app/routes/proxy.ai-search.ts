@@ -3,7 +3,14 @@ import type { LoaderFunctionArgs } from "react-router";
 import { authenticate } from "../shopify.server";
 import { getActiveThemeMap } from "../services/theme/theme-map-lifecycle.server";
 import type { ThemeMap } from "../services/theme-map.server";
-import { semanticSearch } from "../services/search/semantic-search.server";
+import {
+  semanticSearch,
+  type SemanticSearchDiagnostics,
+} from "../services/search/semantic-search.server";
+import { recordSearchQueryLog } from "../services/search/search-analytics.server";
+import { parsePriceConstraint } from "../services/search/query-constraints.server";
+import { rewriteSearchQuery } from "../services/search/query-rewriter.server";
+import { filterSearchResultsByPrice } from "../services/search/search-price-filter.server";
 import { classifySearchRequest } from "../services/search/search-request-router.server";
 import {
   getActiveTheme,
@@ -34,7 +41,7 @@ const queryEmbeddingCache = new Map<
   { embedding: number[]; timestamp: number }
 >();
 const EMBEDDING_CACHE_TTL = 24 * 60 * 60 * 1000; // 24 hours
-const EMBEDDING_QUERY_PIPELINE_VERSION = "semantic-expansion-v2";
+const EMBEDDING_QUERY_PIPELINE_VERSION = "semantic-expansion-v3";
 
 function buildEmbeddingCacheKey(shop: string, query: string) {
   return `${EMBEDDING_QUERY_PIPELINE_VERSION}:${shop}:${query.toLowerCase().trim()}`;
@@ -186,7 +193,9 @@ async function getCachedThemePreflight(admin: any, shop: string) {
 // ==========================================
 type CandidateProduct = {
   id: string;
-  handle?: string;
+  handle: string;
+  rank: number;
+  score: number;
 };
 
 type PaginationResult = {
@@ -459,7 +468,12 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         "[PERF-PROXY] 2. Semantic Search (OpenAI/Vector Cache + Qdrant)",
       );
 
-      const cachedVector = getCachedQueryEmbedding(session.shop, query);
+      const preparedRewrite = await rewriteSearchQuery({ shop: session.shop, query });
+      const sortIntent = preparedRewrite.analysis.sortIntent;
+      const cachedVector = preparedRewrite.catalogRelevant && !preparedRewrite.fallbackReason
+        ? getCachedQueryEmbedding(session.shop, preparedRewrite.query) : null;
+      let queryVectorForAnalytics: number[] | null = cachedVector;
+      let searchDiagnostics: SemanticSearchDiagnostics | null = null;
       if (cachedVector) {
         console.log(
           `[AI Search] Cache Hit Vector cho từ khóa: "${query}" - BỎ QUA OpenAI API!`,
@@ -469,13 +483,15 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       // 1. KẾ THỪA GIỐNG FILE SEARCH.TSX CŨ: Lấy tối đa 1000 candidates từ Qdrant
 
       const rawSearchResults = await semanticSearch({
+        preparedRewrite,
         shop: session.shop,
         query,
         vectorOverride: cachedVector ?? undefined,
         limit: SEARCH_LIMIT, // Lấy toàn bộ kết quả phù hợp (up to 1000)
         onEmbeddingCreated: async (vector, metadata) => {
+          queryVectorForAnalytics = vector;
           if (vector && metadata.cacheable) {
-            setCachedQueryEmbedding(session.shop, query, vector);
+            setCachedQueryEmbedding(session.shop, preparedRewrite.query, vector);
           }
           try {
             await recordQueryEmbeddingConsumed(reservation);
@@ -486,14 +502,40 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
             );
           }
         },
+        onDiagnostics: (diagnostics) => {
+          searchDiagnostics = diagnostics;
+        },
       });
       console.timeEnd(
         "[PERF-PROXY] 2. Semantic Search (OpenAI/Vector Cache + Qdrant)",
       );
 
+      const priceConstraint = parsePriceConstraint(query);
+      let searchResults = rawSearchResults;
+      if (priceConstraint || sortIntent !== "RELEVANCE") {
+        try {
+          searchResults = await filterSearchResultsByPrice({
+            admin,
+            shop: session.shop,
+            results: rawSearchResults,
+            constraint: priceConstraint,
+            sortIntent,
+          });
+        } catch (error) {
+          // Numeric filters are strict. If Shopify cannot confirm live prices,
+          // fail closed instead of leaking products outside the budget.
+          searchResults = priceConstraint ? [] : rawSearchResults;
+          console.error("[AI Search] Hard price filter failed closed", {
+            shop: session.shop,
+            priceConstraint,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+
       // Lọc trùng ID để có danh sách candidate thực tế
       const seen = new Set<string>();
-      const allProducts: CandidateProduct[] = rawSearchResults.flatMap(
+      const allProducts: CandidateProduct[] = searchResults.flatMap(
         (result) => {
           const id =
             result.productId.match(
@@ -502,9 +544,48 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
           if (!id) return [];
           if (seen.has(id)) return [];
           seen.add(id);
-          return [{ id, handle: result.handle }];
+          return [
+            {
+              id,
+              handle: result.handle,
+              rank: seen.size,
+              score: result.score,
+            },
+          ];
         },
       );
+
+      let searchLogId: string | null = null;
+      if (requestedPage === 1 && searchDiagnostics) {
+        try {
+          searchLogId = await recordSearchQueryLog({
+            shop: session.shop,
+            query,
+            // Product ranks are the stronger signal when results exist. Keep
+            // the semantic vector only for zero-result query clustering.
+            queryVector:
+              allProducts.length === 0 ? queryVectorForAnalytics : null,
+            rankedProducts: allProducts.map((product) => ({
+              productId: product.id,
+              handle: product.handle,
+              rank: product.rank,
+              score: product.score,
+            })),
+            diagnostics: searchDiagnostics,
+            totalDurationMs: Date.now() - startedAt,
+          });
+        } catch (analyticsError) {
+          // Search analytics is best effort: never delay a shopper with an
+          // error response just because the merchant log could not be saved.
+          console.error("[AI Search] Search analytics log failed:", {
+            shop: session.shop,
+            error:
+              analyticsError instanceof Error
+                ? analyticsError.message
+                : String(analyticsError),
+          });
+        }
+      }
 
       // 2. PHÂN TRANG ĐỘNG HOÀN TOÀN:
       // Lấy pageSize từ client gửi lên (nếu có), nếu không có thì lấy mặc định theo cài đặt shop.
@@ -537,6 +618,11 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
           target_ids: pagination.targetIds,
           products: pagination.pageProducts,
           all_products: allProducts, // Trả về toàn bộ danh sách ID tìm được
+          applied_filters: {
+            sort_intent: sortIntent,
+            price: priceConstraint,
+          },
+          search_log_id: searchLogId,
           pagination: {
             current_page: pagination.currentPage,
             page_size: pagination.pageSize,
@@ -558,7 +644,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
       try {
         await commitSearchUsage(reservation, {
-          resultCount: rawSearchResults.length,
+          resultCount: allProducts.length,
           durationMs: Date.now() - startedAt,
           themeId: preflightMap.theme.gid,
           rendererSource: preflightMap.search.searchTemplate ?? "native-search",

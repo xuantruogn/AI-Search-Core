@@ -1,7 +1,7 @@
 import { createEmbedding, getEmbeddingModel } from "./embeddings.server";
 import { searchProductVectors } from "./vector-store.server";
 import { ensureProductCollection } from "./qdrant.server";
-import { rewriteSearchQuery } from "./query-rewriter.server";
+import { rewriteSearchQuery, type QueryRewriteResult } from "./query-rewriter.server";
 
 function readMinimumVectorScore() {
   const value = Number.parseFloat(
@@ -22,7 +22,17 @@ export type SearchResult = {
   score: number;
 };
 
+export type SemanticSearchDiagnostics = {
+  candidateCount: number;
+  topCandidateScore: number | null;
+  vectorThreshold: number;
+  embeddingCacheHit: boolean;
+  llmStatus: "SUCCESS" | "FALLBACK" | "CACHE_HIT" | "OUTSIDE_CATALOG";
+  llmFallbackReason: string | null;
+};
+
 export type SemanticSearchInput = {
+  preparedRewrite?: QueryRewriteResult;
   shop: string;
   query: string;
   limit?: number;
@@ -31,14 +41,17 @@ export type SemanticSearchInput = {
     vector: number[],
     metadata: { cacheable: boolean },
   ) => void | Promise<void>; // Trả về mảng vector và cho biết có an toàn để cache hay không
+  onDiagnostics?: (diagnostics: SemanticSearchDiagnostics) => void;
 };
 
 export async function semanticSearch({
+  preparedRewrite,
   shop,
   query,
   limit = 20,
   vectorOverride,
   onEmbeddingCreated,
+  onDiagnostics,
 }: SemanticSearchInput): Promise<SearchResult[]> {
   const cleanQuery = query.trim();
 
@@ -56,6 +69,9 @@ export async function semanticSearch({
   await ensureProductCollection();
 
   let queryVector: number[];
+  const minimumScore = readMinimumVectorScore();
+  let llmStatus: SemanticSearchDiagnostics["llmStatus"] = "CACHE_HIT";
+  let llmFallbackReason: string | null = null;
 
   // 1. Nếu có vectorOverride từ Cache -> Dùng lại ngay, không gọi OpenAI API
   if (
@@ -67,7 +83,9 @@ export async function semanticSearch({
   } else {
     // 2. Rewrite theo vocabulary của đúng shop trước khi tạo embedding.
     // Nếu LLM lỗi/timeout, service tự trả lại cleanQuery để search vẫn hoạt động.
-    const rewrite = await rewriteSearchQuery({ shop, query: cleanQuery });
+    const rewrite = preparedRewrite ?? await rewriteSearchQuery({ shop, query: cleanQuery });
+    llmStatus = rewrite.fallbackReason ? "FALLBACK" : "SUCCESS";
+    llmFallbackReason = rewrite.fallbackReason;
 
     if (shouldLogEmbeddingInput()) {
       const traceMessage = rewrite.fallbackReason
@@ -94,6 +112,14 @@ export async function semanticSearch({
         rewriteModel: rewrite.model,
         reason: rewrite.analysis.decisionReason,
         fallbackReason: rewrite.fallbackReason,
+      });
+      onDiagnostics?.({
+        candidateCount: 0,
+        topCandidateScore: null,
+        vectorThreshold: minimumScore,
+        embeddingCacheHit: false,
+        llmStatus: "OUTSIDE_CATALOG",
+        llmFallbackReason,
       });
       return [];
     }
@@ -140,7 +166,6 @@ export async function semanticSearch({
     limit,
   });
 
-  const minimumScore = readMinimumVectorScore();
   const relevantResults = results.filter(
     (result) => Number.isFinite(result.score) && result.score >= minimumScore,
   );
@@ -153,6 +178,19 @@ export async function semanticSearch({
       handle: result.handle,
       score: result.score,
     })),
+  });
+
+  const rawTopScore = results[0]?.score;
+  onDiagnostics?.({
+    candidateCount: results.length,
+    topCandidateScore:
+      typeof rawTopScore === "number" && Number.isFinite(rawTopScore)
+        ? rawTopScore
+        : null,
+    vectorThreshold: minimumScore,
+    embeddingCacheHit: Boolean(vectorOverride),
+    llmStatus,
+    llmFallbackReason,
   });
 
   return relevantResults.map((result) => ({

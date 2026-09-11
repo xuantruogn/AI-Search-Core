@@ -1,7 +1,9 @@
 import { createHash } from "node:crypto";
+import { getShopSettings } from "../commerce/shop-registry.server";
 
 import type { ProductForIndex } from "./product-document.server";
 import { buildProductDocument } from "./product-document.server";
+import { prepareProductEmbeddingInput } from "./product-embedding-input.server";
 import { createEmbedding } from "../search/embeddings.server";
 import {
   deleteProductVectorForShop,
@@ -50,8 +52,16 @@ export function getQdrantPointId(shop: string, productId: string): string {
   return getTenantProductVectorPointId(shop, productId);
 }
 
-export function createProductDocumentHash(document: string): string {
+const PRODUCT_EMBEDDING_PIPELINE_VERSION = "semantic-product-v2";
+
+function createLegacyProductDocumentHash(document: string): string {
   return createHash("sha256").update(document, "utf8").digest("hex");
+}
+
+export function createProductDocumentHash(document: string, language: string | null = null): string {
+  return createHash("sha256")
+    .update(`merchant-language-v1:${language ?? "original"}:${PRODUCT_EMBEDDING_PIPELINE_VERSION}\u0000${document}`, "utf8")
+    .digest("hex");
 }
 
 export async function indexProduct({
@@ -65,7 +75,8 @@ export async function indexProduct({
     throw new Error(`Product document is empty: ${product.id}`);
   }
 
-  const documentHash = createProductDocumentHash(document);
+  const { searchLanguage } = await getShopSettings(shop);
+  const documentHash = createProductDocumentHash(document, searchLanguage);
   const pointId = getQdrantPointId(shop, product.id);
   const [rawExistingVector, registryProduct] = await Promise.all([
     getProductVectorForShop({ shop, productId: product.id, withVector: true }),
@@ -77,6 +88,8 @@ export async function indexProduct({
     record: rawExistingVector,
   });
   const existingVector = existingRecord?.payload ?? null;
+  const isPipelineMigration =
+    existingVector?.documentHash === createLegacyProductDocumentHash(document);
   const entitlement = await getShopEntitlement(shop);
   const alreadyIndexed =
     existingVector?.shop === shop || Boolean(registryProduct?.hasVector);
@@ -214,7 +227,9 @@ export async function indexProduct({
     productSlotReserved = slot.reserved;
   }
 
-  const countAsVectorUpdate = reason !== "INITIAL_SYNC";
+  // An internal embedding-format migration should not consume the merchant's
+  // monthly product-update quota when the underlying product data is unchanged.
+  const countAsVectorUpdate = reason !== "INITIAL_SYNC" && !isPipelineMigration;
   const reservationResult = await reserveProductEmbeddingUsage({
     shop,
     periodId: entitlement.usage.id,
@@ -261,7 +276,22 @@ export async function indexProduct({
   try {
     console.log("[AI Search] Embedding product:", product.handle);
 
-    const vector = await createEmbedding(document);
+    const embeddingInput = await prepareProductEmbeddingInput(document, searchLanguage);
+    const logEmbeddingInput =
+      process.env.AI_SEARCH_LOG_EMBEDDING_INPUT?.trim().toLowerCase() ?? "";
+    if (["1", "true", "yes", "on"].includes(logEmbeddingInput)) {
+      console.log("[AI Search][PRODUCT EMBEDDING INPUT]", {
+        shop,
+        productId: product.id,
+        handle: product.handle,
+        enriched: embeddingInput.enriched,
+        enrichmentModel: embeddingInput.model,
+        analysis: embeddingInput.analysis,
+        input: embeddingInput.document,
+      });
+    }
+
+    const vector = await createEmbedding(embeddingInput.document);
 
     try {
       await recordProductEmbeddingConsumed(reservation);
