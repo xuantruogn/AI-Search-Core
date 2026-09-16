@@ -1,6 +1,6 @@
 # Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
 
-client_id = "55a761df3edbba15b8171242a3374d1a"
+client_id = "e6b610e31c77e8bc9274b137dbee44c5"
 application_url = "https://example.com"
 embedded = true
 name = "AI-Buyense"

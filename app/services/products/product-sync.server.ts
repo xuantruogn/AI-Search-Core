@@ -13,7 +13,11 @@ type AdminGraphqlClient = {
   ) => Promise<Response>;
 };
 
-type ShopifyProductStatus = "ACTIVE" | "DRAFT" | "ARCHIVED" | "UNLISTED";
+type ShopifyProductStatus =
+  | "ACTIVE"
+  | "DRAFT"
+  | "ARCHIVED"
+  | "UNLISTED";
 
 type ShopifyProductNode = {
   id: string;
@@ -27,10 +31,23 @@ type ShopifyProductNode = {
   status?: ShopifyProductStatus;
   publishedAt?: string | null;
 
+  priceRangeV2?: {
+    minVariantPrice?: {
+      amount?: string;
+      currencyCode?: string;
+    };
+
+    maxVariantPrice?: {
+      amount?: string;
+      currencyCode?: string;
+    };
+  };
+
   variants: {
     nodes: Array<{
       title: string;
       sku: string | null;
+      barcode: string | null;
     }>;
   };
 };
@@ -79,25 +96,90 @@ export type ProductPage = {
 // - products/update
 // =====================================================
 
-function mapShopifyProduct(product: ShopifyProductNode): ProductForIndex {
-  const variants: ProductVariantForIndex[] = product.variants.nodes.map(
+function mapShopifyProduct(
+  product: ShopifyProductNode,
+): ProductForIndex {
+  /*
+   * ProductVariantForIndex hiện tại chưa cần barcode
+   * cho semantic document.
+   *
+   * Nhưng runtime object vẫn giữ barcode để
+   * Theme Search Transport Key sử dụng.
+   */
+  const variants: Array<
+    ProductVariantForIndex & {
+      barcode: string | null;
+    }
+  > = product.variants.nodes.map(
     (variant) => ({
       title: variant.title,
       sku: variant.sku,
+      barcode: variant.barcode,
     }),
   );
 
+  const minPrice =
+    Number.parseFloat(
+      product.priceRangeV2
+        ?.minVariantPrice
+        ?.amount ?? "",
+    );
+
+  const maxPrice =
+    Number.parseFloat(
+      product.priceRangeV2
+        ?.maxVariantPrice
+        ?.amount ?? "",
+    );
+
+  const currencyCode =
+    product.priceRangeV2
+      ?.minVariantPrice
+      ?.currencyCode
+      ?.toUpperCase() ??
+    "";
+
   return {
     id: product.id,
-    handle: product.handle,
-    title: product.title,
 
-    description: product.description,
-    vendor: product.vendor,
-    productType: product.productType,
+    handle:
+      product.handle,
 
-    tags: product.tags,
+    title:
+      product.title,
+
+    description:
+      product.description,
+
+    vendor:
+      product.vendor,
+
+    productType:
+      product.productType,
+
+    tags:
+      product.tags,
+
     variants,
+
+    priceRange:
+      Number.isFinite(
+        minPrice,
+      ) &&
+      Number.isFinite(
+        maxPrice,
+      ) &&
+      currencyCode
+        ? {
+            min:
+              minPrice,
+
+            max:
+              maxPrice,
+
+            currencyCode,
+          }
+        : null,
   };
 }
 
@@ -115,12 +197,25 @@ export async function fetchProductsForIndex(
     after?: string | null;
   },
 ): Promise<ProductPage> {
-  const first = Math.max(1, Math.min(Math.trunc(options?.first ?? 50), 100));
+  const first =
+    Math.max(
+      1,
+      Math.min(
+        Math.trunc(
+          options?.first ??
+            50,
+        ),
+        100,
+      ),
+    );
 
-  const after = options?.after ?? null;
+  const after =
+    options?.after ??
+    null;
 
-  const response = await admin.graphql(
-    `#graphql
+  const response =
+    await admin.graphql(
+      `#graphql
         query ProductsForAiSearch(
           $first: Int!
           $after: String
@@ -142,10 +237,23 @@ export async function fetchProductsForIndex(
               status
               publishedAt
 
+              priceRangeV2 {
+                minVariantPrice {
+                  amount
+                  currencyCode
+                }
+
+                maxVariantPrice {
+                  amount
+                  currencyCode
+                }
+              }
+
               variants(first: 100) {
                 nodes {
                   title
                   sku
+                  barcode
                 }
               }
             }
@@ -157,21 +265,30 @@ export async function fetchProductsForIndex(
           }
         }
       `,
-    {
-      variables: {
-        first,
-        after,
+      {
+        variables: {
+          first,
+          after,
+        },
       },
-    },
-  );
+    );
 
-  const json = (await response.json()) as ProductsResponse;
+  const json =
+    (await response.json()) as ProductsResponse;
 
-  if (!response.ok || json.errors?.length) {
-    const detail = json.errors
-      ?.map((error) => error.message)
-      .filter(Boolean)
-      .join("; ");
+  if (
+    !response.ok ||
+    json.errors?.length
+  ) {
+    const detail =
+      json.errors
+        ?.map(
+          (error) =>
+            error.message,
+        )
+        .filter(Boolean)
+        .join("; ");
+
     throw new Error(
       detail
         ? `Shopify products query failed: ${detail}`
@@ -179,31 +296,45 @@ export async function fetchProductsForIndex(
     );
   }
 
-  const connection = json.data?.products;
+  const connection =
+    json.data?.products;
 
   if (!connection) {
-    throw new Error("Shopify products query returned no products connection");
+    throw new Error(
+      "Shopify products query returned no products connection",
+    );
   }
 
   // `published_status:published` is the primary Shopify-side filter, but keep
   // the same local visibility predicate used by webhook/search revalidation as
   // a second safety fence. This also protects against a future/scheduled
   // `publishedAt` value being treated as live before its effective time.
-  const products = connection.nodes
-    .filter((product) =>
-      isSearchableOnlineStoreProduct({
-        status: product.status,
-        publishedAt: product.publishedAt,
-      }),
-    )
-    .map(mapShopifyProduct);
+  const products =
+    connection.nodes
+      .filter(
+        (product) =>
+          isSearchableOnlineStoreProduct({
+            status:
+              product.status,
+
+            publishedAt:
+              product.publishedAt,
+          }),
+      )
+      .map(
+        mapShopifyProduct,
+      );
 
   return {
     products,
 
-    hasNextPage: connection.pageInfo.hasNextPage,
+    hasNextPage:
+      connection.pageInfo
+        .hasNextPage,
 
-    endCursor: connection.pageInfo.endCursor,
+    endCursor:
+      connection.pageInfo
+        .endCursor,
   };
 }
 
@@ -212,52 +343,105 @@ export async function fetchProductsForIndex(
 //
 // Full scans can race with product webhooks. Before deleting a registry/vector
 // row that looks stale by timestamp, ask Shopify (the source of truth) whether
-// that product is still searchable on Online Store (ACTIVE + published). `nodes(ids:)` keeps this to one GraphQL request
-// per cleanup batch instead of one request per product.
+// that product is still searchable on Online Store (ACTIVE + published).
+// `nodes(ids:)` keeps this to one GraphQL request per cleanup batch instead of
+// one request per product.
 // =====================================================
 
-export type ProductPresenceStatus = "SEARCHABLE" | "NOT_SEARCHABLE" | "MISSING";
+export type ProductPresenceStatus =
+  | "SEARCHABLE"
+  | "NOT_SEARCHABLE"
+  | "MISSING";
 
 export async function fetchProductPresenceByIds(
   admin: AdminGraphqlClient,
   productIds: string[],
-): Promise<Map<string, ProductPresenceStatus>> {
-  const ids = [...new Set(productIds.map((id) => id.trim()))]
+): Promise<
+  Map<
+    string,
+    ProductPresenceStatus
+  >
+> {
+  const ids = [
+    ...new Set(
+      productIds.map(
+        (id) =>
+          id.trim(),
+      ),
+    ),
+  ]
     .filter(Boolean)
     .slice(0, 100);
 
-  const result = new Map<string, ProductPresenceStatus>();
-  if (ids.length === 0) return result;
+  const result =
+    new Map<
+      string,
+      ProductPresenceStatus
+    >();
 
-  const response = await admin.graphql(
-    `#graphql
-      query AiSearchProductPresence($ids: [ID!]!) {
-        nodes(ids: $ids) {
-          ... on Product {
-            id
-            status
-            publishedAt
-            handle
-            title
+  if (
+    ids.length === 0
+  ) {
+    return result;
+  }
+
+  const response =
+    await admin.graphql(
+      `#graphql
+        query AiSearchProductPresence(
+          $ids: [ID!]!
+        ) {
+          nodes(ids: $ids) {
+            ... on Product {
+              id
+              status
+              publishedAt
+              handle
+              title
+            }
           }
         }
-      }
-    `,
-    { variables: { ids } },
-  );
+      `,
+      {
+        variables: {
+          ids,
+        },
+      },
+    );
 
-  const json = (await response.json()) as {
-    data?: {
-      nodes?: Array<{ id?: string; status?: string; publishedAt?: string | null; handle?: string; title?: string } | null>;
+  const json =
+    (await response.json()) as {
+      data?: {
+        nodes?: Array<
+          | {
+              id?: string;
+              status?: string;
+              publishedAt?: string | null;
+              handle?: string;
+              title?: string;
+            }
+          | null
+        >;
+      };
+
+      errors?: Array<{
+        message?: string;
+      }>;
     };
-    errors?: Array<{ message?: string }>;
-  };
 
-  if (!response.ok || json.errors?.length) {
-    const detail = json.errors
-      ?.map((error) => error.message)
-      .filter(Boolean)
-      .join("; ");
+  if (
+    !response.ok ||
+    json.errors?.length
+  ) {
+    const detail =
+      json.errors
+        ?.map(
+          (error) =>
+            error.message,
+        )
+        .filter(Boolean)
+        .join("; ");
+
     throw new Error(
       detail
         ? `Shopify product-presence query failed: ${detail}`
@@ -265,15 +449,38 @@ export async function fetchProductPresenceByIds(
     );
   }
 
-  for (const id of ids) result.set(id, "MISSING");
+  for (
+    const id
+    of ids
+  ) {
+    result.set(
+      id,
+      "MISSING",
+    );
+  }
 
-  for (const node of json.data?.nodes ?? []) {
-    if (!node?.id || !result.has(node.id)) continue;
+  for (
+    const node
+    of json.data
+      ?.nodes ??
+    []
+  ) {
+    if (
+      !node?.id ||
+      !result.has(node.id)
+    ) {
+      continue;
+    }
+
     result.set(
       node.id,
+
       isSearchableOnlineStoreProduct({
-        status: node.status,
-        publishedAt: node.publishedAt,
+        status:
+          node.status,
+
+        publishedAt:
+          node.publishedAt,
       })
         ? "SEARCHABLE"
         : "NOT_SEARCHABLE",
@@ -307,13 +514,20 @@ export async function fetchProductPresenceByIds(
 export async function fetchProductForIndexById(
   admin: AdminGraphqlClient,
   productId: string,
-): Promise<ProductForIndex | null> {
-  if (!productId.trim()) {
-    throw new Error("Product ID cannot be empty");
+): Promise<
+  ProductForIndex | null
+> {
+  if (
+    !productId.trim()
+  ) {
+    throw new Error(
+      "Product ID cannot be empty",
+    );
   }
 
-  const response = await admin.graphql(
-    `#graphql
+  const response =
+    await admin.graphql(
+      `#graphql
         query ProductForAiSearch(
           $id: ID!
         ) {
@@ -328,29 +542,52 @@ export async function fetchProductForIndexById(
             status
             publishedAt
 
+            priceRangeV2 {
+              minVariantPrice {
+                amount
+                currencyCode
+              }
+
+              maxVariantPrice {
+                amount
+                currencyCode
+              }
+            }
+
             variants(first: 100) {
               nodes {
                 title
                 sku
+                barcode
               }
             }
           }
         }
       `,
-    {
-      variables: {
-        id: productId,
+      {
+        variables: {
+          id:
+            productId,
+        },
       },
-    },
-  );
+    );
 
-  const json = (await response.json()) as ProductResponse;
+  const json =
+    (await response.json()) as ProductResponse;
 
-  if (!response.ok || json.errors?.length) {
-    const detail = json.errors
-      ?.map((error) => error.message)
-      .filter(Boolean)
-      .join("; ");
+  if (
+    !response.ok ||
+    json.errors?.length
+  ) {
+    const detail =
+      json.errors
+        ?.map(
+          (error) =>
+            error.message,
+        )
+        .filter(Boolean)
+        .join("; ");
+
     throw new Error(
       detail
         ? `Shopify product query failed: ${detail}`
@@ -358,7 +595,8 @@ export async function fetchProductForIndexById(
     );
   }
 
-  const product = json.data?.product;
+  const product =
+    json.data?.product;
 
   if (!product) {
     return null;
@@ -366,25 +604,40 @@ export async function fetchProductForIndexById(
 
   // Chỉ ACTIVE + Online Store published products được phép tồn tại
   // trong AI Search index. ACTIVE nhưng unpublished/unlisted vẫn phải native.
-  if (!isSearchableOnlineStoreProduct({
-    status: product.status,
-    publishedAt: product.publishedAt,
-  })) {
-    console.log("[AI Search] Product is not storefront-searchable:", {
-      productId: product.id,
+  if (
+    !isSearchableOnlineStoreProduct({
+      status:
+        product.status,
 
-      handle: product.handle,
+      publishedAt:
+        product.publishedAt,
+    })
+  ) {
+    console.log(
+      "[AI Search] Product is not storefront-searchable:",
+      {
+        productId:
+          product.id,
 
-      status: product.status,
-      publishedAt: product.publishedAt ?? null,
-    });
+        handle:
+          product.handle,
+
+        status:
+          product.status,
+
+        publishedAt:
+          product.publishedAt ??
+          null,
+      },
+    );
 
     return null;
   }
 
-  return mapShopifyProduct(product);
+  return mapShopifyProduct(
+    product,
+  );
 }
-
 
 export type SearchableProductSnapshot = {
   productId: string;
@@ -404,63 +657,116 @@ export type SearchableProductSnapshot = {
 export async function fetchSearchableProductSnapshotsByIds(
   admin: AdminGraphqlClient,
   productIds: string[],
-): Promise<Map<string, SearchableProductSnapshot>> {
-  const ids = [...new Set(productIds.map((id) => id.trim()))]
+): Promise<
+  Map<
+    string,
+    SearchableProductSnapshot
+  >
+> {
+  const ids = [
+    ...new Set(
+      productIds.map(
+        (id) =>
+          id.trim(),
+      ),
+    ),
+  ]
     .filter(Boolean)
     .slice(0, 100);
 
-  const result = new Map<string, SearchableProductSnapshot>();
-  if (ids.length === 0) return result;
+  const result =
+    new Map<
+      string,
+      SearchableProductSnapshot
+    >();
 
-  const response = await admin.graphql(
-    `#graphql
-      query AiSearchStorefrontProductVisibility($ids: [ID!]!) {
-        nodes(ids: $ids) {
-          ... on Product {
-            id
-            handle
-            title
-            status
-            publishedAt
-            priceRangeV2 {
-              minVariantPrice {
-                amount
-                currencyCode
-              }
-              maxVariantPrice {
-                amount
-                currencyCode
+  if (
+    ids.length === 0
+  ) {
+    return result;
+  }
+
+  const response =
+    await admin.graphql(
+      `#graphql
+        query AiSearchStorefrontProductVisibility(
+          $ids: [ID!]!
+        ) {
+          nodes(ids: $ids) {
+            ... on Product {
+              id
+              handle
+              title
+              status
+              publishedAt
+
+              priceRangeV2 {
+                minVariantPrice {
+                  amount
+                  currencyCode
+                }
+
+                maxVariantPrice {
+                  amount
+                  currencyCode
+                }
               }
             }
           }
         }
-      }
-    `,
-    { variables: { ids } },
-  );
+      `,
+      {
+        variables: {
+          ids,
+        },
+      },
+    );
 
-  const json = (await response.json()) as {
-    data?: {
-      nodes?: Array<{
-        id?: string;
-        handle?: string;
-        title?: string;
-        status?: string;
-        publishedAt?: string | null;
-        priceRangeV2?: {
-          minVariantPrice?: { amount?: string; currencyCode?: string };
-          maxVariantPrice?: { amount?: string; currencyCode?: string };
-        };
-      } | null>;
+  const json =
+    (await response.json()) as {
+      data?: {
+        nodes?: Array<
+          | {
+              id?: string;
+              handle?: string;
+              title?: string;
+              status?: string;
+              publishedAt?: string | null;
+
+              priceRangeV2?: {
+                minVariantPrice?: {
+                  amount?: string;
+                  currencyCode?: string;
+                };
+
+                maxVariantPrice?: {
+                  amount?: string;
+                  currencyCode?: string;
+                };
+              };
+            }
+          | null
+        >;
+      };
+
+      errors?: Array<{
+        message?: string;
+      }>;
     };
-    errors?: Array<{ message?: string }>;
-  };
 
-  if (!response.ok || json.errors?.length) {
-    const detail = json.errors
-      ?.map((error) => error.message)
-      .filter(Boolean)
-      .join("; ");
+  if (
+    !response.ok ||
+    json.errors?.length
+  ) {
+    const detail =
+      json.errors
+        ?.map(
+          (error) =>
+            error.message,
+        )
+        .filter(Boolean)
+        .join("; ");
+
     throw new Error(
       detail
         ? `Shopify storefront-product validation failed: ${detail}`
@@ -468,38 +774,76 @@ export async function fetchSearchableProductSnapshotsByIds(
     );
   }
 
-  for (const node of json.data?.nodes ?? []) {
-    const minVariantPrice = Number.parseFloat(
-      node?.priceRangeV2?.minVariantPrice?.amount ?? "",
-    );
-    const maxVariantPrice = Number.parseFloat(
-      node?.priceRangeV2?.maxVariantPrice?.amount ?? "",
-    );
+  for (
+    const node
+    of json.data
+      ?.nodes ??
+    []
+  ) {
+    const minVariantPrice =
+      Number.parseFloat(
+        node?.priceRangeV2
+          ?.minVariantPrice
+          ?.amount ??
+          "",
+      );
+
+    const maxVariantPrice =
+      Number.parseFloat(
+        node?.priceRangeV2
+          ?.maxVariantPrice
+          ?.amount ??
+          "",
+      );
+
     const currencyCode =
-      node?.priceRangeV2?.minVariantPrice?.currencyCode?.toUpperCase() ?? "";
+      node?.priceRangeV2
+        ?.minVariantPrice
+        ?.currencyCode
+        ?.toUpperCase() ??
+      "";
+
     if (
       !node?.id ||
       !node.handle ||
       !node.title ||
-      !Number.isFinite(minVariantPrice) ||
-      !Number.isFinite(maxVariantPrice) ||
+      !Number.isFinite(
+        minVariantPrice,
+      ) ||
+      !Number.isFinite(
+        maxVariantPrice,
+      ) ||
       !currencyCode ||
       !isSearchableOnlineStoreProduct({
-        status: node.status,
-        publishedAt: node.publishedAt,
+        status:
+          node.status,
+
+        publishedAt:
+          node.publishedAt,
       })
     ) {
       continue;
     }
 
-    result.set(node.id, {
-      productId: node.id,
-      handle: node.handle,
-      title: node.title,
-      minVariantPrice,
-      maxVariantPrice,
-      currencyCode,
-    });
+    result.set(
+      node.id,
+      {
+        productId:
+          node.id,
+
+        handle:
+          node.handle,
+
+        title:
+          node.title,
+
+        minVariantPrice,
+
+        maxVariantPrice,
+
+        currencyCode,
+      },
+    );
   }
 
   return result;

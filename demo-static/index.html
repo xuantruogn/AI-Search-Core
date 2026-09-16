@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="robots" content="noindex,nofollow,noarchive"><meta name="referrer" content="no-referrer">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>AI‑Buyense — Product Demo</title>
+  <meta name="description" content="Bản demo tĩnh AI Search Bridge cho Shopify.">
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%23008060'/%3E%3Cpath d='M18 45V19h8l12 15V19h8v26h-8L26 30v15z' fill='white'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="appShell">
+    <aside class="sidebar">
+      <div class="brand"><span class="brandMark">AI</span><span><strong>AI‑Buyense</strong><small>Search intelligence</small></span></div>
+      <nav aria-label="Điều hướng demo">
+        <button class="navItem active" data-page="dashboard"><span>⌂</span>Dashboard</button>
+        <button class="navItem" data-page="search"><span>⌕</span>Thử AI Search</button>
+        <button class="navItem" data-page="catalog"><span>▦</span>Catalog &amp; Vector</button>
+        <button class="navItem" data-page="analytics"><span>⌁</span>Search Analytics</button>
+        <button class="navItem" data-page="usage"><span>◴</span>Usage &amp; Logs</button>
+        <button class="navItem" data-page="billing"><span>◇</span>Plans &amp; Billing</button>
+        <button class="navItem" data-page="settings"><span>⚙</span>Settings</button>
+      </nav>
+      <div class="demoStamp"><span>STATIC DEMO</span><p>Dữ liệu giả lập, không kết nối cửa hàng thật.</p></div>
+      <div class="merchant"><span class="avatar">AB</span><span><strong>add-get-d-test</strong><small>Pro plan · Active</small></span></div>
+    </aside>
+    <div class="workspace">
+      <header class="topbar">
+        <button id="menuButton" class="menuButton" aria-label="Mở menu">☰</button>
+        <div class="crumb"><span>Ứng dụng</span><b>/</b><strong id="pageCrumb">Dashboard</strong></div>
+        <div class="topActions"><span class="system"><i></i>AI Search đang hoạt động</span><button class="ghostButton" data-action="notify">Thông báo <b>2</b></button><span class="userAvatar">T</span></div>
+      </header>
+      <main id="app" tabindex="-1"></main>
+    </div>
+  </div>
+  <div id="toast" class="toast" role="status" hidden></div>
+  <script src="app.js"></script>
+</body>
+</html>

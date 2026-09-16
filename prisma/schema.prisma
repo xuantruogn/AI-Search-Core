@@ -74,14 +74,14 @@ model AiSearchShop {
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
-  subscription AiSearchSubscription?
-  settings     AiSearchShopSettings?
-  usagePeriods AiSearchUsagePeriod[]
-  usageEvents  AiSearchUsageEvent[]
+  subscription      AiSearchSubscription?
+  settings          AiSearchShopSettings?
+  usagePeriods      AiSearchUsagePeriod[]
+  usageEvents       AiSearchUsageEvent[]
   usageReservations AiSearchUsageReservation[]
-  queryLogs    AiSearchQueryLog[]
-  products     AiSearchIndexedProduct[]
-  catalogJobs  AiSearchCatalogSyncJob[]
+  queryLogs         AiSearchQueryLog[]
+  products          AiSearchIndexedProduct[]
+  catalogJobs       AiSearchCatalogSyncJob[]
 }
 
 model AiSearchSubscription {
@@ -89,7 +89,7 @@ model AiSearchSubscription {
   shop                  String    @unique
   plan                  String    @default("NONE")
   status                String    @default("INACTIVE")
-  planHandle             String?
+  planHandle            String?
   shopifySubscriptionId String?
   billingPeriodStart    DateTime?
   billingPeriodEnd      DateTime?
@@ -136,7 +136,7 @@ model AiSearchUsagePeriod {
   createdAt             DateTime @default(now())
   updatedAt             DateTime @updatedAt
 
-  shopRecord AiSearchShop       @relation(fields: [shop], references: [shop], onDelete: Cascade)
+  shopRecord   AiSearchShop               @relation(fields: [shop], references: [shop], onDelete: Cascade)
   events       AiSearchUsageEvent[]
   reservations AiSearchUsageReservation[]
 
@@ -165,23 +165,26 @@ model AiSearchUsageEvent {
 }
 
 model AiSearchQueryLog {
-  id                     String   @id @default(cuid())
-  shop                   String
-  query                  String
-  normalizedQuery        String
-  queryHash              String
-  queryVectorJson        String?
-  rankedProductsJson     String
-  resultCount            Int      @default(0)
-  candidateCount         Int      @default(0)
-  topScore               Float?
-  topCandidateScore      Float?
-  vectorThreshold        Float
-  embeddingCacheHit      Boolean  @default(false)
-  llmStatus              String
-  llmFallbackReason      String?
-  totalDurationMs        Int
-  createdAt              DateTime @default(now())
+  id                  String   @id @default(cuid())
+  shop                String
+  query               String
+  normalizedQuery     String
+  queryHash           String
+  queryVectorJson     String?
+  analyzedQuery       String?
+  llmAnalysisJson     String?
+  selectedContextJson String?
+  rankedProductsJson  String
+  resultCount         Int      @default(0)
+  candidateCount      Int      @default(0)
+  topScore            Float?
+  topCandidateScore   Float?
+  vectorThreshold     Float
+  embeddingCacheHit   Boolean  @default(false)
+  llmStatus           String
+  llmFallbackReason   String?
+  totalDurationMs     Int
+  createdAt           DateTime @default(now())
 
   shopRecord AiSearchShop         @relation(fields: [shop], references: [shop], onDelete: Cascade)
   clicks     AiSearchQueryClick[]
@@ -206,7 +209,6 @@ model AiSearchQueryClick {
   @@index([shop, createdAt])
   @@index([searchLogId, createdAt])
 }
-
 
 model AiSearchUsageReservation {
   id                  String    @id
@@ -235,21 +237,22 @@ model AiSearchUsageReservation {
 }
 
 model AiSearchIndexedProduct {
-  id            Int       @id @default(autoincrement())
-  shop          String
-  productId     String
-  handle        String
-  title         String
-  status        String    @default("INDEXED")
-  hasVector     Boolean   @default(false)
-  documentHash  String?
-  lastIndexedAt    DateTime?
-  lastSeenAt       DateTime  @default(now())
+  id                Int       @id @default(autoincrement())
+  shop              String
+  productId         String
+  handle            String
+  title             String
+  status            String    @default("INDEXED")
+  hasVector         Boolean   @default(false)
+  documentHash      String?
+  lastIndexedAt     DateTime?
+  lastSeenAt        DateTime  @default(now())
   lastCatalogSeenAt DateTime?
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
 
-  shopRecord AiSearchShop @relation(fields: [shop], references: [shop], onDelete: Cascade)
+  shopRecord   AiSearchShop              @relation(fields: [shop], references: [shop], onDelete: Cascade)
+  contextTerms AiSearchShopContextTerm[]
 
   @@unique([shop, productId])
   @@index([shop, status])
@@ -289,7 +292,6 @@ model AiSearchCatalogSyncJob {
   @@index([status, updatedAt])
 }
 
-
 model ShopThemeConfig {
   shop            String   @id
   themeId         String
@@ -297,4 +299,132 @@ model ShopThemeConfig {
   activeThemeJson String
   themeMapJson    String
   updatedAt       DateTime @updatedAt
+}
+
+// =====================================================
+// THEME MAP V4 - PERSISTENT PER SHOP / MAIN THEME
+// =====================================================
+//
+// mapJson is the latest map attempt for the current theme snapshot.
+// verifiedMapJson preserves the last VERIFIED map even when a later rebuild
+// becomes UNSUPPORTED. The lifecycle never renders a stale verified backup;
+// it is retained only for recovery/debug/rollback tooling.
+model AiSearchThemeMapV4 {
+  id               Int     @id @default(autoincrement())
+  shop             String
+  themeId          String
+  themeGid         String
+  themeName        String?
+  schemaVersion    Int     @default(4)
+  mapStatus        String
+  sourceMode       String  @default("COMPILER")
+  themeVersionKey  String
+  fingerprint      String
+  mapJson          String
+  dependenciesJson String
+  failureReason    String?
+
+  verifiedThemeVersionKey  String?
+  verifiedFingerprint      String?
+  verifiedMapJson          String?
+  verifiedDependenciesJson String?
+
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  lastValidatedAt DateTime?
+  lastUsedAt      DateTime?
+
+  @@unique([shop, themeId])
+  @@index([shop, mapStatus])
+  @@index([shop, updatedAt])
+}
+
+model AiSearchResultReceipt {
+  receiptId          String   @id
+  shop               String
+  query              String
+  searchLogId        String?
+  rankedProductsJson String
+  total              Int
+  createdAt          DateTime @default(now())
+  expiresAt          DateTime
+
+  @@index([shop, expiresAt])
+  @@index([expiresAt])
+}
+
+// Semantic vocabulary built only while products are synchronized. Search-time
+// code reads this compact index instead of sending catalog data to the query LLM.
+model AiSearchShopContextTerm {
+  id              Int      @id @default(autoincrement())
+  shop            String
+  productId       String
+  kind            String
+  value           String
+  normalizedValue String
+  createdAt       DateTime @default(now())
+
+  productRecord AiSearchIndexedProduct @relation(fields: [shop, productId], references: [shop, productId], onDelete: Cascade)
+
+  @@unique([shop, productId, kind, normalizedValue])
+  @@index([shop, kind])
+  @@index([shop, normalizedValue])
+}
+model AiSearchRenderTransportKey {
+  id              Int      @id @default(autoincrement())
+
+  shop            String
+  productId       String
+
+  /**
+   * Loại signature.
+   *
+   * VARIANT_SKU
+   * VARIANT_BARCODE
+   * TITLE_ONLY
+   * TITLE_VENDOR
+   * TITLE_PRODUCT_TYPE
+   * TITLE_VENDOR_PRODUCT_TYPE
+   * TITLE_VENDOR_PRODUCT_TYPE_TAG
+   */
+  kind            String
+
+  /**
+   * Giá trị canonical dùng để so unique giữa các product.
+   *
+   * Ví dụ:
+   *
+   * selling plans ski wax\u001fadd-get-d-test\u001faccessories
+   */
+  signature       String
+
+  /**
+   * Shopify Storefront Search clause đã compile sẵn.
+   *
+   * Ví dụ:
+   *
+   * (title:"Selling Plans Ski Wax"
+   *  AND vendor:"add-get-d-test"
+   *  AND product_type:"accessories")
+   */
+  clause          String
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@unique([shop, productId, kind, signature])
+
+  /**
+   * Runtime dùng index này để hỏi:
+   *
+   * signature X thuộc bao nhiêu product?
+   *
+   * Nếu đúng 1 owner => safe transport key.
+   */
+  @@index([shop, kind, signature])
+
+  /**
+   * Lấy toàn bộ candidate key của một AI product.
+   */
+  @@index([shop, productId])
 }

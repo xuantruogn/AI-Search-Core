@@ -80,6 +80,7 @@ export default function App() {
         <s-link href="/app/search-analytics">Search Analytics</s-link>
         <s-link href="/app/billing">Plans &amp; Billing</s-link>
         <s-link href="/app/settings">Settings</s-link>
+        <s-link href="/demo" target="_top">Product Demo</s-link>
       </nav>
       <Outlet />
     </AppProvider>

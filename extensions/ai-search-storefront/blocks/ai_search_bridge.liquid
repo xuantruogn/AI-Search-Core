@@ -1,84 +1,198 @@
+{% comment %}
+  AI Search Bridge V4
+
+  Early boot:
+  - Chạy trong <head> trước khi storefront body được paint.
+  - Chỉ kích hoạt trên /search có query.
+  - Không kích hoạt khi đang native fallback.
+  - Mục tiêu: không để Shopify native search ló ra trước AI Search V4.
+
+  Runtime:
+  - search-interceptor.v4.js vẫn chịu trách nhiệm:
+    + semantic search
+    + receipt
+    + Theme Map V4 render
+    + pagination
+    + result count
+    + click telemetry
+    + fallback
+{% endcomment %}
+
+<style>
+  /*
+   * Chỉ áp dụng trong lần boot đầu của AI Search.
+   *
+   * Native HTML vẫn được Shopify SSR bình thường,
+   * nhưng chưa được phép paint ra màn hình trước
+   * khi AI Search V4 hoàn thành.
+   */
+  html[data-ai-search-v4-early-boot="pending"] body {
+    visibility: hidden;
+  }
+
+  /*
+   * search-interceptor.v4.js tạo loading layer này.
+   *
+   * Cho phép loading layer hiện ra dù body đang
+   * bị visibility:hidden.
+   */
+  html[data-ai-search-v4-early-boot="pending"]
+    [data-ai-search-v4-loading] {
+    visibility: visible;
+  }
+</style>
+
 <script>
-  window.AI_SEARCH_CONFIG = window.AI_SEARCH_CONFIG || {};
+  (function () {
+    "use strict";
 
-  window.AI_SEARCH_CONFIG.version = 3;
+    var pathname =
+      window.location.pathname || "";
 
-  window.AI_SEARCH_CONFIG.search_endpoint =
-    {{ block.settings.proxy_path | default: "/apps/ai-search" | json }};
+    var isSearchPage =
+      /\/search\/?$/.test(pathname);
 
-  window.AI_SEARCH_CONFIG.unscopedSearchMode =
-    {{ block.settings.unscoped_search_mode | json }};
-
-
-  {% comment %}
-    ============================================================
-    THEME MAP BOOTSTRAP
-    ============================================================
-
-    Nguồn chính:
-      Shopify Shop Metafield
-      namespace = app
-      key       = theme_map
-
-    Sau khi nhận được Theme Map:
-      1. Đưa vào window.AI_SEARCH_CONFIG
-      2. Lưu vào localStorage
-
-    Các trang tiếp theo có thể dùng lại localStorage,
-    không cần gọi Theme Map từ backend.
-  {% endcomment %}
-
-  {% assign theme_map_data = shop.metafields.app.theme_map.value %}
-
-  {% if theme_map_data != blank %}
-
-    window.AI_SEARCH_CONFIG.theme_map =
-      {{ theme_map_data | json }};
-
-    window.AI_SEARCH_CONFIG.schema =
-      {{ theme_map_data | json }};
-
-    window.AI_SEARCH_CONFIG.theme_id =
-      {{ theme_map_data.theme.id | json }};
-
-
-    try {
-      localStorage.setItem(
-        "ai_search_theme_map_v3",
-        JSON.stringify({
-          schema: {{ theme_map_data | json }},
-          timestamp: Date.now()
-        })
-      );
-
-      console.log(
-        "[AI SEARCH THEME MAP] ✅ Bootstrap từ Shopify Metafield → localStorage"
-      );
-
-    } catch (e) {
-      console.warn(
-        "[AI SEARCH THEME MAP] ⚠️ Không thể lưu Theme Map vào localStorage",
-        e
-      );
+    if (!isSearchPage) {
+      return;
     }
 
-  {% else %}
+    var params =
+      new URLSearchParams(
+        window.location.search
+      );
 
-    console.warn(
-      "[AI SEARCH THEME MAP] ⚠️ Shopify Metafield không có Theme Map"
+    var query =
+      (
+        params.get("q") ||
+        ""
+      ).trim();
+
+    var bypass =
+      params.get(
+        "_ai_search_bypass"
+      ) === "1";
+
+    /*
+     * Không có query:
+     * để theme render search page bình thường.
+     *
+     * Native fallback:
+     * tuyệt đối không che kết quả native.
+     */
+    if (
+      !query ||
+      bypass
+    ) {
+      return;
+    }
+
+    var root =
+      document.documentElement;
+
+    root.setAttribute(
+      "data-ai-search-v4-early-boot",
+      "pending"
     );
 
-  {% endif %}
+    /*
+     * Đồng bộ với loading contract hiện có của V4.
+     *
+     * search-interceptor.v4.js:
+     * - showLoading() => aria-busy=true
+     * - hideLoading() => remove aria-busy
+     */
+    root.setAttribute(
+      "aria-busy",
+      "true"
+    );
+
+    /*
+     * Khi V4 hoàn tất hoặc kết thúc loading,
+     * hideLoading() sẽ remove aria-busy.
+     *
+     * Observer dùng tín hiệu đó để gỡ early boot
+     * mà không cần phụ thuộc selector của theme.
+     */
+    var observer =
+      new MutationObserver(
+        function () {
+          if (
+            !root.hasAttribute(
+              "aria-busy"
+            )
+          ) {
+            root.removeAttribute(
+              "data-ai-search-v4-early-boot"
+            );
+
+            observer.disconnect();
+          }
+        }
+      );
+
+    observer.observe(
+      root,
+      {
+        attributes: true,
+        attributeFilter: [
+          "aria-busy"
+        ]
+      }
+    );
+
+    /*
+     * Fail-safe:
+     *
+     * Nếu asset JS không tải được hoặc có lỗi
+     * nghiêm trọng trước khi V4 khởi động,
+     * không để storefront bị ẩn vô thời hạn.
+     *
+     * 45 giây đủ rộng hơn timeout AI hiện tại.
+     */
+    window.setTimeout(
+      function () {
+        if (
+          root.getAttribute(
+            "data-ai-search-v4-early-boot"
+          ) !== "pending"
+        ) {
+          return;
+        }
+
+        console.warn(
+          "[AI SEARCH V4] early boot fail-safe released"
+        );
+
+        root.removeAttribute(
+          "data-ai-search-v4-early-boot"
+        );
+
+        root.removeAttribute(
+          "aria-busy"
+        );
+
+        observer.disconnect();
+      },
+      45000
+    );
+  })();
 </script>
 
-
-{% comment %} Nạp script duy nhất 1 lần {% endcomment %}
+<script>
+  window.AI_SEARCH_CONFIG = {
+    version: 4,
+    theme_map_version: 4,
+    theme_id: {{ theme.id | json }},
+    search_url: {{ routes.search_url | json }},
+    search_endpoint: {{ block.settings.proxy_path | default: "/apps/ai-search" | json }},
+    unscopedSearchMode: {{ block.settings.unscoped_search_mode | json }}
+  };
+</script>
 
 <script
-  src="{{ 'search-interceptor.v3.js' | asset_url }}"
-  defer>
-</script>
-
+  src="{{ 'search-interceptor.v4.js' | asset_url }}"
+  defer
+></script>
 
 {% schema %}
 {

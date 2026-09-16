@@ -6,6 +6,7 @@ import {
 } from "../commerce/usage.server";
 import { enqueueCatalogRefresh } from "../catalog/catalog-sync-job.server";
 import { kickCatalogSyncQueue } from "../catalog/catalog-sync-queue.server";
+import { clearExpiredSearchResults } from "../search/search-result-cache.server";
 
 function readPositiveInteger(name: string, fallback: number) {
   const value = Number.parseInt(process.env[name] || "", 10);
@@ -171,6 +172,8 @@ export async function runAiSearchHousekeeping() {
   const expiredLeasesDeleted = await deleteExpiredLeaseLocks();
   const storefrontCatalogReconciliation =
     await enqueueDueStorefrontCatalogReconciliations();
+  const expiredSearchReceiptsDeleted =
+    await clearExpiredSearchResults();
 
   console.log("[AI Search] Housekeeping completed:", {
     usageEventsDeleted,
@@ -183,6 +186,7 @@ export async function runAiSearchHousekeeping() {
     resolvedUsageReservationsDeleted,
     expiredLeasesDeleted,
     storefrontCatalogReconciliation,
+    expiredSearchReceiptsDeleted: expiredSearchReceiptsDeleted.count,
   });
 
   return {
@@ -196,6 +200,7 @@ export async function runAiSearchHousekeeping() {
     resolvedUsageReservationsDeleted,
     expiredLeasesDeleted,
     storefrontCatalogReconciliation,
+    expiredSearchReceiptsDeleted: expiredSearchReceiptsDeleted.count,
   };
 }
 

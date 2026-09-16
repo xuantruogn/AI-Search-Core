@@ -1,0 +1,1 @@
+ALTER TABLE "AiSearchResultReceipt" ADD COLUMN "searchLogId" TEXT;

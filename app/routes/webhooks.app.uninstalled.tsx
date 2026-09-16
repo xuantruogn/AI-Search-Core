@@ -3,16 +3,20 @@ import type { ActionFunctionArgs } from "react-router";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
 import { markShopUninstalled } from "../services/commerce/shop-registry.server";
-import { invalidateThemeMap } from "../services/theme/theme-map-lifecycle.server";
+import { invalidateThemeMapV4 } from "../services/theme/theme-map-v4-lifecycle.server";
 
 export const action = async ({ request }: ActionFunctionArgs) => {
   const { shop, topic } = await authenticate.webhook(request);
 
   console.log(`[AI Search] Received ${topic} webhook for ${shop}`);
 
-  // Remove renderer/rejection state from this process immediately. A later
-  // reinstall for the same shop must start from its then-current MAIN theme.
-  invalidateThemeMap(shop);
+  /**
+   * Reinstall cho cùng shop phải bắt đầu lại từ MAIN theme hiện tại tại thời
+   * điểm cài lại app. Vì vậy cần dọn RAM cache Theme Map V4 ngay trong process.
+   *
+   * Bước này KHÔNG còn dùng Theme Map V3.
+   */
+  invalidateThemeMapV4(shop);
 
   try {
     await markShopUninstalled(shop);

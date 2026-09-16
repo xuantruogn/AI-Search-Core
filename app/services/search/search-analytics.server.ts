@@ -25,32 +25,57 @@ export async function recordSearchQueryLog({
   shop,
   query,
   queryVector,
+  analyzedQuery,
+  llmAnalysis,
+  selectedContext,
   rankedProducts,
   diagnostics,
   totalDurationMs,
+  onDiagnostics,
 }: {
   shop: string;
   query: string;
   queryVector?: number[] | null;
+  analyzedQuery?: string | null;
+  llmAnalysis?: unknown;
+  selectedContext?: unknown;
   rankedProducts: RankedSearchProduct[];
   diagnostics: SearchAnalyticsDiagnostics;
   totalDurationMs: number;
+  onDiagnostics?: (diagnostics: {
+    serializationCodeMs: number;
+    dbWriteMs: number;
+    totalMs: number;
+  }) => void;
 }) {
+  const totalStartedAt = Date.now();
+  const serializationStartedAt = Date.now();
+  const queryVectorJson =
+    rankedProducts.length === 0 &&
+    queryVector?.length &&
+    queryVector.every(Number.isFinite)
+      ? JSON.stringify(queryVector.map((value) => Number(value.toFixed(6))))
+      : null;
+  const llmAnalysisJson = llmAnalysis ? JSON.stringify(llmAnalysis) : null;
+  const selectedContextJson = selectedContext
+    ? JSON.stringify(selectedContext)
+    : null;
+  const rankedProductsJson = JSON.stringify(rankedProducts);
+  const serializationCodeMs = Date.now() - serializationStartedAt;
+  const dbStartedAt = Date.now();
   const log = await db.aiSearchQueryLog.create({
     data: {
       shop,
       query: query.slice(0, 500),
       normalizedQuery: normalizeQuery(query).slice(0, 500),
       queryHash: hashSearchQuery(query),
-      queryVectorJson:
-        rankedProducts.length === 0 &&
-        queryVector?.length &&
-        queryVector.every(Number.isFinite)
-          ? JSON.stringify(queryVector.map((value) => Number(value.toFixed(6))))
-          : null,
+      queryVectorJson,
+      analyzedQuery: analyzedQuery?.slice(0, 4_000) ?? null,
+      llmAnalysisJson,
+      selectedContextJson,
       // Store the complete post-threshold list once. Pagination is a browser
       // concern and must never create additional analytics rows.
-      rankedProductsJson: JSON.stringify(rankedProducts),
+      rankedProductsJson,
       resultCount: rankedProducts.length,
       candidateCount: diagnostics.candidateCount,
       topScore: rankedProducts[0]?.score ?? null,
@@ -62,6 +87,12 @@ export async function recordSearchQueryLog({
       totalDurationMs: Math.max(0, Math.trunc(totalDurationMs)),
     },
     select: { id: true },
+  });
+  const dbWriteMs = Date.now() - dbStartedAt;
+  onDiagnostics?.({
+    serializationCodeMs,
+    dbWriteMs,
+    totalMs: Date.now() - totalStartedAt,
   });
 
   return log.id;

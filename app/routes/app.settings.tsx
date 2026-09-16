@@ -8,18 +8,15 @@ import {
   updateShopSettings,
 } from "../services/commerce/shop-registry.server";
 import { getThemeAppEmbedDeepLink } from "../services/theme/app-embed.server";
-import { getThemeIntegrationStatus } from "../services/theme/theme-integration.server";
+import { getThemeSyncStatus } from "../services/theme/theme-sync-status.server";
 import { canUseQuotaOverrideUi } from "../services/commerce/support-access.server";
-import { clearShopThemeCache } from "./proxy.ai-search";
-import { getActiveTheme } from "../services/theme/theme-reader.server";
-import { buildMainThemeMap, buildClientThemeMapDTO } from "../services/theme-map.server";
-import { readThemeMapStorage, saveThemeMap } from "../services/theme-map-storage.server";
+import { rebuildActiveThemeMapV4 } from "../services/theme/theme-map-v4-lifecycle.server";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { admin, session } = await authenticate.admin(request);
   const [settings, themeIntegration] = await Promise.all([
     getShopSettings(session.shop),
-    getThemeIntegrationStatus({ admin, shop: session.shop }),
+    getThemeSyncStatus({ admin, shop: session.shop }),
   ]);
 
   return {
@@ -37,36 +34,80 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
   const intent = String(form.get("intent") || "settings");
 
-  // ĐÃ MỞ VÀ THÊM LOG ĐỂ SOI DỮ LIỆU TẠI VS CODE
   if (intent === "sync_theme_map") {
     try {
-      await clearShopThemeCache(session.shop);
-      const activeTheme = await getActiveTheme(admin);
-      const themeMap = await buildMainThemeMap(admin);
-      const clientDto = buildClientThemeMapDTO(themeMap);
+      /**
+       * Manual sync là nơi DUY NHẤT (ngoài initial install)
+       * được phép đọc/rebuild active Shopify theme.
+       *
+       * Storefront search không tự rebuild Theme Map nữa.
+       */
+      const map =
+        await rebuildActiveThemeMapV4({
+          admin,
+          shop: session.shop,
+        });
 
-      console.log(`\n================== [VS CODE DEBUG: THEME MAP BEFORE SAVE] ==================`);
-      console.log(`Shop: ${session.shop} | Active Theme: ${activeTheme.name} (ID: ${activeTheme.id})`);
-      
-      console.log(`\n--- 📄 1. FULL THEME MAP (Dữ liệu quét từ Liquid Source Graph) ---`);
-      console.log(JSON.stringify(themeMap, null, 2));
+      console.log(
+        "[AI Search][Theme Map V4] manual sync completed:",
+        {
+          shop: session.shop,
+          themeId: map.theme.id,
+          themeName: map.theme.name,
+          status: map.status,
+          fingerprint: map.fingerprint,
+          unsupportedReason:
+            map.status === "UNSUPPORTED"
+              ? map.unsupportedReason ?? null
+              : null,
+        },
+      );
 
-      console.log(`\n--- 📦 2. CLIENT DTO PAYLOAD (Dữ liệu sẽ stringify gửi vào Metafield) ---`);
-      console.log(JSON.stringify(clientDto, null, 2));
-      console.log(`===========================================================================\n`);
+      const hasThemeContextRenderer =
+        map.rendererCandidates.some((candidate) =>
+          candidate.renderStrategy === "THEME_CONTEXT_REQUIRED" &&
+          candidate.mount != null &&
+          candidate.usesAllProducts === false &&
+          candidate.rejectionReasons.every(
+            (reason) => reason === "THEME_CONTEXT_REQUIRED",
+          ),
+        );
 
-      const previous = await readThemeMapStorage(admin, activeTheme.id);
-      await saveThemeMap(admin, themeMap, previous);
+      const usable =
+        map.status === "VERIFIED" ||
+        hasThemeContextRenderer;
+
+      if (!usable) {
+        return {
+          success: false,
+          message:
+            `Đã đọc theme ${map.theme.name}, nhưng Theme Map V4 chưa có renderer an toàn: ${
+              map.status === "UNSUPPORTED"
+                ? map.unsupportedReason ?? "UNKNOWN"
+                : "NO_SAFE_RENDERER"
+            }. Storefront sẽ dùng Shopify Search mặc định.`,
+        };
+      }
 
       return {
         success: true,
-        message: "Đồng bộ Theme Map vào Shop Metafield thành công!",
+        message:
+          `Đã đồng bộ Theme Map V4 cho theme "${map.theme.name}" · ${map.fingerprint.slice(0, 12)}.`,
       };
     } catch (error) {
-      console.error("[Settings] Sync Theme Map error:", error);
+      console.error(
+        "[Settings] Theme Map V4 manual sync error:",
+        error,
+      );
+
       return {
         success: false,
-        message: `Lỗi đồng bộ: ${error instanceof Error ? error.message : String(error)}`,
+        message:
+          `Lỗi đồng bộ Theme Map V4: ${
+            error instanceof Error
+              ? error.message
+              : String(error)
+          }`,
       };
     }
   }
@@ -241,7 +282,7 @@ export default function SettingsPage() {
                 fontWeight: "bold"
               }}
             >
-              {fetcher.state !== "idle" ? "Đang đồng bộ..." : "Đồng bộ lại Theme Map & Metafield"}
+              {fetcher.state !== "idle" ? "Đang đồng bộ..." : "Đồng bộ theme hiện tại"}
             </button>
           </fetcher.Form>
 
@@ -265,7 +306,7 @@ export default function SettingsPage() {
             </s-text>
           )}
           <s-text>
-            Lưu ý: Khi đổi sang Theme mới, bạn hãy nhấn nút "Đồng bộ lại Theme Map" ở trên và bật “AI Search Bridge” trong Theme Editor rồi nhấn Save.
+            Lưu ý: Theme Map chỉ được tạo khi cài app lần đầu hoặc khi bạn bấm "Đồng bộ theme hiện tại". Sau khi đổi/publish theme mới, AI Search sẽ tạm fallback về Shopify Search cho đến khi bạn đồng bộ theme mới.
           </s-text>
         </s-stack>
       </s-section>

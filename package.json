@@ -19,7 +19,8 @@
     "vite": "vite",
     "typecheck": "react-router typegen && tsc --noEmit",
     "test:v3": "node scripts/v3-selftest.cjs && node scripts/theme-map-selftest.cjs",
-    "test:storefront": "node scripts/storefront-selftest.cjs"
+    "test:storefront": "node scripts/storefront-selftest.cjs",
+    "test:v4": "tsx --env-file=.env scripts/theme-map-v4-selftest.ts"
   },
   "type": "module",
   "engines": {
@@ -59,7 +60,9 @@
     "eslint-plugin-react": "^7.37.5",
     "eslint-plugin-react-hooks": "^4.6.2",
     "graphql-config": "^5.1.1",
+    "playwright": "^1.63.0",
     "prettier": "^3.6.2",
+    "tsx": "^4.23.13",
     "typescript": "^5.9.3",
     "vite": "^6.3.6"
   },

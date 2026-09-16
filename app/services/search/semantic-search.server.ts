@@ -1,13 +1,27 @@
-import { createEmbedding, getEmbeddingModel } from "./embeddings.server";
+import {
+  createEmbedding,
+  getEmbeddingModel,
+  type EmbeddingRequestDiagnostics,
+} from "./embeddings.server";
 import { searchProductVectors } from "./vector-store.server";
 import { ensureProductCollection } from "./qdrant.server";
 import { rewriteSearchQuery, type QueryRewriteResult } from "./query-rewriter.server";
+import { applyShopContextToQuery } from "./shop-context-index.server";
+
+import db from "../../db.server";
 
 function readMinimumVectorScore() {
   const value = Number.parseFloat(
     process.env.AI_SEARCH_VECTOR_SCORE_THRESHOLD || "",
   );
   return Number.isFinite(value) && value >= -1 && value <= 1 ? value : 0.25;
+}
+
+function readRelativeVectorScoreRatio() {
+  const value = Number.parseFloat(
+    process.env.AI_SEARCH_VECTOR_RELATIVE_SCORE_RATIO || "",
+  );
+  return Number.isFinite(value) && value >= 0.5 && value <= 1 ? value : 0.78;
 }
 
 function shouldLogEmbeddingInput() {
@@ -20,6 +34,9 @@ export type SearchResult = {
   handle: string;
   title: string;
   score: number;
+  minVariantPrice?: number;
+  maxVariantPrice?: number;
+  currencyCode?: string;
 };
 
 export type SemanticSearchDiagnostics = {
@@ -29,6 +46,24 @@ export type SemanticSearchDiagnostics = {
   embeddingCacheHit: boolean;
   llmStatus: "SUCCESS" | "FALLBACK" | "CACHE_HIT" | "OUTSIDE_CATALOG";
   llmFallbackReason: string | null;
+  ensureCollectionMs: number;
+  embeddingMs: number;
+  embeddingCallCount: number;
+  embeddingOpenAiProcessingMs: number | null;
+  embeddingNetworkAndSdkMs: number | null;
+  embeddingRequestId: string | null;
+  embeddingClientRequestId: string | null;
+  embeddingMaxRetries: number;
+  qdrantMs: number;
+  usageLoggingMs: number;
+  collectionWaitMs: number;
+  embeddingPreparationCodeMs: number;
+  qdrantRequestMs: number;
+  qdrantResponseMappingCodeMs: number;
+  thresholdFilterCodeMs: number;
+  resultMappingCodeMs: number;
+  otherCodeMs: number;
+  totalMs: number;
 };
 
 export type SemanticSearchInput = {
@@ -36,11 +71,11 @@ export type SemanticSearchInput = {
   shop: string;
   query: string;
   limit?: number;
-  vectorOverride?: number[]; // Hỗ trợ Vector cache truyền vào
+  vectorOverride?: number[];
   onEmbeddingCreated?: (
     vector: number[],
     metadata: { cacheable: boolean },
-  ) => void | Promise<void>; // Trả về mảng vector và cho biết có an toàn để cache hay không
+  ) => void | Promise<void>;
   onDiagnostics?: (diagnostics: SemanticSearchDiagnostics) => void;
 };
 
@@ -66,137 +101,964 @@ export async function semanticSearch({
     cacheHit: Boolean(vectorOverride),
   });
 
-  await ensureProductCollection();
+  const stageStartedAt = Date.now();
 
-  let queryVector: number[];
-  const minimumScore = readMinimumVectorScore();
-  let llmStatus: SemanticSearchDiagnostics["llmStatus"] = "CACHE_HIT";
-  let llmFallbackReason: string | null = null;
+  let embeddingMs = 0;
+  let embeddingRequestDiagnostics:
+    | EmbeddingRequestDiagnostics
+    | null = null;
 
-  // 1. Nếu có vectorOverride từ Cache -> Dùng lại ngay, không gọi OpenAI API
-  if (
-    vectorOverride &&
-    Array.isArray(vectorOverride) &&
-    vectorOverride.length > 0
-  ) {
-    queryVector = vectorOverride;
-  } else {
-    // 2. Rewrite theo vocabulary của đúng shop trước khi tạo embedding.
-    // Nếu LLM lỗi/timeout, service tự trả lại cleanQuery để search vẫn hoạt động.
-    const rewrite = preparedRewrite ?? await rewriteSearchQuery({ shop, query: cleanQuery });
-    llmStatus = rewrite.fallbackReason ? "FALLBACK" : "SUCCESS";
-    llmFallbackReason = rewrite.fallbackReason;
+  let usageMs = 0;
+  let ensureMs = 0;
+  let collectionWaitMs = 0;
+  let embeddingPreparationCodeMs = 0;
+  let qdrantRequestMs = 0;
+  let qdrantResponseMappingCodeMs = 0;
+  let thresholdFilterCodeMs = 0;
+  let resultMappingCodeMs = 0;
 
-    if (shouldLogEmbeddingInput()) {
-      const traceMessage = rewrite.fallbackReason
-        ? "[AI Search][QUERY TRACE] LLM analysis unavailable; fallback used"
-        : "[AI Search][QUERY TRACE] LLM analysis completed";
+  // Start Qdrant lazily.
+  // Query ngoài catalog không cần chạm Qdrant.
+  let collectionReady:
+    | Promise<
+        | { ok: true }
+        | {
+            ok: false;
+            error: unknown;
+          }
+      >
+    | null = null;
 
-      console.log(traceMessage, {
-        shop,
-        originalQuery: cleanQuery,
-        rewrittenQuery: rewrite.query,
-        catalogRelevant: rewrite.catalogRelevant,
-        rewritten: rewrite.rewritten,
-        llmAnalysis: rewrite.analysis,
-        rewriteModel: rewrite.model,
-        rewriteFallbackReason: rewrite.fallbackReason,
-        embeddingModel: getEmbeddingModel(),
-        willCreateEmbedding: rewrite.catalogRelevant,
-      });
+  const ensureCollectionReady = () => {
+    if (!collectionReady) {
+      const ensureStartedAt =
+        Date.now();
+
+      collectionReady =
+        ensureProductCollection().then(
+          () => {
+            ensureMs =
+              Date.now() -
+              ensureStartedAt;
+
+            return {
+              ok: true as const,
+            };
+          },
+
+          (error: unknown) => {
+            ensureMs =
+              Date.now() -
+              ensureStartedAt;
+
+            return {
+              ok: false as const,
+              error,
+            };
+          },
+        );
     }
 
-    if (!rewrite.catalogRelevant) {
-      console.log("[AI Search] Query rejected as outside shop catalog", {
+    return collectionReady;
+  };
+
+  let usageCompleted:
+    Promise<void> =
+      Promise.resolve();
+
+  let queryVector:
+    number[];
+
+  const minimumScore =
+    readMinimumVectorScore();
+
+  let llmStatus:
+    SemanticSearchDiagnostics["llmStatus"] =
+      "CACHE_HIT";
+
+  let llmFallbackReason:
+    string | null =
+      null;
+
+  // ============================================================
+  // 1. QUERY EMBEDDING
+  // ============================================================
+
+  if (
+    vectorOverride &&
+    Array.isArray(
+      vectorOverride,
+    ) &&
+    vectorOverride.length > 0
+  ) {
+    queryVector =
+      vectorOverride;
+  } else {
+    const preparationStartedAt =
+      Date.now();
+
+    const interpreted =
+      preparedRewrite ??
+      await rewriteSearchQuery({
         shop,
-        rewriteModel: rewrite.model,
-        reason: rewrite.analysis.decisionReason,
-        fallbackReason: rewrite.fallbackReason,
+        query:
+          cleanQuery,
       });
+
+    const rewrite =
+      interpreted.context
+        ? interpreted
+        : await applyShopContextToQuery({
+            shop,
+
+            originalQuery:
+              cleanQuery,
+
+            rewrite:
+              interpreted,
+          });
+
+    llmStatus =
+      rewrite.fallbackReason
+        ? "FALLBACK"
+        : "SUCCESS";
+
+    llmFallbackReason =
+      rewrite.fallbackReason;
+
+    if (
+      shouldLogEmbeddingInput()
+    ) {
+      const traceMessage =
+        rewrite.fallbackReason
+          ? "[AI Search][QUERY TRACE] LLM analysis unavailable; fallback used"
+          : "[AI Search][QUERY TRACE] LLM analysis completed";
+
+      console.log(
+        traceMessage,
+        {
+          shop,
+
+          originalQuery:
+            cleanQuery,
+
+          rewrittenQuery:
+            rewrite.query,
+
+          catalogRelevant:
+            rewrite.catalogRelevant,
+
+          rewritten:
+            rewrite.rewritten,
+
+          llmAnalysis:
+            rewrite.analysis,
+
+          selectedShopContext:
+            rewrite.context
+              ?.selectedTerms ??
+            [],
+
+          rewriteModel:
+            rewrite.model,
+
+          rewriteFallbackReason:
+            rewrite.fallbackReason,
+
+          embeddingModel:
+            getEmbeddingModel(),
+
+          willCreateEmbedding:
+            rewrite.catalogRelevant,
+        },
+      );
+    }
+
+    if (
+      !rewrite.catalogRelevant
+    ) {
+      embeddingPreparationCodeMs +=
+        Date.now() -
+        preparationStartedAt;
+
+      console.log(
+        "[AI Search] Query rejected as outside shop catalog",
+        {
+          shop,
+
+          rewriteModel:
+            rewrite.model,
+
+          reason:
+            rewrite.analysis
+              .decisionReason,
+
+          fallbackReason:
+            rewrite.fallbackReason,
+        },
+      );
+
       onDiagnostics?.({
-        candidateCount: 0,
-        topCandidateScore: null,
-        vectorThreshold: minimumScore,
-        embeddingCacheHit: false,
-        llmStatus: "OUTSIDE_CATALOG",
+        candidateCount:
+          0,
+
+        topCandidateScore:
+          null,
+
+        vectorThreshold:
+          minimumScore,
+
+        embeddingCacheHit:
+          false,
+
+        llmStatus:
+          "OUTSIDE_CATALOG",
+
         llmFallbackReason,
+
+        ensureCollectionMs:
+          ensureMs,
+
+        embeddingMs,
+
+        embeddingCallCount:
+          0,
+
+        embeddingOpenAiProcessingMs:
+          null,
+
+        embeddingNetworkAndSdkMs:
+          null,
+
+        embeddingRequestId:
+          null,
+
+        embeddingClientRequestId:
+          null,
+
+        embeddingMaxRetries:
+          0,
+
+        qdrantMs:
+          0,
+
+        usageLoggingMs:
+          usageMs,
+
+        collectionWaitMs,
+
+        embeddingPreparationCodeMs,
+
+        qdrantRequestMs,
+
+        qdrantResponseMappingCodeMs,
+
+        thresholdFilterCodeMs,
+
+        resultMappingCodeMs,
+
+        otherCodeMs:
+          Math.max(
+            0,
+
+            Date.now() -
+              stageStartedAt -
+              ensureMs,
+          ),
+
+        totalMs:
+          Date.now() -
+          stageStartedAt,
       });
+
       return [];
     }
 
-    if (shouldLogEmbeddingInput()) {
-      console.log("[AI Search][EMBEDDING INPUT]", {
-        model: getEmbeddingModel(),
-        dimensions: 768,
-        input: rewrite.query,
-      });
+    if (
+      shouldLogEmbeddingInput()
+    ) {
+      console.log(
+        "[AI Search][EMBEDDING INPUT]",
+        {
+          model:
+            getEmbeddingModel(),
+
+          dimensions:
+            768,
+
+          input:
+            rewrite.query,
+        },
+      );
     }
 
-    queryVector = await createEmbedding(rewrite.query);
+    embeddingPreparationCodeMs +=
+      Date.now() -
+      preparationStartedAt;
 
-    console.log("[AI Search] Query prepared for embedding", {
-      shop,
-      rewritten: rewrite.rewritten,
-      rewriteModel: rewrite.model,
-      fallbackReason: rewrite.fallbackReason,
-      embeddingInputLength: rewrite.query.length,
-    });
+    // Chạy chuẩn bị Qdrant song song
+    // với OpenAI embedding.
+    void ensureCollectionReady();
 
-    // Bắn callback lưu mảng Vector (number[]) vào queryEmbeddingCache trên Server
-    if (onEmbeddingCreated && typeof onEmbeddingCreated === "function") {
-      try {
-        await onEmbeddingCreated(queryVector, {
-          cacheable: rewrite.fallbackReason === null,
-        });
-      } catch (usageError) {
-        console.error(
-          "[AI Search] Query embedding callback failed:",
-          usageError,
-        );
-      }
+    const embeddingStartedAt =
+      Date.now();
+
+    queryVector =
+      await createEmbedding(
+        rewrite.query,
+        {
+          maxRetries:
+            0,
+
+          onDiagnostics:
+            (
+              diagnostics,
+            ) => {
+              embeddingRequestDiagnostics =
+                diagnostics;
+            },
+        },
+      );
+
+    embeddingMs =
+      Date.now() -
+      embeddingStartedAt;
+
+    const embeddingDetails =
+      embeddingRequestDiagnostics as
+        | EmbeddingRequestDiagnostics
+        | null;
+
+    console.log(
+      "[AI Search][PERF] OpenAI embedding request",
+      {
+        shop,
+
+        model:
+          getEmbeddingModel(),
+
+        inputLength:
+          rewrite.query.length,
+
+        dimensions:
+          768,
+
+        endToEndMs:
+          embeddingDetails
+            ?.endToEndMs ??
+          embeddingMs,
+
+        openAiProcessingMs:
+          embeddingDetails
+            ?.openAiProcessingMs ??
+          null,
+
+        networkAndSdkMs:
+          embeddingDetails
+            ?.networkAndSdkMs ??
+          null,
+
+        requestId:
+          embeddingDetails
+            ?.requestId ??
+          null,
+
+        clientRequestId:
+          embeddingDetails
+            ?.clientRequestId ??
+          null,
+
+        timeoutMs:
+          embeddingDetails
+            ?.timeoutMs ??
+          null,
+
+        maxRetries:
+          embeddingDetails
+            ?.maxRetries ??
+          0,
+
+        remainingRequests:
+          embeddingDetails
+            ?.remainingRequests ??
+          null,
+
+        remainingTokens:
+          embeddingDetails
+            ?.remainingTokens ??
+          null,
+
+        resetRequests:
+          embeddingDetails
+            ?.resetRequests ??
+          null,
+
+        resetTokens:
+          embeddingDetails
+            ?.resetTokens ??
+          null,
+
+        responseEncoding:
+          embeddingDetails
+            ?.responseEncoding ??
+          "base64",
+      },
+    );
+
+    console.log(
+      "[AI Search] Query prepared for embedding",
+      {
+        shop,
+
+        rewritten:
+          rewrite.rewritten,
+
+        rewriteModel:
+          rewrite.model,
+
+        fallbackReason:
+          rewrite.fallbackReason,
+
+        embeddingInputLength:
+          rewrite.query.length,
+      },
+    );
+
+    if (
+      onEmbeddingCreated &&
+      typeof onEmbeddingCreated ===
+        "function"
+    ) {
+      const usageStartedAt =
+        Date.now();
+
+      usageCompleted =
+        (async () => {
+          try {
+            await onEmbeddingCreated(
+              queryVector,
+              {
+                cacheable:
+                  true,
+              },
+            );
+          } catch (
+            usageError
+          ) {
+            console.error(
+              "[AI Search] Query embedding callback failed:",
+              usageError,
+            );
+          } finally {
+            usageMs =
+              Date.now() -
+              usageStartedAt;
+          }
+        })();
     }
   }
 
-  console.log("[AI Search] Query embedding dimensions:", queryVector.length);
-
-  // 3. Tìm kiếm Vector trên Qdrant
-  const results = await searchProductVectors({
-    shop,
-    vector: queryVector,
-    limit,
-  });
-
-  const relevantResults = results.filter(
-    (result) => Number.isFinite(result.score) && result.score >= minimumScore,
+  console.log(
+    "[AI Search] Query embedding dimensions:",
+    queryVector.length,
   );
 
-  console.log("[AI Search] Qdrant results:", {
-    minimumScore,
-    candidateCount: results.length,
-    relevantCount: relevantResults.length,
-    results: relevantResults.map((result) => ({
-      handle: result.handle,
-      score: result.score,
-    })),
-  });
+  // ============================================================
+  // 2. QDRANT RETRIEVAL
+  // ============================================================
 
-  const rawTopScore = results[0]?.score;
+  const collectionWaitStartedAt =
+    Date.now();
+
+  const ready =
+    await ensureCollectionReady();
+
+  collectionWaitMs =
+    Date.now() -
+    collectionWaitStartedAt;
+
+  if (
+    !ready.ok
+  ) {
+    await usageCompleted;
+
+    throw ready.error;
+  }
+
+  const qdrantStartedAt =
+    Date.now();
+
+  let qdrantMs =
+    0;
+
+  const retrievalPromise =
+    searchProductVectors({
+      shop,
+
+      vector:
+        queryVector,
+
+      limit,
+
+      onDiagnostics:
+        (
+          diagnostics,
+        ) => {
+          qdrantRequestMs =
+            diagnostics
+              .requestMs;
+
+          qdrantResponseMappingCodeMs =
+            diagnostics
+              .responseMappingCodeMs;
+        },
+    }).then(
+      (value) => {
+        qdrantMs =
+          Date.now() -
+          qdrantStartedAt;
+
+        return value;
+      },
+
+      (
+        error:
+          unknown,
+      ) => {
+        qdrantMs =
+          Date.now() -
+          qdrantStartedAt;
+
+        throw error;
+      },
+    );
+
+  const [
+    retrieval,
+  ] =
+    await Promise.allSettled([
+      retrievalPromise,
+      usageCompleted,
+    ]);
+
+  // Usage accounting phải hoàn tất
+  // trước khi caller rollback failed search.
+  if (
+    retrieval.status ===
+    "rejected"
+  ) {
+    throw retrieval.reason;
+  }
+
+  const results =
+    retrieval.value;
+
+  // ============================================================
+  // 3. REGISTRY GUARD
+  //
+  // Qdrant không phải source of truth cuối cùng.
+  //
+  // Chỉ giữ vector khi DB registry xác nhận:
+  //
+  // status = INDEXED
+  // hasVector = true
+  //
+  // Mục tiêu:
+  //
+  // - orphan vector không xuất hiện trên storefront
+  // - orphan vector không ảnh hưởng relative threshold
+  // - orphan vector không bị đưa vào render receipt
+  //
+  // Search-time chỉ FILTER, không DELETE.
+  //
+  // Không delete ngay ở đây vì search có thể trúng đúng khoảng
+  // thời gian rất ngắn:
+  //
+  // Qdrant upsert
+  //       ↓
+  // DB registry upsert
+  //
+  // Background reconciliation sẽ xử lý delete lâu dài.
+  // ============================================================
+
+  const resultProductIds =
+    [
+      ...new Set(
+        results
+          .map(
+            (
+              result,
+            ) =>
+              String(
+                result.productId ||
+                  "",
+              ).trim(),
+          )
+          .filter(
+            Boolean,
+          ),
+      ),
+    ];
+
+  let registryValidatedResults =
+    results;
+
+  if (
+    resultProductIds.length >
+    0
+  ) {
+    const validRegistryRows =
+      await db
+        .aiSearchIndexedProduct
+        .findMany({
+          where: {
+            shop,
+
+            productId: {
+              in:
+                resultProductIds,
+            },
+
+            status:
+              "INDEXED",
+
+            hasVector:
+              true,
+          },
+
+          select: {
+            productId:
+              true,
+          },
+        });
+
+    const validProductIds =
+      new Set(
+        validRegistryRows.map(
+          (
+            row,
+          ) =>
+            row.productId,
+        ),
+      );
+
+    registryValidatedResults =
+      results.filter(
+        (
+          result,
+        ) =>
+          validProductIds.has(
+            result.productId,
+          ),
+      );
+
+    const orphanProductIds =
+      resultProductIds.filter(
+        (
+          productId,
+        ) =>
+          !validProductIds.has(
+            productId,
+          ),
+      );
+
+    if (
+      orphanProductIds.length >
+      0
+    ) {
+      console.warn(
+        "[AI Search] Qdrant orphan/stale vectors filtered from search",
+        {
+          shop,
+
+          qdrantCandidateCount:
+            results.length,
+
+          validCandidateCount:
+            registryValidatedResults.length,
+
+          filteredCount:
+            orphanProductIds.length,
+
+          productIds:
+            orphanProductIds,
+        },
+      );
+    }
+  }
+
+  console.log(
+    "[AI Search][PERF] Retrieval stages",
+    {
+      shop,
+
+      ensureMs,
+
+      embeddingMs,
+
+      usageMs,
+
+      qdrantMs,
+
+      totalMs:
+        Date.now() -
+        stageStartedAt,
+
+      embeddingCacheHit:
+        Boolean(
+          vectorOverride,
+        ),
+    },
+  );
+
+  // ============================================================
+  // 4. SIMILARITY THRESHOLD
+  //
+  // Quan trọng:
+  //
+  // threshold phải tính SAU registry guard.
+  //
+  // Nếu orphan vector có score cao nhất,
+  // nó không được phép đẩy threshold lên
+  // và làm loại nhầm product hợp lệ.
+  // ============================================================
+
+  const thresholdStartedAt =
+    Date.now();
+
+  const topVectorScore =
+    registryValidatedResults[
+      0
+    ]?.score;
+
+  const relativeRatio =
+    readRelativeVectorScoreRatio();
+
+  const effectiveMinimumScore =
+    typeof topVectorScore ===
+      "number" &&
+    Number.isFinite(
+      topVectorScore,
+    )
+      ? Math.max(
+          minimumScore,
+
+          topVectorScore *
+            relativeRatio,
+        )
+      : minimumScore;
+
+  const relevantResults =
+    registryValidatedResults.filter(
+      (
+        result,
+      ) =>
+        Number.isFinite(
+          result.score,
+        ) &&
+        result.score >=
+          effectiveMinimumScore,
+    );
+
+  thresholdFilterCodeMs =
+    Date.now() -
+    thresholdStartedAt;
+
+  console.log(
+    "[AI Search] Qdrant results:",
+    {
+      minimumScore,
+
+      effectiveMinimumScore:
+        Number(
+          effectiveMinimumScore.toFixed(
+            4,
+          ),
+        ),
+
+      relativeRatio,
+
+      qdrantCandidateCount:
+        results.length,
+
+      candidateCount:
+        registryValidatedResults.length,
+
+      filteredOrphanCount:
+        results.length -
+        registryValidatedResults.length,
+
+      relevantCount:
+        relevantResults.length,
+
+      resultsPreview:
+        relevantResults
+          .slice(
+            0,
+            10,
+          )
+          .map(
+            (
+              result,
+            ) => ({
+              handle:
+                result.handle,
+
+              score:
+                result.score,
+            }),
+          ),
+    },
+  );
+
+  const rawTopScore =
+    registryValidatedResults[
+      0
+    ]?.score;
+
+  // ============================================================
+  // 5. MAP FINAL SEARCH RESULTS
+  // ============================================================
+
+  const resultMappingStartedAt =
+    Date.now();
+
+  const mappedResults =
+    relevantResults.map(
+      (
+        result,
+      ) => ({
+        productId:
+          result.productId,
+
+        handle:
+          result.handle,
+
+        title:
+          result.title,
+
+        score:
+          result.score,
+
+        minVariantPrice:
+          result.minVariantPrice,
+
+        maxVariantPrice:
+          result.maxVariantPrice,
+
+        currencyCode:
+          result.currencyCode,
+      }),
+    );
+
+  resultMappingCodeMs =
+    Date.now() -
+    resultMappingStartedAt;
+
+  const totalMs =
+    Date.now() -
+    stageStartedAt;
+
+  const knownSerialMs =
+    embeddingPreparationCodeMs +
+    embeddingMs +
+    collectionWaitMs +
+    qdrantMs +
+    thresholdFilterCodeMs +
+    resultMappingCodeMs;
+
+  const finalEmbeddingDetails =
+    embeddingRequestDiagnostics as
+      | EmbeddingRequestDiagnostics
+      | null;
+
   onDiagnostics?.({
-    candidateCount: results.length,
+    candidateCount:
+      registryValidatedResults.length,
+
     topCandidateScore:
-      typeof rawTopScore === "number" && Number.isFinite(rawTopScore)
+      typeof rawTopScore ===
+        "number" &&
+      Number.isFinite(
+        rawTopScore,
+      )
         ? rawTopScore
         : null,
-    vectorThreshold: minimumScore,
-    embeddingCacheHit: Boolean(vectorOverride),
+
+    vectorThreshold:
+      effectiveMinimumScore,
+
+    embeddingCacheHit:
+      Boolean(
+        vectorOverride,
+      ),
+
     llmStatus,
+
     llmFallbackReason,
+
+    ensureCollectionMs:
+      ensureMs,
+
+    embeddingMs,
+
+    embeddingCallCount:
+      vectorOverride
+        ? 0
+        : 1,
+
+    embeddingOpenAiProcessingMs:
+      finalEmbeddingDetails
+        ?.openAiProcessingMs ??
+      null,
+
+    embeddingNetworkAndSdkMs:
+      finalEmbeddingDetails
+        ?.networkAndSdkMs ??
+      null,
+
+    embeddingRequestId:
+      finalEmbeddingDetails
+        ?.requestId ??
+      null,
+
+    embeddingClientRequestId:
+      finalEmbeddingDetails
+        ?.clientRequestId ??
+      null,
+
+    embeddingMaxRetries:
+      finalEmbeddingDetails
+        ?.maxRetries ??
+      0,
+
+    qdrantMs,
+
+    usageLoggingMs:
+      usageMs,
+
+    collectionWaitMs,
+
+    embeddingPreparationCodeMs,
+
+    qdrantRequestMs,
+
+    qdrantResponseMappingCodeMs,
+
+    thresholdFilterCodeMs,
+
+    resultMappingCodeMs,
+
+    otherCodeMs:
+      Math.max(
+        0,
+
+        totalMs -
+          knownSerialMs,
+      ),
+
+    totalMs,
   });
 
-  return relevantResults.map((result) => ({
-    productId: result.productId,
-    handle: result.handle,
-    title: result.title,
-    score: result.score,
-  }));
+  return mappedResults;
 }

@@ -7,16 +7,45 @@ import { getProductSyncQueueStats } from "../services/products/product-sync-job.
 import { getLatestCatalogSyncJob } from "../services/catalog/catalog-sync-job.server";
 import { getShopifyPricingPlansUrl } from "../services/billing/shopify-app-pricing.server";
 import { getThemeAppEmbedDeepLink } from "../services/theme/app-embed.server";
-import { getThemeIntegrationStatus } from "../services/theme/theme-integration.server";
-import { invalidateThemeMap } from "../services/theme/theme-map-lifecycle.server";
+import { getThemeSyncStatus, isStoredThemeMapV4Usable } from "../services/theme/theme-sync-status.server";
+import { rebuildActiveThemeMapV4 } from "../services/theme/theme-map-v4-lifecycle.server";
 
 export const action = async ({ request }: ActionFunctionArgs) => {
   const { admin, session } = await authenticate.admin(request);
   const form = await request.formData();
-  if (form.get("intent") !== "sync-theme-map") throw new Response("Unknown action", { status: 400 });
-  invalidateThemeMap(session.shop);
-  const status = await getThemeIntegrationStatus({ admin, shop: session.shop });
-  return { message: status.themeMap ? "Đã đồng bộ Theme Map từ theme đang publish." : `Chưa đồng bộ được Theme Map: ${status.themeMapError ?? status.status}` };
+  if (form.get("intent") !== "sync-theme-map") {
+    throw new Response("Unknown action", { status: 400 });
+  }
+
+  try {
+    const map = await rebuildActiveThemeMapV4({
+      admin,
+      shop: session.shop,
+    });
+
+    if (!isStoredThemeMapV4Usable(map)) {
+      return {
+        success: false,
+        message: `Đã đọc theme "${map.theme.name}", nhưng chưa có renderer an toàn: ${
+          map.unsupportedReason ?? "UNKNOWN"
+        }. Storefront sẽ dùng Shopify Search mặc định.`,
+      };
+    }
+
+    return {
+      success: true,
+      message: `Đã đồng bộ Theme Map V4 cho theme "${map.theme.name}" · ${map.fingerprint.slice(0, 12)}.`,
+    };
+  } catch (error) {
+    console.error("[AI Search][Theme Map V4] manual sync failed:", error);
+
+    return {
+      success: false,
+      message: `Lỗi đồng bộ Theme Map V4: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    };
+  }
 };
 
 function formatLimit(value: number | null) {
@@ -42,7 +71,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     getShopEntitlement(session.shop),
     getProductSyncQueueStats(session.shop),
     getLatestCatalogSyncJob(session.shop),
-    getThemeIntegrationStatus({ admin, shop: session.shop }),
+    getThemeSyncStatus({ admin, shop: session.shop }),
   ]);
 
   return {
@@ -170,14 +199,17 @@ export default function Dashboard() {
           <s-text>Shopify dùng theme hiện tại để tạo HTML sản phẩm. Cần thử tìm kiếm trên storefront để xác nhận giao diện thực tế.</s-text>
           {data.themeIntegration.themeMap ? (
             <s-text>
-              Theme Map: {data.themeIntegration.themeMap.search.searchTemplate} · {data.themeIntegration.themeMap.sources.length} file phụ thuộc · {data.themeIntegration.themeMap.fingerprint.slice(0, 12)}
+              Theme Map V4: {data.themeIntegration.themeMap.search.templateFile} · {data.themeIntegration.themeMap.dependencies.length} file phụ thuộc · {data.themeIntegration.themeMap.fingerprint.slice(0, 12)}
             </s-text>
           ) : null}
           <Form method="post">
             <input type="hidden" name="intent" value="sync-theme-map" />
-            <button type="submit" disabled={navigation.state !== "idle"}>Đọc lại Theme Map</button>
+            <button type="submit" disabled={navigation.state !== "idle"}>Đồng bộ theme hiện tại</button>
           </Form>
           {actionData?.message ? <s-text>{actionData.message}</s-text> : null}
+          <s-text>
+            Theme Map chỉ được tạo khi cài app hoặc khi merchant bấm "Đồng bộ theme hiện tại". Nếu publish theme mới mà chưa đồng bộ, storefront sẽ fallback Shopify Search.
+          </s-text>
           {data.appEmbed.enabled !== true && data.appEmbedUrl ? (
             <>
               <s-link href={data.appEmbedUrl} target="_top">

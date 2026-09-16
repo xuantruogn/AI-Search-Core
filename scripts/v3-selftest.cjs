@@ -177,7 +177,7 @@ async function main() {
   assert.equal(decide("green", "/search?q=green&type=product,page").reason, "SEARCH_TYPES_NOT_PRODUCT_ONLY");
   assert.ok(decide("green", "/search?q=green&type=product&filter.v.option.color=red").reason.startsWith("UNSUPPORTED_SEARCH_PARAM"));
   assert.equal(decide("green", "/search?q=green&type=product&sort_by=price-ascending").reason, "NON_RELEVANCE_SORT");
-  assert.equal(decide("green", "/search?q=green&type=product&page=2").reason, "PAGINATED_SEARCH");
+  assert.equal(decide("green", "/search?q=green&type=product&page=2").engine, "AI");
 
   // Storefront data visibility: scheduled/unpublished products must never be
   // treated as searchable just because publishedAt is non-null.

@@ -15,6 +15,15 @@ export type ProductForIndex = {
   tags?: string[];
 
   variants?: ProductVariantForIndex[];
+
+  // Retrieval metadata only. Price is intentionally excluded from the
+  // semantic document, but travels with the Qdrant payload for deterministic
+  // filtering/sorting without a second storefront API round-trip.
+  priceRange?: {
+    min: number;
+    max: number;
+    currencyCode: string;
+  } | null;
 };
 
 function readPositiveInteger(name: string, fallback: number) {
