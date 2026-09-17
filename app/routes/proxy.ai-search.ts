@@ -228,6 +228,90 @@ function themeMapSupportsSearchExecution(
   );
 }
 
+
+type ThemeMapV4TransportProfileRuntime = {
+  version?: number;
+  nativePageSize?: number | null;
+  preferredBatchSize?: number;
+  maxEncodedQueryLength?: number;
+  paginationMode?:
+    | "INFINITE_SCROLL"
+    | "PAGINATION"
+    | "UNKNOWN";
+  mustSuspendNativePagination?: boolean;
+  sourceProven?: boolean;
+};
+
+function readThemeTransportProfile(
+  map: ThemeMapV4,
+): ThemeMapV4TransportProfileRuntime | null {
+  const raw = (map as ThemeMapV4 & {
+    transportProfile?: unknown;
+  }).transportProfile;
+
+  if (!raw || typeof raw !== "object") {
+    return null;
+  }
+
+  const profile =
+    raw as ThemeMapV4TransportProfileRuntime;
+
+  const preferredBatchSize =
+    Number(profile.preferredBatchSize);
+
+  const maxEncodedQueryLength =
+    Number(profile.maxEncodedQueryLength);
+
+  if (
+    !Number.isSafeInteger(preferredBatchSize) ||
+    preferredBatchSize <= 0 ||
+    !Number.isSafeInteger(maxEncodedQueryLength) ||
+    maxEncodedQueryLength < 256
+  ) {
+    return null;
+  }
+
+  return profile;
+}
+
+function themeTransportPlannerOptions(
+  map: ThemeMapV4,
+):
+  | {
+      maxProductsPerBatch: number;
+      maxEncodedQueryLength: number;
+    }
+  | undefined {
+  const profile =
+    readThemeTransportProfile(map);
+
+  if (!profile) {
+    /**
+     * Theme Map cũ chưa có transportProfile.
+     * Omit options để planner giữ nguyên fallback
+     * production cũ (8 products / 1400 encoded chars).
+     */
+    return undefined;
+  }
+
+  return {
+    maxProductsPerBatch:
+      Math.max(
+        1,
+        Math.min(
+          THEME_MAP_V4_DEFAULT_PAGE_SIZE,
+          Number(profile.preferredBatchSize),
+        ),
+      ),
+
+    maxEncodedQueryLength:
+      Math.max(
+        256,
+        Number(profile.maxEncodedQueryLength),
+      ),
+  };
+}
+
 // ==========================================
 // THEME MAP V4 — STORED ARTIFACT ONLY
 // ==========================================
@@ -697,6 +781,11 @@ const resultCacheStatus = "MISS" as const;
             product.productId,
         );
 
+      const transportPlannerOptions =
+        themeTransportPlannerOptions(
+          map,
+        );
+
       const transportPlan =
         await planThemeSearchTransportFromStoredKeys(
           {
@@ -705,6 +794,9 @@ const resultCacheStatus = "MISS" as const;
 
             productIds:
               targetProductIds,
+
+            options:
+              transportPlannerOptions,
           },
         );
 
@@ -819,6 +911,16 @@ const resultCacheStatus = "MISS" as const;
             transportPlan
               .batches
               .length,
+
+          maxProductsPerBatch:
+            transportPlannerOptions
+              ?.maxProductsPerBatch ??
+            8,
+
+          maxEncodedQueryLength:
+            transportPlannerOptions
+              ?.maxEncodedQueryLength ??
+            1400,
         },
       );
 
@@ -838,6 +940,11 @@ const resultCacheStatus = "MISS" as const;
 
           map_fingerprint:
             map.fingerprint,
+
+          transport_profile:
+            readThemeTransportProfile(
+              map,
+            ),
 
           receipt:
             cachedPage.result
@@ -952,8 +1059,6 @@ const resultCacheStatus = "MISS" as const;
 
       let receiptCacheMs = 0;
       let pageSliceMs = 0;
-      let themeLookupMs = 0;
-      let embedCheckMs = 0;
       let themeMapLoadMs = 0;
       let buildLiquidMs = 0;
       let liquidCallMs = 0;
@@ -980,10 +1085,6 @@ const resultCacheStatus = "MISS" as const;
             receiptCacheMs,
 
             pageSliceMs,
-
-            themeLookupMs,
-
-            embedCheckMs,
 
             themeMapLoadMs,
 
@@ -2660,6 +2761,210 @@ const resultCacheStatus = "MISS" as const;
         Date.now() -
         paginationStartedAt;
 
+      /**
+       * FAST PATH — THEME CONTEXT PAGE 1/CURRENT PAGE
+       *
+       * Semantic search đã có ranked product IDs và Theme Map đã được
+       * load ở đầu request. Nếu candidate cần Shopify Section Rendering,
+       * build luôn transport plan trong response search đầu tiên để browser
+       * không phải gọi thêm transport-v4 trước khi render.
+       *
+       * Đây là best-effort optimization. Lỗi build plan KHÔNG được phép
+       * làm hỏng semantic search; client vẫn có thể gọi transport-v4 như
+       * đường cũ.
+       */
+      let initialTransportPlan:
+        | Record<string, unknown>
+        | null =
+        null;
+
+      let initialTransportPlanMs =
+        0;
+
+      const themeContextCandidate =
+        getThemeContextTransportCandidate(
+          syncedThemeMap,
+        );
+
+      if (
+        themeContextCandidate?.mount &&
+        pagination.pageProducts.length > 0
+      ) {
+        const initialTransportStartedAt =
+          Date.now();
+
+        try {
+          const targetProductIds =
+            pagination.pageProducts.map(
+              (product) =>
+                `gid://shopify/Product/${product.id}`,
+            );
+
+          const transportPlannerOptions =
+            themeTransportPlannerOptions(
+              syncedThemeMap,
+            );
+
+          const transportPlan =
+            await planThemeSearchTransportFromStoredKeys(
+              {
+                shop:
+                  session.shop,
+
+                productIds:
+                  targetProductIds,
+
+                options:
+                  transportPlannerOptions,
+              },
+            );
+
+          if (transportPlan.safeToRender) {
+            initialTransportPlan = {
+              status:
+                "success",
+
+              engine:
+                "theme-context-transport-v4",
+
+              render_strategy:
+                "THEME_CONTEXT_REQUIRED",
+
+              theme_id:
+                syncedThemeMap.theme.id,
+
+              map_fingerprint:
+                syncedThemeMap.fingerprint,
+
+              transport_profile:
+                readThemeTransportProfile(
+                  syncedThemeMap,
+                ),
+
+              receipt:
+                cachedSearch.receiptId,
+
+              search_log_id:
+                searchLogId,
+
+              candidate: {
+                id:
+                  themeContextCandidate.id,
+
+                type:
+                  themeContextCandidate.type,
+
+                source_file:
+                  themeContextCandidate.sourceFile,
+              },
+
+              mount:
+                themeContextCandidate.mount,
+
+              search_section: {
+                template_file:
+                  syncedThemeMap.search
+                    .templateFile,
+
+                template_type:
+                  syncedThemeMap.search
+                    .templateType,
+
+                section_key:
+                  syncedThemeMap.search
+                    .sectionKey ??
+                  null,
+
+                section_type:
+                  syncedThemeMap.search
+                    .sectionType ??
+                  null,
+
+                section_file:
+                  syncedThemeMap.search
+                    .sectionFile ??
+                  null,
+              },
+
+              safeToRender:
+                true,
+
+              targetProductIds:
+                transportPlan
+                  .targetProductIds,
+
+              resolved:
+                transportPlan.resolved,
+
+              unresolved:
+                transportPlan.unresolved,
+
+              batches:
+                transportPlan.batches,
+
+              pagination: {
+                current_page:
+                  pagination.currentPage,
+
+                page_size:
+                  pagination.pageSize,
+
+                total_products:
+                  pagination.totalProducts,
+
+                total_pages:
+                  pagination.totalPages,
+              },
+            };
+          } else {
+            console.warn(
+              "[AI Search][Initial Theme Context Transport V4] unsafe plan; keeping legacy transport-v4 fallback",
+              {
+                shop:
+                  session.shop,
+
+                receiptId:
+                  cachedSearch.receiptId,
+
+                page:
+                  pagination.currentPage,
+
+                targetCount:
+                  transportPlan
+                    .targetProductIds
+                    .length,
+
+                unresolved:
+                  transportPlan.unresolved,
+              },
+            );
+          }
+        } catch (transportError) {
+          console.warn(
+            "[AI Search][Initial Theme Context Transport V4] build failed; keeping legacy transport-v4 fallback",
+            {
+              shop:
+                session.shop,
+
+              receiptId:
+                cachedSearch.receiptId,
+
+              page:
+                pagination.currentPage,
+
+              error:
+                transportError instanceof Error
+                  ? transportError.message
+                  : String(transportError),
+            },
+          );
+        } finally {
+          initialTransportPlanMs =
+            Date.now() -
+            initialTransportStartedAt;
+        }
+      }
+
       executionPhase =
         "responseBuild";
 
@@ -2695,6 +3000,9 @@ const resultCacheStatus = "MISS" as const;
               total_products:
                 cachedSearch.total,
             },
+
+            initial_transport_plan:
+              initialTransportPlan,
 
             applied_filters: {
               sort_intent:
@@ -2786,6 +3094,13 @@ const resultCacheStatus = "MISS" as const;
             session.shop,
 
           paginationCodeMs,
+
+          initialTransportPlanMs,
+
+          initialTransportPlanStatus:
+            initialTransportPlan
+              ? "READY"
+              : "NOT_READY",
 
           responseBuildCodeMs,
 

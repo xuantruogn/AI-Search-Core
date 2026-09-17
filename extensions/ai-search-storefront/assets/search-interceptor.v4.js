@@ -16,6 +16,10 @@
   let activeSearchLogId = null;
   let activeProducts = [];
 
+  const renderedPageCache = new Map();
+  const pagePrefetches = new Map();
+  const PAGE_CACHE_LIMIT = 12;
+
   function isSearchPath(pathname) {
     return /\/search\/?$/.test(pathname || location.pathname);
   }
@@ -78,7 +82,8 @@
       loading.setAttribute("role", "status");
       loading.setAttribute("aria-live", "polite");
       loading.setAttribute("aria-label", "Loading search results");
-      loading.innerHTML = '<span data-ai-search-v4-spinner aria-hidden="true"></span>';
+      loading.innerHTML =
+        '<span data-ai-search-v4-spinner aria-hidden="true"></span>';
 
       (document.body || document.documentElement).appendChild(loading);
     }
@@ -100,6 +105,163 @@
     }
 
     document.documentElement.removeAttribute("aria-busy");
+  }
+
+  function clonePlainValue(value) {
+    if (value == null) return value;
+
+    try {
+      return JSON.parse(JSON.stringify(value));
+    } catch {
+      return value;
+    }
+  }
+
+  function currentThemeIdentity() {
+    const themeId =
+      config.theme_id ||
+      history.state?.themeId ||
+      window.Shopify?.theme?.id ||
+      "";
+
+    const fingerprint =
+      config.map_fingerprint ||
+      config.theme_map_fingerprint ||
+      history.state?.fingerprint ||
+      "";
+
+    return {
+      themeId: String(themeId || ""),
+      fingerprint: String(fingerprint || ""),
+    };
+  }
+
+  function renderedPageCacheKey(receipt, page, fingerprint, themeId) {
+    const normalizedPage = Number.parseInt(String(page || "1"), 10);
+    const normalizedThemeId = numericThemeId(themeId);
+    const normalizedFingerprint = String(fingerprint || "").trim();
+
+    if (
+      !receiptPattern.test(String(receipt || "")) ||
+      !Number.isSafeInteger(normalizedPage) ||
+      normalizedPage <= 0 ||
+      !normalizedThemeId ||
+      !normalizedFingerprint
+    ) {
+      return "";
+    }
+
+    return [
+      String(receipt),
+      normalizedThemeId,
+      normalizedFingerprint,
+      String(normalizedPage),
+    ].join(":");
+  }
+
+  function trimRenderedPageCache() {
+    while (renderedPageCache.size > PAGE_CACHE_LIMIT) {
+      const oldestKey = renderedPageCache.keys().next().value;
+
+      if (!oldestKey) break;
+
+      renderedPageCache.delete(oldestKey);
+    }
+  }
+
+  function cacheRenderedElements(elements, metadata, products) {
+    const key = renderedPageCacheKey(
+      metadata?.receipt,
+      metadata?.page,
+      metadata?.fingerprint,
+      metadata?.themeId,
+    );
+
+    if (!key) return;
+
+    const html = Array.from(elements || [])
+      .map(function (element) {
+        return element instanceof Element ? element.outerHTML : "";
+      })
+      .join("");
+
+    if (!html) return;
+
+    renderedPageCache.delete(key);
+    renderedPageCache.set(key, {
+      html,
+      metadata: clonePlainValue(metadata),
+      products: clonePlainValue(products || []),
+      cachedAt: Date.now(),
+    });
+
+    trimRenderedPageCache();
+  }
+
+  function cacheRenderedMount(mount, metadata) {
+    cacheRenderedElements(
+      Array.from(mount?.children || []),
+      metadata,
+      Array.isArray(metadata?.products) ? metadata.products : activeProducts,
+    );
+  }
+
+  function restoreRenderedPageFromCache(
+    receipt,
+    page,
+    fingerprint,
+    themeId,
+  ) {
+    const key = renderedPageCacheKey(
+      receipt,
+      page,
+      fingerprint,
+      themeId,
+    );
+
+    if (!key) return null;
+
+    const cached = renderedPageCache.get(key);
+
+    if (!cached) return null;
+
+    const metadata = clonePlainValue(cached.metadata);
+    const mount = verifyMount(metadata, receipt);
+    const template = document.createElement("template");
+
+    template.innerHTML = cached.html;
+
+    const nodes = Array.from(template.content.children);
+
+    if (nodes.length === 0) {
+      renderedPageCache.delete(key);
+      return null;
+    }
+
+    suspendNativePaginationRuntime(mount, metadata.page);
+    mount.replaceChildren(...nodes);
+
+    activeProducts = Array.isArray(cached.products)
+      ? clonePlainValue(cached.products)
+      : [];
+
+    metadata.products = activeProducts;
+
+    activateRuntime(mount, metadata);
+
+    renderedPageCache.delete(key);
+    renderedPageCache.set(key, cached);
+
+    console.info(logPrefix, "rendered page cache hit", {
+      receipt,
+      page: metadata.page,
+      productCount: activeProducts.length,
+    });
+
+    return {
+      mount,
+      metadata,
+    };
   }
 
   function fallback(query) {
@@ -261,6 +423,34 @@
     return url.pathname + url.search;
   }
 
+  function isUsableThemeContextPlan(plan, receipt, page) {
+    if (
+      plan?.status !== "success" ||
+      plan?.render_strategy !== "THEME_CONTEXT_REQUIRED" ||
+      plan?.safeToRender !== true ||
+      !plan.mount?.selector ||
+      !Array.isArray(plan.targetProductIds) ||
+      plan.targetProductIds.length === 0 ||
+      !Array.isArray(plan.batches) ||
+      plan.batches.length === 0
+    ) {
+      return false;
+    }
+
+    if (
+      plan.receipt &&
+      String(plan.receipt) !== String(receipt)
+    ) {
+      return false;
+    }
+
+    const planPage = Number(
+      plan.pagination?.current_page || page,
+    );
+
+    return Number(planPage) === Number(page);
+  }
+
   function parseRenderMetadata(encodedValue) {
     if (!encodedValue) {
       throw new Error("THEME_RENDER_METADATA_MISSING");
@@ -384,6 +574,98 @@
     return mount;
   }
 
+  function suspendNativePaginationRuntime(mount, page = 1) {
+    const parsedPage = Number.parseInt(String(page || "1"), 10);
+
+    const safePage =
+      Number.isSafeInteger(parsedPage) && parsedPage > 0
+        ? parsedPage
+        : 1;
+
+    let host = null;
+
+    if (mount instanceof Element) {
+      host = mount.closest("results-list");
+    }
+
+    if (!host) {
+      const candidates = Array.from(
+        document.querySelectorAll("results-list[infinite-scroll]"),
+      );
+
+      if (candidates.length === 1) {
+        host = candidates[0];
+      } else {
+        host =
+          candidates.find(function (candidate) {
+            return Boolean(
+              candidate.querySelector(
+                '[data-testid="product-grid"], [data-product-grid], #product-grid',
+              ),
+            );
+          }) || null;
+      }
+    }
+
+    if (!host) {
+      return;
+    }
+
+    const firstSuspend =
+      host.dataset.aiSearchV4NativePaginationSuspended !== "true";
+
+    host.dataset.aiSearchV4NativePaginationSuspended = "true";
+
+    host.removeAttribute("infinite-scroll");
+
+    try {
+      if ("infiniteScroll" in host) {
+        host.infiniteScroll = false;
+      }
+    } catch {
+      // custom element có thể expose property read-only
+    }
+
+    host
+      .querySelectorAll(
+        '[ref="viewMoreNext"], [ref="viewMorePrevious"]',
+      )
+      .forEach(function (sentinel) {
+        sentinel.remove();
+      });
+
+    const grid =
+      mount instanceof Element
+        ? mount
+        : host.querySelector(
+            '[data-testid="product-grid"], [data-product-grid], #product-grid',
+          );
+
+    if (grid?.hasAttribute("data-last-page")) {
+      grid.setAttribute(
+        "data-last-page",
+        String(safePage),
+      );
+    }
+
+    if (firstSuspend) {
+      console.info(
+        logPrefix,
+        "native pagination suspended",
+        {
+          page: safePage,
+          host: host.tagName.toLowerCase(),
+          mountSelector:
+            mount instanceof Element
+              ? mount.getAttribute("data-testid") ||
+                mount.id ||
+                null
+              : null,
+        },
+      );
+    }
+  }
+
   function activateRuntime(mount, metadata) {
     mount
       .querySelectorAll("img[data-src]")
@@ -393,8 +675,11 @@
         }
       });
 
-    document.documentElement.dataset.aiSearchV4Receipt = metadata.receipt || "";
-    document.documentElement.dataset.aiSearchV4Page = String(metadata.page || 1);
+    document.documentElement.dataset.aiSearchV4Receipt =
+      metadata.receipt || "";
+
+    document.documentElement.dataset.aiSearchV4Page =
+      String(metadata.page || 1);
 
     document.dispatchEvent(
       new CustomEvent("ai-search:rendered", {
@@ -425,38 +710,59 @@
       );
 
       if (!response.ok) {
-        throw new Error(`THEME_RENDER_HTTP_${response.status}`);
+        throw new Error(
+          `THEME_RENDER_HTTP_${response.status}`,
+        );
       }
 
       const html = await response.text();
-      const template = document.createElement("template");
+
+      const template =
+        document.createElement("template");
+
       template.innerHTML = html;
 
-      const metadata = decodeMetadata(response, template);
+      const metadata =
+        decodeMetadata(response, template);
 
       try {
-        const mount = verifyMount(metadata, receipt);
+        const mount =
+          verifyMount(metadata, receipt);
 
-        mount.replaceChildren(template.content);
+        suspendNativePaginationRuntime(
+          mount,
+          metadata.page,
+        );
 
-        activeProducts = Array.isArray(metadata.products)
-          ? metadata.products
-          : [];
+        mount.replaceChildren(
+          template.content,
+        );
 
-        activateRuntime(mount, metadata);
+        activeProducts =
+          Array.isArray(metadata.products)
+            ? metadata.products
+            : [];
+
+        activateRuntime(
+          mount,
+          metadata,
+        );
 
         return {
           mount,
           metadata,
         };
       } catch (error) {
-        rejected.add(metadata.candidateId);
+        rejected.add(
+          metadata.candidateId,
+        );
 
-        candidateId = (metadata.candidateIds || []).find(
-          function (id) {
-            return !rejected.has(id);
-          },
-        ) || "";
+        candidateId =
+          (metadata.candidateIds || []).find(
+            function (id) {
+              return !rejected.has(id);
+            },
+          ) || "";
 
         if (!candidateId) {
           throw error;
@@ -464,15 +770,19 @@
       }
     }
   }
-
-  function normalizeProductGid(value) {
-    const raw = String(value || "").trim();
+    function normalizeProductGid(value) {
+    const raw =
+      String(value || "").trim();
 
     if (!raw) {
       return "";
     }
 
-    if (/^gid:\/\/shopify\/Product\/\d+$/.test(raw)) {
+    if (
+      /^gid:\/\/shopify\/Product\/\d+$/.test(
+        raw,
+      )
+    ) {
       return raw;
     }
 
@@ -483,82 +793,138 @@
     return "";
   }
 
-  function validateRenderedMount(root, mountRecipe) {
+  function validateRenderedMount(
+    root,
+    mountRecipe,
+  ) {
     if (!mountRecipe?.selector) {
-      throw new Error("THEME_CONTEXT_MOUNT_MISSING");
+      throw new Error(
+        "THEME_CONTEXT_MOUNT_MISSING",
+      );
     }
 
     let matches;
 
     try {
-      matches = root.querySelectorAll(mountRecipe.selector);
+      matches =
+        root.querySelectorAll(
+          mountRecipe.selector,
+        );
     } catch {
-      throw new Error("THEME_CONTEXT_MOUNT_SELECTOR_INVALID");
+      throw new Error(
+        "THEME_CONTEXT_MOUNT_SELECTOR_INVALID",
+      );
     }
 
     if (matches.length !== 1) {
-      throw new Error("THEME_CONTEXT_RENDERED_MOUNT_NOT_UNIQUE");
+      throw new Error(
+        "THEME_CONTEXT_RENDERED_MOUNT_NOT_UNIQUE",
+      );
     }
 
     const mount = matches[0];
-    const expectedTag = mountRecipe.verification?.expectedTag;
+
+    const expectedTag =
+      mountRecipe.verification
+        ?.expectedTag;
 
     if (
       expectedTag &&
-      mount.tagName.toLowerCase() !== String(expectedTag).toLowerCase()
+      mount.tagName.toLowerCase() !==
+        String(expectedTag).toLowerCase()
     ) {
-      throw new Error("THEME_CONTEXT_RENDERED_MOUNT_TAG_MISMATCH");
+      throw new Error(
+        "THEME_CONTEXT_RENDERED_MOUNT_TAG_MISMATCH",
+      );
     }
 
     return mount;
   }
 
   function getSectionIdForMount(mount) {
-    const wrapper = mount.closest('[id^="shopify-section-"]');
+    const wrapper =
+      mount.closest(
+        '[id^="shopify-section-"]',
+      );
 
     if (!wrapper?.id) {
-      throw new Error("THEME_CONTEXT_SECTION_WRAPPER_NOT_FOUND");
+      throw new Error(
+        "THEME_CONTEXT_SECTION_WRAPPER_NOT_FOUND",
+      );
     }
 
-    const sectionId = wrapper.id.replace(/^shopify-section-/, "").trim();
+    const sectionId =
+      wrapper.id
+        .replace(
+          /^shopify-section-/,
+          "",
+        )
+        .trim();
 
     if (!sectionId) {
-      throw new Error("THEME_CONTEXT_SECTION_ID_INVALID");
+      throw new Error(
+        "THEME_CONTEXT_SECTION_ID_INVALID",
+      );
     }
 
     return sectionId;
   }
 
-  async function fetchTransportPlan(receipt, page, signal) {
-    const requestUrl = transportUrl(receipt, page);
+  async function fetchTransportPlan(
+    receipt,
+    page,
+    signal,
+  ) {
+    const requestUrl =
+      transportUrl(
+        receipt,
+        page,
+      );
 
-    console.info(logPrefix, "fetchTransportPlan", {
-      receipt,
-      page,
-      url: requestUrl,
-    });
+    const startedAt =
+      performance.now();
 
-    const response = await fetch(requestUrl, {
-      credentials: "same-origin",
-      signal,
-      headers: {
-        Accept: "application/json",
+    console.info(
+      logPrefix,
+      "fetchTransportPlan",
+      {
+        receipt,
+        page,
+        url: requestUrl,
       },
-    });
+    );
+
+    const response =
+      await fetch(
+        requestUrl,
+        {
+          credentials: "same-origin",
+          signal,
+          headers: {
+            Accept: "application/json",
+          },
+        },
+      );
 
     let data = null;
 
     try {
-      data = await response.json();
+      data =
+        await response.json();
     } catch {
       data = null;
     }
 
-    // Classic snippet themes do not have a THEME_CONTEXT_REQUIRED candidate.
-    // In that case preserve the existing App Proxy Liquid renderer path.
+    /*
+     * Theme classic không có
+     * THEME_CONTEXT_REQUIRED candidate.
+     *
+     * Khi đó giữ App Proxy Liquid path.
+     */
     if (
       response.status === 409 &&
-      data?.reason === "THEME_CONTEXT_TRANSPORT_CANDIDATE_NOT_FOUND"
+      data?.reason ===
+        "THEME_CONTEXT_TRANSPORT_CANDIDATE_NOT_FOUND"
     ) {
       return null;
     }
@@ -566,40 +932,58 @@
     if (!response.ok) {
       if (
         response.status === 410 ||
-        data?.reason === "SEARCH_RECEIPT_EXPIRED_OR_INVALID"
+        data?.reason ===
+          "SEARCH_RECEIPT_EXPIRED_OR_INVALID"
       ) {
-        throw new Error("THEME_RENDER_HTTP_410");
+        throw new Error(
+          "THEME_RENDER_HTTP_410",
+        );
       }
 
       if (
         response.status === 400 &&
-        data?.reason === "INVALID_SEARCH_RECEIPT"
+        data?.reason ===
+          "INVALID_SEARCH_RECEIPT"
       ) {
-        throw new Error("SEARCH_RECEIPT_INVALID");
+        throw new Error(
+          "SEARCH_RECEIPT_INVALID",
+        );
       }
 
       throw new Error(
-        data?.reason || `THEME_TRANSPORT_HTTP_${response.status}`,
+        data?.reason ||
+          `THEME_TRANSPORT_HTTP_${response.status}`,
       );
     }
 
     if (
-      data?.status !== "success" ||
-      data?.render_strategy !== "THEME_CONTEXT_REQUIRED" ||
-      data?.safeToRender !== true
+      !isUsableThemeContextPlan(
+        data,
+        receipt,
+        page,
+      )
     ) {
-      throw new Error(data?.reason || "THEME_TRANSPORT_PLAN_INVALID");
+      throw new Error(
+        data?.reason ||
+          "THEME_TRANSPORT_PLAN_INVALID",
+      );
     }
 
-    if (
-      !data.mount?.selector ||
-      !Array.isArray(data.targetProductIds) ||
-      data.targetProductIds.length === 0 ||
-      !Array.isArray(data.batches) ||
-      data.batches.length === 0
-    ) {
-      throw new Error("THEME_TRANSPORT_PLAN_INVALID");
-    }
+    console.info(
+      logPrefix,
+      "fetchTransportPlan complete",
+      {
+        receipt,
+        page,
+        batchCount:
+          data.batches.length,
+        durationMs:
+          Math.round(
+            performance.now() -
+              startedAt,
+          ),
+      },
+    );
 
     return data;
   }
@@ -610,92 +994,447 @@
     mountRecipe,
     signal,
   }) {
-    const url = new URL(config.search_url || "/search", location.origin);
+    const startedAt =
+      performance.now();
 
-    url.searchParams.set("q", batch.query);
-    url.searchParams.set("type", "product");
-    url.searchParams.set("sections", sectionId);
-    url.searchParams.delete("page");
-    url.searchParams.delete("_ai_search_bypass");
+    const url =
+      new URL(
+        config.search_url ||
+          "/search",
+        location.origin,
+      );
 
-    const response = await fetch(url.pathname + url.search, {
-      credentials: "same-origin",
-      signal,
-      headers: {
-        Accept: "application/json",
-      },
-    });
-
-    if (!response.ok) {
-      throw new Error(`THEME_CONTEXT_SECTION_HTTP_${response.status}`);
-    }
-
-    const payload = await response.json();
-    const html = payload?.[sectionId];
-
-    if (typeof html !== "string" || !html.trim()) {
-      throw new Error("THEME_CONTEXT_SECTION_HTML_MISSING");
-    }
-
-    const template = document.createElement("template");
-    template.innerHTML = html;
-
-    const renderedMount = validateRenderedMount(
-      template.content,
-      mountRecipe,
+    url.searchParams.set(
+      "q",
+      batch.query,
     );
 
-    const cards = new Map();
+    url.searchParams.set(
+      "type",
+      "product",
+    );
 
-    for (const child of Array.from(renderedMount.children)) {
-      const productId = normalizeProductGid(
-        child.getAttribute("data-product-id"),
+    url.searchParams.set(
+      "sections",
+      sectionId,
+    );
+
+    url.searchParams.delete(
+      "page",
+    );
+
+    url.searchParams.delete(
+      "_ai_search_bypass",
+    );
+
+    const response =
+      await fetch(
+        url.pathname +
+          url.search,
+        {
+          credentials: "same-origin",
+          signal,
+          headers: {
+            Accept:
+              "application/json",
+          },
+        },
       );
+
+    if (!response.ok) {
+      throw new Error(
+        `THEME_CONTEXT_SECTION_HTTP_${response.status}`,
+      );
+    }
+
+    const payload =
+      await response.json();
+
+    const html =
+      payload?.[sectionId];
+
+    if (
+      typeof html !== "string" ||
+      !html.trim()
+    ) {
+      throw new Error(
+        "THEME_CONTEXT_SECTION_HTML_MISSING",
+      );
+    }
+
+    const template =
+      document.createElement(
+        "template",
+      );
+
+    template.innerHTML = html;
+
+    const renderedMount =
+      validateRenderedMount(
+        template.content,
+        mountRecipe,
+      );
+
+    const cards =
+      new Map();
+
+    for (
+      const child of
+      Array.from(
+        renderedMount.children,
+      )
+    ) {
+      const productId =
+        normalizeProductGid(
+          child.getAttribute(
+            "data-product-id",
+          ),
+        );
 
       if (!productId) {
         continue;
       }
 
-      if (cards.has(productId)) {
-        throw new Error("THEME_CONTEXT_DUPLICATE_PRODUCT_CARD");
+      if (
+        cards.has(productId)
+      ) {
+        throw new Error(
+          "THEME_CONTEXT_DUPLICATE_PRODUCT_CARD",
+        );
       }
 
-      cards.set(productId, child);
+      cards.set(
+        productId,
+        child,
+      );
     }
 
-    const expectedIds = Array.from(
-      new Set(
-        (batch.productIds || [])
-          .map(normalizeProductGid)
-          .filter(Boolean),
-      ),
-    );
+    const expectedIds =
+      Array.from(
+        new Set(
+          (
+            batch.productIds ||
+            []
+          )
+            .map(
+              normalizeProductGid,
+            )
+            .filter(Boolean),
+        ),
+      );
 
-    const selectedCards = new Map();
+    const selectedCards =
+      new Map();
 
-    for (const productId of expectedIds) {
-      const card = cards.get(productId);
+    const missingIds =
+      [];
+
+    for (
+      const productId of
+      expectedIds
+    ) {
+      const card =
+        cards.get(productId);
 
       if (!card) {
-        throw new Error(`THEME_CONTEXT_TARGET_MISSING:${productId}`);
+        missingIds.push(
+          productId,
+        );
+
+        continue;
       }
 
-      selectedCards.set(productId, card);
+      selectedCards.set(
+        productId,
+        card,
+      );
     }
 
-    console.info(logPrefix, "section batch rendered", {
-      sectionId,
-      expectedCount: expectedIds.length,
-      renderedDirectCards: cards.size,
-      discardedExtras: Math.max(0, cards.size - selectedCards.size),
-      encodedQueryLength: batch.encodedQueryLength,
-    });
+    const durationMs =
+      Math.round(
+        performance.now() -
+          startedAt,
+      );
 
-    return selectedCards;
+    console.info(
+      logPrefix,
+      "section batch rendered",
+      {
+        sectionId,
+        expectedCount:
+          expectedIds.length,
+        renderedDirectCards:
+          cards.size,
+        matchedCount:
+          selectedCards.size,
+        missingCount:
+          missingIds.length,
+        discardedExtras:
+          Math.max(
+            0,
+            cards.size -
+              selectedCards.size,
+          ),
+        encodedQueryLength:
+          batch.encodedQueryLength,
+        durationMs,
+      },
+    );
+
+    return {
+      selectedCards,
+      missingIds,
+      durationMs,
+    };
   }
 
-  function productHandleFromCard(card) {
-    const anchor = card.querySelector('a[href*="/products/"]');
+  function transportClauseMap(plan) {
+    const result =
+      new Map();
+
+    for (
+      const entry of
+      Array.isArray(plan?.resolved)
+        ? plan.resolved
+        : []
+    ) {
+      const productId =
+        normalizeProductGid(
+          entry?.productId,
+        );
+
+      const clause =
+        String(
+          entry?.clause ||
+          "",
+        ).trim();
+
+      if (
+        productId &&
+        clause
+      ) {
+        result.set(
+          productId,
+          clause,
+        );
+      }
+    }
+
+    return result;
+  }
+
+  function buildRetryTransportBatch(
+    productIds,
+    clauseByProductId,
+  ) {
+    const normalizedIds =
+      productIds
+        .map(
+          normalizeProductGid,
+        )
+        .filter(Boolean);
+
+    const clauses =
+      normalizedIds.map(
+        function (productId) {
+          const clause =
+            clauseByProductId.get(
+              productId,
+            );
+
+          if (!clause) {
+            throw new Error(
+              `THEME_CONTEXT_TRANSPORT_CLAUSE_MISSING:${productId}`,
+            );
+          }
+
+          return clause;
+        },
+      );
+
+    const query =
+      clauses.join(" OR ");
+
+    return {
+      productIds:
+        normalizedIds,
+      query,
+      encodedQueryLength:
+        encodeURIComponent(
+          query,
+        ).length,
+    };
+  }
+
+  function mergeCardMaps(
+    target,
+    source,
+  ) {
+    for (
+      const [
+        productId,
+        card,
+      ] of source
+    ) {
+      if (
+        target.has(productId)
+      ) {
+        throw new Error(
+          "THEME_CONTEXT_DUPLICATE_TARGET_ACROSS_BATCHES",
+        );
+      }
+
+      target.set(
+        productId,
+        card,
+      );
+    }
+  }
+
+  async function fetchThemeContextBatchAdaptive({
+    batch,
+    sectionId,
+    mountRecipe,
+    signal,
+    clauseByProductId,
+    depth = 0,
+  }) {
+    const result =
+      await fetchThemeContextBatch({
+        batch,
+        sectionId,
+        mountRecipe,
+        signal,
+      });
+
+    if (
+      result.missingIds.length ===
+      0
+    ) {
+      return result.selectedCards;
+    }
+
+    if (
+      depth >= 8
+    ) {
+      throw new Error(
+        `THEME_CONTEXT_TARGET_MISSING:${result.missingIds[0]}`,
+      );
+    }
+
+    let retryGroups;
+
+    if (
+      result.selectedCards.size > 0
+    ) {
+      /**
+       * Shopify đã render được một phần batch.
+       * Retry đúng phần còn thiếu trước; thường đây là
+       * trường hợp native page capacity nhỏ hơn batch AI.
+       */
+      retryGroups = [
+        result.missingIds,
+      ];
+    } else if (
+      result.missingIds.length > 1
+    ) {
+      /**
+       * 0/N target được trả về: chia đôi để tránh
+       * một query lớn/parser behavior làm fail toàn batch.
+       */
+      const middle =
+        Math.ceil(
+          result.missingIds.length /
+            2,
+        );
+
+      retryGroups = [
+        result.missingIds.slice(
+          0,
+          middle,
+        ),
+        result.missingIds.slice(
+          middle,
+        ),
+      ].filter(
+        (group) =>
+          group.length > 0,
+      );
+    } else {
+      throw new Error(
+        `THEME_CONTEXT_TARGET_MISSING:${result.missingIds[0]}`,
+      );
+    }
+
+    console.info(
+      logPrefix,
+      "adaptive section batch retry",
+      {
+        depth,
+        originalCount:
+          Array.isArray(
+            batch.productIds,
+          )
+            ? batch.productIds.length
+            : 0,
+        matchedCount:
+          result.selectedCards.size,
+        missingCount:
+          result.missingIds.length,
+        nextCounts:
+          retryGroups.map(
+            (group) =>
+              group.length,
+          ),
+      },
+    );
+
+    const retryMaps =
+      await Promise.all(
+        retryGroups.map(
+          function (group) {
+            return fetchThemeContextBatchAdaptive({
+              batch:
+                buildRetryTransportBatch(
+                  group,
+                  clauseByProductId,
+                ),
+              sectionId,
+              mountRecipe,
+              signal,
+              clauseByProductId,
+              depth:
+                depth + 1,
+            });
+          },
+        ),
+      );
+
+    const merged =
+      new Map(
+        result.selectedCards,
+      );
+
+    for (
+      const retryMap of
+      retryMaps
+    ) {
+      mergeCardMaps(
+        merged,
+        retryMap,
+      );
+    }
+
+    return merged;
+  }
+
+  function productHandleFromCard(
+    card,
+  ) {
+    const anchor =
+      card.querySelector(
+        'a[href*="/products/"]',
+      );
 
     if (!anchor) {
       return "";
@@ -703,111 +1442,329 @@
 
     try {
       return (
-        new URL(anchor.href, location.origin)
+        new URL(
+          anchor.href,
+          location.origin,
+        )
           .pathname
-          .match(/\/products\/([^/?#]+)/)?.[1] || ""
+          .match(
+            /\/products\/([^/?#]+)/,
+          )?.[1] || ""
       );
     } catch {
       return "";
     }
   }
 
-  async function renderThemeContext(receipt, page, plan, signal) {
-    const metadata = {
+  function buildThemeContextMetadata(
+    receipt,
+    page,
+    plan,
+  ) {
+    return {
       version: 4,
-      themeId: plan.theme_id,
-      fingerprint: plan.map_fingerprint,
-      receipt: plan.receipt || receipt,
-      searchLogId: plan.search_log_id || null,
-      page: Number(plan.pagination?.current_page || page),
-      pageSize: Number(plan.pagination?.page_size || 20),
-      totalProducts: Number(plan.pagination?.total_products || 0),
-      totalPages: Number(plan.pagination?.total_pages || 0),
-      candidateId: plan.candidate?.id || null,
-      runtimeMode: "THEME_CONTEXT",
-      mount: plan.mount,
-      candidateIds: plan.candidate?.id ? [plan.candidate.id] : [],
+
+      themeId:
+        plan.theme_id,
+
+      fingerprint:
+        plan.map_fingerprint,
+
+      receipt:
+        plan.receipt ||
+        receipt,
+
+      searchLogId:
+        plan.search_log_id ||
+        null,
+
+      page:
+        Number(
+          plan.pagination
+            ?.current_page ||
+            page,
+        ),
+
+      pageSize:
+        Number(
+          plan.pagination
+            ?.page_size ||
+            20,
+        ),
+
+      totalProducts:
+        Number(
+          plan.pagination
+            ?.total_products ||
+            0,
+        ),
+
+      totalPages:
+        Number(
+          plan.pagination
+            ?.total_pages ||
+            0,
+        ),
+
+      candidateId:
+        plan.candidate?.id ||
+        null,
+
+      runtimeMode:
+        "THEME_CONTEXT",
+
+      mount:
+        plan.mount,
+
+      candidateIds:
+        plan.candidate?.id
+          ? [plan.candidate.id]
+          : [],
+
       products: [],
     };
+  }
 
-    if (metadata.receipt !== receipt) {
-      throw new Error("THEME_CONTEXT_RECEIPT_MISMATCH");
-    }
-
-    const mount = verifyMount(metadata, receipt);
-    const sectionId = getSectionIdForMount(mount);
-
-    const targetProductIds = plan.targetProductIds.map(normalizeProductGid);
+  async function prepareThemeContextPage(
+    receipt,
+    page,
+    plan,
+    signal,
+  ) {
+    const totalStartedAt =
+      performance.now();
 
     if (
-      targetProductIds.some((productId) => !productId) ||
-      new Set(targetProductIds).size !== targetProductIds.length
+      !isUsableThemeContextPlan(
+        plan,
+        receipt,
+        page,
+      )
     ) {
-      throw new Error("THEME_CONTEXT_TARGET_IDS_INVALID");
+      throw new Error(
+        "THEME_TRANSPORT_PLAN_INVALID",
+      );
     }
 
-    const batchMaps = await Promise.all(
-      plan.batches.map(function (batch) {
-        return fetchThemeContextBatch({
-          batch,
-          sectionId,
-          mountRecipe: plan.mount,
-          signal,
-        });
-      }),
+    const metadata =
+      buildThemeContextMetadata(
+        receipt,
+        page,
+        plan,
+      );
+
+    if (
+      metadata.receipt !==
+      receipt
+    ) {
+      throw new Error(
+        "THEME_CONTEXT_RECEIPT_MISMATCH",
+      );
+    }
+
+    const mount =
+      verifyMount(
+        metadata,
+        receipt,
+      );
+
+    const sectionId =
+      getSectionIdForMount(
+        mount,
+      );
+
+    const targetProductIds =
+      plan.targetProductIds.map(
+        normalizeProductGid,
+      );
+
+    if (
+      targetProductIds.some(
+        (productId) =>
+          !productId,
+      ) ||
+      new Set(
+        targetProductIds,
+      ).size !==
+        targetProductIds.length
+    ) {
+      throw new Error(
+        "THEME_CONTEXT_TARGET_IDS_INVALID",
+      );
+    }
+
+    const clauseByProductId =
+      transportClauseMap(plan);
+
+    const sectionStartedAt =
+      performance.now();
+
+    const batchMaps =
+      await Promise.all(
+        plan.batches.map(
+          function (batch) {
+            return fetchThemeContextBatchAdaptive({
+              batch,
+              sectionId,
+              mountRecipe:
+                plan.mount,
+              signal,
+              clauseByProductId,
+            });
+          },
+        ),
+      );
+
+    const sectionRenderMs =
+      Math.round(
+        performance.now() -
+          sectionStartedAt,
+      );
+
+    const cardsByProductId =
+      new Map();
+
+    for (
+      const batchCards of
+      batchMaps
+    ) {
+      mergeCardMaps(
+        cardsByProductId,
+        batchCards,
+      );
+    }
+
+    const orderedCards =
+      targetProductIds.map(
+        function (productId) {
+          const card =
+            cardsByProductId.get(
+              productId,
+            );
+
+          if (!card) {
+            throw new Error(
+              `THEME_CONTEXT_TARGET_MISSING:${productId}`,
+            );
+          }
+
+          if (
+            card.hasAttribute(
+              "data-page",
+            )
+          ) {
+            card.setAttribute(
+              "data-page",
+              String(
+                metadata.page,
+              ),
+            );
+          }
+
+          return card;
+        },
+      );
+
+    const products =
+      orderedCards.map(
+        function (
+          card,
+          index,
+        ) {
+          return {
+            productId:
+              targetProductIds[
+                index
+              ],
+
+            handle:
+              productHandleFromCard(
+                card,
+              ),
+          };
+        },
+      );
+
+    metadata.products =
+      products;
+
+    return {
+      mount,
+      metadata,
+      sectionId,
+      orderedCards,
+      products,
+      batchCount:
+        plan.batches.length,
+      sectionRenderMs,
+      totalRenderMs:
+        Math.round(
+          performance.now() -
+            totalStartedAt,
+        ),
+    };
+  }
+
+  function applyPreparedThemeContextPage(
+    prepared,
+  ) {
+    const {
+      mount,
+      metadata,
+      orderedCards,
+      products,
+      sectionId,
+      batchCount,
+      sectionRenderMs,
+      totalRenderMs,
+    } = prepared;
+
+    /*
+     * V4 quản lý pagination.
+     * Không để native infinite-scroll append
+     * Shopify-native pages vào AI result grid.
+     */
+    suspendNativePaginationRuntime(
+      mount,
+      metadata.page,
     );
 
-    const cardsByProductId = new Map();
+    mount.replaceChildren(
+      ...orderedCards,
+    );
 
-    for (const batchCards of batchMaps) {
-      for (const [productId, card] of batchCards) {
-        if (cardsByProductId.has(productId)) {
-          throw new Error("THEME_CONTEXT_DUPLICATE_TARGET_ACROSS_BATCHES");
-        }
+    activeProducts =
+      products;
 
-        cardsByProductId.set(productId, card);
-      }
-    }
+    activateRuntime(
+      mount,
+      metadata,
+    );
 
-    const orderedCards = targetProductIds.map(function (productId) {
-      const card = cardsByProductId.get(productId);
+    cacheRenderedMount(
+      mount,
+      metadata,
+    );
 
-      if (!card) {
-        throw new Error(`THEME_CONTEXT_TARGET_MISSING:${productId}`);
-      }
-
-      if (card.hasAttribute("data-page")) {
-        card.setAttribute("data-page", String(metadata.page));
-      }
-
-      return card;
-    });
-
-    if (mount.hasAttribute("data-last-page")) {
-      mount.setAttribute("data-last-page", String(metadata.totalPages));
-    }
-
-    mount.replaceChildren(...orderedCards);
-
-    activeProducts = orderedCards.map(function (card, index) {
-      return {
-        productId: targetProductIds[index],
-        handle: productHandleFromCard(card),
-      };
-    });
-
-    metadata.products = activeProducts;
-
-    activateRuntime(mount, metadata);
-
-    console.info(logPrefix, "theme-context render complete", {
-      receipt,
-      page: metadata.page,
-      sectionId,
-      targetCount: targetProductIds.length,
-      batchCount: plan.batches.length,
-      mountSelector: plan.mount.selector,
-    });
+    console.info(
+      logPrefix,
+      "theme-context render complete",
+      {
+        receipt:
+          metadata.receipt,
+        page:
+          metadata.page,
+        sectionId,
+        targetCount:
+          products.length,
+        batchCount,
+        mountSelector:
+          metadata.mount?.selector ||
+          null,
+        sectionRenderMs,
+        totalRenderMs,
+      },
+    );
 
     return {
       mount,
@@ -815,12 +1772,156 @@
     };
   }
 
-  async function renderReceipt(receipt, page, signal) {
-    const transportPlan = await fetchTransportPlan(
-      receipt,
-      page,
-      signal,
+  async function renderThemeContext(
+    receipt,
+    page,
+    plan,
+    signal,
+  ) {
+    const prepared =
+      await prepareThemeContextPage(
+        receipt,
+        page,
+        plan,
+        signal,
+      );
+
+    return applyPreparedThemeContextPage(
+      prepared,
     );
+  }
+
+  function throwIfAborted(signal) {
+    if (!signal?.aborted) return;
+
+    const error =
+      new Error("Aborted");
+
+    error.name =
+      "AbortError";
+
+    throw error;
+  }
+  async function renderReceipt(
+    receipt,
+    page,
+    signal,
+    initialTransportPlan = null,
+  ) {
+    throwIfAborted(signal);
+
+    const planIdentity = {
+      themeId:
+        initialTransportPlan?.theme_id ||
+        currentThemeIdentity().themeId,
+      fingerprint:
+        initialTransportPlan?.map_fingerprint ||
+        currentThemeIdentity().fingerprint,
+    };
+
+    const cached =
+      restoreRenderedPageFromCache(
+        receipt,
+        page,
+        planIdentity.fingerprint,
+        planIdentity.themeId,
+      );
+
+    if (cached) {
+      return cached;
+    }
+
+    const cacheKey =
+      renderedPageCacheKey(
+        receipt,
+        page,
+        planIdentity.fingerprint,
+        planIdentity.themeId,
+      );
+
+    const prefetchPromise =
+      cacheKey
+        ? pagePrefetches.get(
+            cacheKey,
+          )
+        : null;
+
+    if (prefetchPromise) {
+      try {
+        await prefetchPromise;
+
+        throwIfAborted(signal);
+
+        const prefetched =
+          restoreRenderedPageFromCache(
+            receipt,
+            page,
+            planIdentity.fingerprint,
+            planIdentity.themeId,
+          );
+
+        if (prefetched) {
+          console.info(
+            logPrefix,
+            "awaited prefetched page",
+            {
+              receipt,
+              page,
+            },
+          );
+
+          return prefetched;
+        }
+      } catch (error) {
+        console.info(
+          logPrefix,
+          "prefetch unavailable; using foreground render",
+          {
+            receipt,
+            page,
+            reason:
+              error instanceof Error
+                ? error.message
+                : String(error),
+          },
+        );
+      }
+    }
+
+    throwIfAborted(signal);
+
+    let transportPlan = null;
+
+    if (
+      isUsableThemeContextPlan(
+        initialTransportPlan,
+        receipt,
+        page,
+      )
+    ) {
+      transportPlan =
+        initialTransportPlan;
+
+      console.info(
+        logPrefix,
+        "using initial transport plan",
+        {
+          receipt,
+          page,
+          batchCount:
+            transportPlan.batches.length,
+          targetCount:
+            transportPlan.targetProductIds.length,
+        },
+      );
+    } else {
+      transportPlan =
+        await fetchTransportPlan(
+          receipt,
+          page,
+          signal,
+        );
+    }
 
     if (transportPlan) {
       return renderThemeContext(
@@ -831,327 +1932,885 @@
       );
     }
 
-    return renderAppProxy(receipt, page, signal);
+    const rendered =
+      await renderAppProxy(
+        receipt,
+        page,
+        signal,
+      );
+
+    cacheRenderedMount(
+      rendered.mount,
+      rendered.metadata,
+    );
+
+    return rendered;
   }
 
-  function updateResultCount(mount, metadata) {
-    const totalProducts = Number(metadata.totalProducts);
+  function scheduleAdjacentPrefetch(
+    receipt,
+    metadata,
+  ) {
+    const currentPage =
+      Number(metadata?.page || 1);
 
-    if (!Number.isSafeInteger(totalProducts) || totalProducts < 0) {
+    const totalPages =
+      Number(
+        metadata?.totalPages ||
+        0,
+      );
+
+    if (
+      !receiptPattern.test(
+        String(receipt || ""),
+      ) ||
+      !Number.isSafeInteger(
+        currentPage,
+      ) ||
+      !Number.isSafeInteger(
+        totalPages,
+      ) ||
+      currentPage < 1 ||
+      currentPage >= totalPages
+    ) {
+      return;
+    }
+
+    const nextPage =
+      currentPage + 1;
+
+    const key =
+      renderedPageCacheKey(
+        receipt,
+        nextPage,
+        metadata.fingerprint,
+        metadata.themeId,
+      );
+
+    if (
+      !key ||
+      renderedPageCache.has(key) ||
+      pagePrefetches.has(key)
+    ) {
+      return;
+    }
+
+    const promise =
+      Promise.resolve()
+        .then(
+          async function () {
+            const plan =
+              await fetchTransportPlan(
+                receipt,
+                nextPage,
+                undefined,
+              );
+
+            /**
+             * Classic APP_PROXY_LIQUID path chưa cần background prefetch.
+             * Fast Path này tập trung vào Theme Context Section Rendering.
+             */
+            if (!plan) {
+              return;
+            }
+
+            const prepared =
+              await prepareThemeContextPage(
+                receipt,
+                nextPage,
+                plan,
+                undefined,
+              );
+
+            cacheRenderedElements(
+              prepared.orderedCards,
+              prepared.metadata,
+              prepared.products,
+            );
+
+            console.info(
+              logPrefix,
+              "adjacent page prefetched",
+              {
+                receipt,
+                page:
+                  nextPage,
+                productCount:
+                  prepared.products.length,
+                sectionRenderMs:
+                  prepared.sectionRenderMs,
+              },
+            );
+          },
+        )
+        .finally(
+          function () {
+            pagePrefetches.delete(
+              key,
+            );
+          },
+        );
+
+    pagePrefetches.set(
+      key,
+      promise,
+    );
+  }
+
+  function updateResultCount(
+    mount,
+    metadata,
+  ) {
+    const totalProducts =
+      Number(
+        metadata.totalProducts,
+      );
+
+    if (
+      !Number.isSafeInteger(
+        totalProducts,
+      ) ||
+      totalProducts < 0
+    ) {
       return;
     }
 
     const scopes = [
-      mount.closest("section"),
-      mount.closest('[id^="shopify-section-"]'),
-      mount.closest("main"),
+      mount.closest(
+        "section",
+      ),
+
+      mount.closest(
+        '[id^="shopify-section-"]',
+      ),
+
+      mount.closest(
+        "main",
+      ),
     ].filter(Boolean);
 
-    let statusElement = null;
+    let statusElement =
+      null;
 
-    for (const scope of scopes) {
-      const candidates = Array.from(
-        scope.querySelectorAll('[role="status"]'),
-      ).filter(function (element) {
-        if (mount.contains(element)) return false;
-        if (element.getAttribute("aria-hidden") === "true") return false;
-        if (!(element.textContent || "").trim()) return false;
-        return true;
-      });
+    for (
+      const scope of scopes
+    ) {
+      const candidates =
+        Array.from(
+          scope.querySelectorAll(
+            '[role="status"]',
+          ),
+        ).filter(
+          function (
+            element,
+          ) {
+            if (
+              mount.contains(
+                element,
+              )
+            ) {
+              return false;
+            }
 
-      if (candidates.length === 1) {
-        statusElement = candidates[0];
+            if (
+              element.getAttribute(
+                "aria-hidden",
+              ) === "true"
+            ) {
+              return false;
+            }
+
+            if (
+              !(
+                element.textContent ||
+                ""
+              ).trim()
+            ) {
+              return false;
+            }
+
+            return true;
+          },
+        );
+
+      if (
+        candidates.length ===
+        1
+      ) {
+        statusElement =
+          candidates[0];
+
         break;
       }
     }
 
     if (!statusElement) {
-      console.info(logPrefix, "resultCount skipped", {
-        reason: "RESULT_COUNT_STATUS_NOT_UNIQUE",
-        totalProducts,
-      });
+      console.info(
+        logPrefix,
+        "resultCount skipped",
+        {
+          reason:
+            "RESULT_COUNT_STATUS_NOT_UNIQUE",
+
+          totalProducts,
+        },
+      );
+
       return;
     }
 
-    const currentText = statusElement.textContent || "";
-    const countToken = currentText.match(
-      /\d(?:[\d.,\u00A0\u202F ]*\d)?/,
-    );
+    const currentText =
+      statusElement.textContent ||
+      "";
 
-    if (!countToken || typeof countToken.index !== "number") {
-      console.info(logPrefix, "resultCount skipped", {
-        reason: "RESULT_COUNT_NUMBER_NOT_FOUND",
-        totalProducts,
-        currentText,
-      });
+    const countToken =
+      currentText.match(
+        /\d(?:[\d.,\u00A0\u202F ]*\d)?/,
+      );
+
+    if (
+      !countToken ||
+      typeof countToken.index !==
+        "number"
+    ) {
+      console.info(
+        logPrefix,
+        "resultCount skipped",
+        {
+          reason:
+            "RESULT_COUNT_NUMBER_NOT_FOUND",
+
+          totalProducts,
+          currentText,
+        },
+      );
+
       return;
     }
 
     statusElement.textContent =
-      currentText.slice(0, countToken.index) +
-      String(totalProducts) +
-      currentText.slice(countToken.index + countToken[0].length);
+      currentText.slice(
+        0,
+        countToken.index,
+      ) +
+      String(
+        totalProducts,
+      ) +
+      currentText.slice(
+        countToken.index +
+          countToken[0].length,
+      );
 
-    console.info(logPrefix, "resultCount updated", {
-      totalProducts,
-      previousText: currentText,
-      updatedText: statusElement.textContent,
-    });
+    console.info(
+      logPrefix,
+      "resultCount updated",
+      {
+        totalProducts,
+        previousText:
+          currentText,
+        updatedText:
+          statusElement.textContent,
+      },
+    );
   }
 
   function removePagination() {
-    document.querySelector("[data-ai-search-v4-pagination]")?.remove();
+    document
+      .querySelector(
+        "[data-ai-search-v4-pagination]",
+      )
+      ?.remove();
   }
 
-  function paginationButton(label, page, current, onPage) {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.textContent = label;
-    button.disabled = current;
+  function paginationButton(
+    label,
+    page,
+    current,
+    onPage,
+  ) {
+    const button =
+      document.createElement(
+        "button",
+      );
+
+    button.type =
+      "button";
+
+    button.textContent =
+      label;
+
+    button.disabled =
+      current;
 
     if (current) {
-      button.setAttribute("aria-current", "page");
+      button.setAttribute(
+        "aria-current",
+        "page",
+      );
     }
 
-    button.addEventListener("click", function () {
-      onPage(page);
-    });
+    button.addEventListener(
+      "click",
+      function () {
+        onPage(page);
+      },
+    );
 
     return button;
   }
 
-  function mountPagination(mount, metadata, onPage) {
+  function mountPagination(
+    mount,
+    metadata,
+    onPage,
+  ) {
     removePagination();
 
-    if (metadata.totalPages <= 1) {
+    if (
+      metadata.totalPages <=
+      1
+    ) {
       return;
     }
 
-    const nav = document.createElement("nav");
-    nav.dataset.aiSearchV4Pagination = "";
-    nav.setAttribute("aria-label", "Search result pages");
-
-    if (metadata.page > 1) {
-      nav.appendChild(
-        paginationButton("←", metadata.page - 1, false, onPage),
+    const nav =
+      document.createElement(
+        "nav",
       );
-    }
 
-    const first = Math.max(1, metadata.page - 2);
-    const last = Math.min(metadata.totalPages, metadata.page + 2);
+    nav.dataset.aiSearchV4Pagination =
+      "";
 
-    for (let page = first; page <= last; page += 1) {
+    nav.setAttribute(
+      "aria-label",
+      "Search result pages",
+    );
+
+    if (
+      metadata.page > 1
+    ) {
       nav.appendChild(
         paginationButton(
-          String(page),
-          page,
-          page === metadata.page,
+          "←",
+          metadata.page - 1,
+          false,
           onPage,
         ),
       );
     }
 
-    if (metadata.page < metadata.totalPages) {
+    const first =
+      Math.max(
+        1,
+        metadata.page - 2,
+      );
+
+    const last =
+      Math.min(
+        metadata.totalPages,
+        metadata.page + 2,
+      );
+
+    for (
+      let page = first;
+      page <= last;
+      page += 1
+    ) {
       nav.appendChild(
-        paginationButton("→", metadata.page + 1, false, onPage),
+        paginationButton(
+          String(page),
+          page,
+          page ===
+            metadata.page,
+          onPage,
+        ),
       );
     }
 
-    mount.insertAdjacentElement("afterend", nav);
-  }
+    if (
+      metadata.page <
+      metadata.totalPages
+    ) {
+      nav.appendChild(
+        paginationButton(
+          "→",
+          metadata.page + 1,
+          false,
+          onPage,
+        ),
+      );
+    }
 
-  function isRecoverableReceiptError(error) {
-    const message = error instanceof Error ? error.message : String(error);
-
-    return (
-      message === "THEME_RENDER_HTTP_404" ||
-      message === "THEME_RENDER_HTTP_410" ||
-      message === "THEME_TRANSPORT_HTTP_410" ||
-      message === "SEARCH_RECEIPT_EXPIRED_OR_INVALID" ||
-      message === "SEARCH_RECEIPT_INVALID" ||
-      message === "SEARCH_RECEIPT_REQUIRED"
+    mount.insertAdjacentElement(
+      "afterend",
+      nav,
     );
   }
 
-  async function fetchFreshReceipt(query, signal) {
-    const requestUrl = backendUrl(query);
+  function isRecoverableReceiptError(
+    error,
+  ) {
+    const message =
+      error instanceof Error
+        ? error.message
+        : String(error);
 
-    console.info(logPrefix, "fetchAiResults", {
-      query,
-      page: 1,
-      url: requestUrl,
-    });
+    return (
+      message ===
+        "THEME_RENDER_HTTP_404" ||
+      message ===
+        "THEME_RENDER_HTTP_410" ||
+      message ===
+        "THEME_TRANSPORT_HTTP_410" ||
+      message ===
+        "SEARCH_RECEIPT_EXPIRED_OR_INVALID" ||
+      message ===
+        "SEARCH_RECEIPT_INVALID" ||
+      message ===
+        "SEARCH_RECEIPT_REQUIRED"
+    );
+  }
 
-    const response = await fetch(requestUrl, {
-      credentials: "same-origin",
-      signal,
-      headers: {
-        Accept: "application/json",
+  async function fetchFreshReceipt(
+    query,
+    signal,
+  ) {
+    const requestUrl =
+      backendUrl(query);
+
+    console.info(
+      logPrefix,
+      "fetchAiResults",
+      {
+        query,
+        page: 1,
+        url: requestUrl,
       },
-    });
+    );
+
+    const response =
+      await fetch(
+        requestUrl,
+        {
+          credentials:
+            "same-origin",
+
+          signal,
+
+          headers: {
+            Accept:
+              "application/json",
+          },
+        },
+      );
 
     if (!response.ok) {
-      throw new Error(`AI_SEARCH_HTTP_${response.status}`);
+      throw new Error(
+        `AI_SEARCH_HTTP_${response.status}`,
+      );
     }
 
-    const data = await response.json();
+    const data =
+      await response.json();
 
-    if (data.status !== "success") {
-      console.warn(logPrefix, "backend fallback response", {
-        status: data.status,
-        reason: data.reason || "AI_SEARCH_FAILED",
-        nativeUrl: data.native_url || null,
-      });
+    if (
+      data.status !==
+      "success"
+    ) {
+      console.warn(
+        logPrefix,
+        "backend fallback response",
+        {
+          status:
+            data.status,
 
-      throw new Error(data.reason || "AI_SEARCH_FAILED");
+          reason:
+            data.reason ||
+            "AI_SEARCH_FAILED",
+
+          nativeUrl:
+            data.native_url ||
+            null,
+        },
+      );
+
+      throw new Error(
+        data.reason ||
+          "AI_SEARCH_FAILED",
+      );
     }
 
-    const receipt = data.render_receipt?.id || "";
+    const receipt =
+      data.render_receipt?.id ||
+      "";
 
-    if (!receiptPattern.test(receipt)) {
-      throw new Error("SEARCH_RECEIPT_INVALID");
+    if (
+      !receiptPattern.test(
+        receipt,
+      )
+    ) {
+      throw new Error(
+        "SEARCH_RECEIPT_INVALID",
+      );
     }
 
     if (data.theme_id) {
       config.theme_id =
-        String(data.theme_id);
+        String(
+          data.theme_id,
+        );
     }
 
-    if (data.map_fingerprint) {
+    if (
+      data.map_fingerprint
+    ) {
       config.map_fingerprint =
-        String(data.map_fingerprint);
+        String(
+          data.map_fingerprint,
+        );
     }
 
     return {
       receipt,
-      searchLogId: data.search_log_id || null,
-      themeId: data.theme_id || null,
-      fingerprint: data.map_fingerprint || null,
+
+      searchLogId:
+        data.search_log_id ||
+        null,
+
+      themeId:
+        data.theme_id ||
+        null,
+
+      fingerprint:
+        data.map_fingerprint ||
+        null,
+
+      initialTransportPlan:
+        data.initial_transport_plan ||
+        null,
     };
   }
 
-  async function execute(query, page, receipt, replaceUrl) {
+  async function execute(
+    query,
+    page,
+    receipt,
+    replaceUrl,
+  ) {
     controller?.abort();
-    controller = new AbortController();
 
-    const signal = controller.signal;
-    const requestId = ++requestNumber;
+    controller =
+      new AbortController();
 
-    showLoading();
+    const signal =
+      controller.signal;
+
+    const requestId =
+      ++requestNumber;
+
+    const hadExistingReceipt =
+      Boolean(receipt);
+
+    if (hadExistingReceipt) {
+      /*
+       * Pagination/Back/Forward giữ grid hiện tại trên màn hình.
+       * Không phủ full-screen loader khi receipt đã tồn tại.
+       */
+      hideLoading();
+    } else {
+      showLoading();
+    }
+
+    /*
+     * FIX QUAN TRỌNG:
+     *
+     * Chặn native infinite-scroll
+     * NGAY TRƯỚC khi gọi backend.
+     *
+     * Search AI có thể mất vài giây.
+     * Nếu đợi render xong mới chặn
+     * thì Horizon có thể đã tự tải
+     * page 2, 3, 4... vào grid.
+     */
+    suspendNativePaginationRuntime(
+      null,
+      page,
+    );
 
     try {
-      let activeReceipt = receipt;
-      let renderPage = page;
-      let usedExistingReceipt = Boolean(activeReceipt);
+      let activeReceipt =
+        receipt;
+
+      let renderPage =
+        page;
+
+      let usedExistingReceipt =
+        Boolean(
+          activeReceipt,
+        );
+
+      let initialTransportPlan =
+        null;
 
       if (!activeReceipt) {
-        const fresh = await fetchFreshReceipt(query, signal);
-        activeReceipt = fresh.receipt;
-        activeSearchLogId = fresh.searchLogId;
-        usedExistingReceipt = false;
+        const fresh =
+          await fetchFreshReceipt(
+            query,
+            signal,
+          );
+
+        activeReceipt =
+          fresh.receipt;
+
+        activeSearchLogId =
+          fresh.searchLogId;
+
+        initialTransportPlan =
+          fresh.initialTransportPlan;
+
+        usedExistingReceipt =
+          false;
       }
 
       let rendered;
 
       try {
-        rendered = await renderReceipt(activeReceipt, renderPage, signal);
+        rendered =
+          await renderReceipt(
+            activeReceipt,
+            renderPage,
+            signal,
+            initialTransportPlan,
+          );
       } catch (error) {
-        if (!usedExistingReceipt || !isRecoverableReceiptError(error)) {
+        if (
+          !usedExistingReceipt ||
+          !isRecoverableReceiptError(
+            error,
+          )
+        ) {
           throw error;
         }
 
-        console.info(logPrefix, "receipt expired; refreshing search", {
-          query,
-          page: renderPage,
-          receipt: activeReceipt,
-          reason: error instanceof Error ? error.message : String(error),
-        });
+        console.info(
+          logPrefix,
+          "receipt expired; refreshing search",
+          {
+            query,
+            page:
+              renderPage,
+            receipt:
+              activeReceipt,
 
-        const fresh = await fetchFreshReceipt(query, signal);
-        activeReceipt = fresh.receipt;
-        activeSearchLogId = fresh.searchLogId;
-        usedExistingReceipt = false;
+            reason:
+              error instanceof
+              Error
+                ? error.message
+                : String(
+                    error,
+                  ),
+          },
+        );
 
-        rendered = await renderReceipt(activeReceipt, renderPage, signal);
+        showLoading();
+
+        const fresh =
+          await fetchFreshReceipt(
+            query,
+            signal,
+          );
+
+        activeReceipt =
+          fresh.receipt;
+
+        activeSearchLogId =
+          fresh.searchLogId;
+
+        initialTransportPlan =
+          fresh.initialTransportPlan;
+
+        usedExistingReceipt =
+          false;
+
+        rendered =
+          await renderReceipt(
+            activeReceipt,
+            renderPage,
+            signal,
+            initialTransportPlan,
+          );
       }
 
-      if (requestId !== requestNumber) {
+      if (
+        requestId !==
+        requestNumber
+      ) {
         return;
       }
 
       activeSearchLogId =
-        rendered.metadata.searchLogId || activeSearchLogId;
+        rendered.metadata
+          .searchLogId ||
+        activeSearchLogId;
 
       writeUrl({
         query,
-        page: rendered.metadata.page,
-        receipt: activeReceipt,
-        replace: replaceUrl,
-        searchLogId: activeSearchLogId,
-        fingerprint: rendered.metadata.fingerprint,
-        themeId: rendered.metadata.themeId,
+
+        page:
+          rendered.metadata
+            .page,
+
+        receipt:
+          activeReceipt,
+
+        replace:
+          replaceUrl,
+
+        searchLogId:
+          activeSearchLogId,
+
+        fingerprint:
+          rendered.metadata
+            .fingerprint,
+
+        themeId:
+          rendered.metadata
+            .themeId,
       });
 
-      updateResultCount(rendered.mount, rendered.metadata);
+      updateResultCount(
+        rendered.mount,
+        rendered.metadata,
+      );
 
       mountPagination(
         rendered.mount,
         rendered.metadata,
-        function (nextPage) {
+        function (
+          nextPage,
+        ) {
           writeUrl({
             query,
-            page: nextPage,
-            receipt: activeReceipt,
-            replace: false,
-            searchLogId: activeSearchLogId,
-            fingerprint: rendered.metadata.fingerprint,
-            themeId: rendered.metadata.themeId,
+            page:
+              nextPage,
+            receipt:
+              activeReceipt,
+            replace:
+              false,
+            searchLogId:
+              activeSearchLogId,
+            fingerprint:
+              rendered.metadata
+                .fingerprint,
+            themeId:
+              rendered.metadata
+                .themeId,
           });
 
-          void execute(query, nextPage, activeReceipt, true);
+          void execute(
+            query,
+            nextPage,
+            activeReceipt,
+            true,
+          );
         },
       );
 
+      scheduleAdjacentPrefetch(
+        activeReceipt,
+        rendered.metadata,
+      );
+
       document.dispatchEvent(
-        new CustomEvent("ai-search:v3:updated", {
-          detail: {
-            query,
-            page: rendered.metadata.page,
-            engine: "ai-search-v4",
-            renderReceipt: activeReceipt,
-            pagination: {
-              current_page: rendered.metadata.page,
-              page_size: rendered.metadata.pageSize,
-              total_products: rendered.metadata.totalProducts,
-              total_pages: rendered.metadata.totalPages,
+        new CustomEvent(
+          "ai-search:v3:updated",
+          {
+            detail: {
+              query,
+
+              page:
+                rendered
+                  .metadata
+                  .page,
+
+              engine:
+                "ai-search-v4",
+
+              renderReceipt:
+                activeReceipt,
+
+              pagination: {
+                current_page:
+                  rendered
+                    .metadata
+                    .page,
+
+                page_size:
+                  rendered
+                    .metadata
+                    .pageSize,
+
+                total_products:
+                  rendered
+                    .metadata
+                    .totalProducts,
+
+                total_pages:
+                  rendered
+                    .metadata
+                    .totalPages,
+              },
+
+              searchLogId:
+                activeSearchLogId,
             },
-            searchLogId: activeSearchLogId,
           },
-        }),
+        ),
       );
     } catch (error) {
       if (
-        error?.name !== "AbortError" &&
-        requestId === requestNumber
+        error?.name !==
+          "AbortError" &&
+        requestId ===
+          requestNumber
       ) {
-        console.error(logPrefix, "executeAiSearch failed", {
-          query,
-          page,
-          receipt: receipt || null,
-          reason: error instanceof Error ? error.message : String(error),
-        });
+        console.error(
+          logPrefix,
+          "executeAiSearch failed",
+          {
+            query,
+            page,
+
+            receipt:
+              receipt ||
+              null,
+
+            reason:
+              error instanceof Error
+                ? error.message
+                : String(
+                    error,
+                  ),
+          },
+        );
 
         fallback(query);
       }
     } finally {
-      if (requestId === requestNumber) {
+      if (
+        requestId ===
+        requestNumber
+      ) {
         hideLoading();
       }
     }
   }
 
-  function runCurrentSearchEntry(replaceUrl) {
-    const current = publicState();
+  function runCurrentSearchEntry(
+    replaceUrl,
+  ) {
+    const current =
+      publicState();
 
     if (
       !current.isSearchPage ||
@@ -1159,14 +2818,26 @@
       !current.query
     ) {
       hideLoading();
+
       return;
     }
 
-    const runtime = runtimeStateFor(current.query, current.page);
-    const receipt = runtime?.receipt || current.legacyReceipt || "";
+    const runtime =
+      runtimeStateFor(
+        current.query,
+        current.page,
+      );
 
-    if (runtime?.searchLogId) {
-      activeSearchLogId = runtime.searchLogId;
+    const receipt =
+      runtime?.receipt ||
+      current.legacyReceipt ||
+      "";
+
+    if (
+      runtime?.searchLogId
+    ) {
+      activeSearchLogId =
+        runtime.searchLogId;
     }
 
     void execute(
@@ -1176,32 +2847,52 @@
       replaceUrl,
     );
   }
-
   document.addEventListener(
     "submit",
     function (event) {
-      const form = event.target;
+      const form =
+        event.target;
 
-      if (!(form instanceof HTMLFormElement)) {
+      if (
+        !(
+          form instanceof
+          HTMLFormElement
+        )
+      ) {
         return;
       }
 
-      const input = form.querySelector('input[name="q"]');
+      const input =
+        form.querySelector(
+          'input[name="q"]',
+        );
 
-      if (!(input instanceof HTMLInputElement)) {
+      if (
+        !(
+          input instanceof
+          HTMLInputElement
+        )
+      ) {
         return;
       }
 
-      const action = new URL(
-        form.action || location.href,
-        location.origin,
-      );
+      const action =
+        new URL(
+          form.action ||
+            location.href,
+          location.origin,
+        );
 
-      if (!isSearchPath(action.pathname)) {
+      if (
+        !isSearchPath(
+          action.pathname,
+        )
+      ) {
         return;
       }
 
-      const query = input.value.trim();
+      const query =
+        input.value.trim();
 
       if (!query) {
         return;
@@ -1209,32 +2900,67 @@
 
       event.preventDefault();
 
-      console.info(logPrefix, "submitAiSearch intercepted", {
-        query,
-        formAction: action.pathname + action.search,
-      });
+      console.info(
+        logPrefix,
+        "submitAiSearch intercepted",
+        {
+          query,
 
-      activeSearchLogId = null;
-      activeProducts = [];
+          formAction:
+            action.pathname +
+            action.search,
+        },
+      );
+
+      activeSearchLogId =
+        null;
+
+      activeProducts =
+        [];
+
       removePagination();
+
       showLoading();
 
-      if (isSearchPath(location.pathname)) {
-        console.info(logPrefix, "submitAiSearch in-place", {
-          query,
-        });
+      if (
+        isSearchPath(
+          location.pathname,
+        )
+      ) {
+        console.info(
+          logPrefix,
+          "submitAiSearch in-place",
+          {
+            query,
+          },
+        );
 
-        void execute(query, 1, "", false);
+        void execute(
+          query,
+          1,
+          "",
+          false,
+        );
+
         return;
       }
 
       /*
-       * Trang khác không có search mount của theme.
-       * Điều hướng sang search shell là bước bắt buộc với kiến trúc hiện tại.
-       * URL public không chứa receipt/ai_search.
+       * Trang khác không có
+       * search mount của theme.
+       *
+       * Cần vào /search shell
+       * trước khi V4 render.
        */
-      const url = searchUrl(query, 1);
-      location.assign(url.href);
+      const url =
+        searchUrl(
+          query,
+          1,
+        );
+
+      location.assign(
+        url.href,
+      );
     },
     true,
   );
@@ -1242,118 +2968,231 @@
   document.addEventListener(
     "click",
     function (event) {
-      if (!activeSearchLogId) {
+      if (
+        !activeSearchLogId
+      ) {
         return;
       }
 
       const anchor =
-        event.target instanceof Element
-          ? event.target.closest('a[href*="/products/"]')
+        event.target instanceof
+        Element
+          ? event.target.closest(
+              'a[href*="/products/"]',
+            )
           : null;
 
       if (!anchor) {
         return;
       }
 
-      const card = anchor.closest("[data-product-id]");
-      const cardProductId = normalizeProductGid(
-        card?.getAttribute("data-product-id"),
-      );
+      const card =
+        anchor.closest(
+          "[data-product-id]",
+        );
 
-      const activeProductIds = new Set(
-        activeProducts
-          .map(function (entry) {
-            return normalizeProductGid(entry.productId);
-          })
-          .filter(Boolean),
-      );
+      const cardProductId =
+        normalizeProductGid(
+          card?.getAttribute(
+            "data-product-id",
+          ),
+        );
+
+      const activeProductIds =
+        new Set(
+          activeProducts
+            .map(
+              function (
+                entry,
+              ) {
+                return normalizeProductGid(
+                  entry.productId,
+                );
+              },
+            )
+            .filter(
+              Boolean,
+            ),
+        );
 
       let productId =
-        cardProductId && activeProductIds.has(cardProductId)
+        cardProductId &&
+        activeProductIds.has(
+          cardProductId,
+        )
           ? cardProductId
           : "";
 
       if (!productId) {
-        const handle = new URL(anchor.href, location.origin)
-          .pathname
-          .match(/\/products\/([^/?#]+)/)?.[1];
+        const handle =
+          new URL(
+            anchor.href,
+            location.origin,
+          )
+            .pathname
+            .match(
+              /\/products\/([^/?#]+)/,
+            )?.[1];
 
-        const product = activeProducts.find(function (entry) {
-          return entry.handle === handle;
-        });
+        const product =
+          activeProducts.find(
+            function (
+              entry,
+            ) {
+              return (
+                entry.handle ===
+                handle
+              );
+            },
+          );
 
-        productId = normalizeProductGid(product?.productId);
+        productId =
+          normalizeProductGid(
+            product?.productId,
+          );
       }
 
       if (!productId) {
         return;
       }
 
-      void fetch(clickEndpoint, {
-        method: "POST",
-        credentials: "same-origin",
-        keepalive: true,
-        headers: {
-          "Content-Type": "application/json",
+      void fetch(
+        clickEndpoint,
+        {
+          method:
+            "POST",
+
+          credentials:
+            "same-origin",
+
+          keepalive:
+            true,
+
+          headers: {
+            "Content-Type":
+              "application/json",
+          },
+
+          body:
+            JSON.stringify(
+              {
+                searchLogId:
+                  activeSearchLogId,
+
+                productId,
+              },
+            ),
         },
-        body: JSON.stringify({
-          searchLogId: activeSearchLogId,
-          productId,
-        }),
-      });
+      );
     },
     true,
   );
 
-  window.addEventListener("popstate", function () {
-    runCurrentSearchEntry(true);
-  });
+  window.addEventListener(
+    "popstate",
+    function () {
+      runCurrentSearchEntry(
+        true,
+      );
+    },
+  );
 
-  window.addEventListener("pageshow", function (event) {
-    if (!event.persisted) {
-      return;
-    }
+  window.addEventListener(
+    "pageshow",
+    function (event) {
+      if (
+        !event.persisted
+      ) {
+        return;
+      }
 
-    const current = publicState();
-    const runtime = runtimeStateFor(current.query, current.page);
-    const renderedReceipt =
-      document.documentElement.dataset.aiSearchV4Receipt || "";
-    const renderedPage = Number.parseInt(
-      document.documentElement.dataset.aiSearchV4Page || "1",
-      10,
-    );
+      const current =
+        publicState();
 
-    if (
-      current.isSearchPage &&
-      !current.bypass &&
-      current.query &&
-      runtime?.receipt &&
-      renderedReceipt === runtime.receipt &&
-      renderedPage === current.page
-    ) {
-      activeSearchLogId = runtime.searchLogId || activeSearchLogId;
-      hideLoading();
+      const runtime =
+        runtimeStateFor(
+          current.query,
+          current.page,
+        );
 
-      console.info(logPrefix, "pageshow BFCache restored", {
-        query: current.query,
-        page: current.page,
-        receipt: runtime.receipt,
-      });
+      const renderedReceipt =
+        document
+          .documentElement
+          .dataset
+          .aiSearchV4Receipt ||
+        "";
 
-      return;
-    }
+      const renderedPage =
+        Number.parseInt(
+          document
+            .documentElement
+            .dataset
+            .aiSearchV4Page ||
+            "1",
+          10,
+        );
 
-    runCurrentSearchEntry(true);
-  });
+      if (
+        current.isSearchPage &&
+        !current.bypass &&
+        current.query &&
+        runtime?.receipt &&
+        renderedReceipt ===
+          runtime.receipt &&
+        renderedPage ===
+          current.page
+      ) {
+        activeSearchLogId =
+          runtime.searchLogId ||
+          activeSearchLogId;
 
-  console.info(logPrefix, "loaded", {
-    source: "search-interceptor.v4.js",
-    configVersion: config.version ?? null,
-    themeMapVersion: config.theme_map_version ?? null,
-    endpoint,
-  });
+        hideLoading();
 
-  const initial = publicState();
+        console.info(
+          logPrefix,
+          "pageshow BFCache restored",
+          {
+            query:
+              current.query,
+
+            page:
+              current.page,
+
+            receipt:
+              runtime.receipt,
+          },
+        );
+
+        return;
+      }
+
+      runCurrentSearchEntry(
+        true,
+      );
+    },
+  );
+
+  console.info(
+    logPrefix,
+    "loaded",
+    {
+      source:
+        "search-interceptor.v4.js",
+
+      configVersion:
+        config.version ??
+        null,
+
+      themeMapVersion:
+        config.theme_map_version ??
+        null,
+
+      endpoint,
+    },
+  );
+
+  const initial =
+    publicState();
 
   if (
     initial.isSearchPage &&
@@ -1361,6 +3200,9 @@
     initial.query
   ) {
     showLoading();
-    runCurrentSearchEntry(true);
+
+    runCurrentSearchEntry(
+      true,
+    );
   }
 })();

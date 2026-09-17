@@ -117,6 +117,377 @@ interface ResolvedArguments {
     boolean;
 }
 
+/**
+ * Runtime rendering profile được compile sẵn từ source theme.
+ *
+ * Đây chỉ là metadata tối ưu transport. Nó KHÔNG thay đổi renderer
+ * candidate, status hoặc fingerprint semantics của Theme Map V4.
+ * Vì vậy Theme Map cũ không có field này vẫn tiếp tục chạy bằng
+ * fallback batch size hiện tại.
+ */
+export interface ThemeMapV4TransportProfile {
+  version: 1;
+
+  nativePageSize:
+    number | null;
+
+  preferredBatchSize:
+    number;
+
+  maxEncodedQueryLength:
+    number;
+
+  paginationMode:
+    | "INFINITE_SCROLL"
+    | "PAGINATION"
+    | "UNKNOWN";
+
+  mustSuspendNativePagination:
+    boolean;
+
+  sourceProven:
+    boolean;
+}
+
+const THEME_TRANSPORT_PROFILE_VERSION =
+  1 as const;
+
+/**
+ * Giữ nguyên hành vi an toàn cũ khi compiler không chứng minh được
+ * native page capacity. Runtime/client adaptive retry có thể tối ưu
+ * tiếp nhưng compiler không được đoán.
+ */
+const THEME_TRANSPORT_FALLBACK_BATCH_SIZE =
+  8;
+
+const THEME_TRANSPORT_MAX_BATCH_SIZE =
+  THEME_MAP_V4_DEFAULT_PAGE_SIZE;
+
+const THEME_TRANSPORT_MAX_ENCODED_QUERY_LENGTH =
+  1400;
+
+function positiveInteger(
+  value: unknown,
+): number | null {
+  const numeric =
+    typeof value === "number"
+      ? value
+      : typeof value === "string" &&
+          /^\d+$/.test(
+            value.trim(),
+          )
+        ? Number(
+            value.trim(),
+          )
+        : Number.NaN;
+
+  if (
+    !Number.isFinite(
+      numeric,
+    ) ||
+    !Number.isInteger(
+      numeric,
+    ) ||
+    numeric <= 0
+  ) {
+    return null;
+  }
+
+  return numeric;
+}
+
+function numericAssignmentsFromSource(
+  source: string,
+): Map<string, number> {
+  const assignments =
+    new Map<
+      string,
+      number
+    >();
+
+  /**
+   * Ví dụ:
+   * {% assign products_per_page = 24 %}
+   */
+  const pattern =
+    /\bassign\s+([A-Za-z_][A-Za-z0-9_-]*)\s*=\s*(\d+)\b/gi;
+
+  let match:
+    RegExpExecArray | null;
+
+  while (
+    (match =
+      pattern.exec(source)) !=
+    null
+  ) {
+    const value =
+      positiveInteger(
+        match[2],
+      );
+
+    if (value != null) {
+      assignments.set(
+        match[1],
+        value,
+      );
+    }
+  }
+
+  return assignments;
+}
+
+function resolveNativePageSizeExpression(
+  expression: string,
+  source: string,
+  resolver: ThemeSettingResolver,
+): number | null {
+  const normalized =
+    expression.trim();
+
+  const direct =
+    positiveInteger(
+      normalized,
+    );
+
+  if (direct != null) {
+    return direct;
+  }
+
+  const assigned =
+    numericAssignmentsFromSource(
+      source,
+    ).get(normalized);
+
+  if (assigned != null) {
+    return assigned;
+  }
+
+  /**
+   * Hỗ trợ section.settings.x / settings.x nếu compile input đã có
+   * resolver thật. Không có resolver thì trả null, tuyệt đối không đoán.
+   */
+  try {
+    const resolution =
+      resolveArgumentExpression(
+        normalized,
+        resolver,
+      );
+
+    if (
+      !resolution.resolved
+    ) {
+      return null;
+    }
+
+    return positiveInteger(
+      resolution.value,
+    );
+  } catch {
+    /**
+     * Transport profiling chỉ là optimization. Không để một setting
+     * không resolve được làm fail toàn bộ Theme Map compiler.
+     */
+    return null;
+  }
+}
+
+function nativePageSizesFromSource(
+  source: string,
+  resolver: ThemeSettingResolver,
+): number[] {
+  const result:
+    number[] = [];
+
+  /**
+   * Hỗ trợ:
+   * {% paginate search.results by 24 %}
+   * {% paginate search.results by products_per_page %}
+   * {% paginate search.results by section.settings.products_per_page %}
+   */
+  const pattern =
+    /\bpaginate\s+search\.results\s+by\s+([A-Za-z0-9_.-]+)/gi;
+
+  let match:
+    RegExpExecArray | null;
+
+  while (
+    (match =
+      pattern.exec(source)) !=
+    null
+  ) {
+    const value =
+      resolveNativePageSizeExpression(
+        match[1] ?? "",
+        source,
+        resolver,
+      );
+
+    if (value != null) {
+      result.push(
+        value,
+      );
+    }
+  }
+
+  return result;
+}
+
+function compileThemeTransportProfile(
+  input: CompileThemeMapV4Input,
+  files: ThemeSourceFile[],
+  dependencyNames: ReadonlySet<string>,
+): ThemeMapV4TransportProfile {
+  const resolver =
+    input.settingResolver ??
+    {};
+
+  /**
+   * Source search section chính là bằng chứng mạnh nhất.
+   * Chỉ khi source chính không có page size mới xem exact dependency
+   * đã được compiler đọc; không scan toàn theme.
+   */
+  const primaryPageSizes =
+    nativePageSizesFromSource(
+      input.source,
+      resolver,
+    );
+
+  const dependencySources:
+    string[] = [];
+
+  for (
+    const dependencyName
+    of dependencyNames
+  ) {
+    const file =
+      findFile(
+        files,
+        dependencyName,
+      );
+
+    if (
+      !file ||
+      normalizeFilename(
+        file.filename,
+      ) ===
+        normalizeFilename(
+          input.sourceFile,
+        )
+    ) {
+      continue;
+    }
+
+    dependencySources.push(
+      file.content,
+    );
+  }
+
+  const secondaryPageSizes =
+    primaryPageSizes.length > 0
+      ? []
+      : dependencySources.flatMap(
+          (source) =>
+            nativePageSizesFromSource(
+              source,
+              resolver,
+            ),
+        );
+
+  const uniquePageSizes =
+    unique([
+      ...primaryPageSizes,
+      ...secondaryPageSizes,
+    ]);
+
+  /**
+   * Nhiều paginate với capacity khác nhau = ambiguity.
+   * Không chọn giá trị lớn nhất/nhỏ nhất vì như vậy là đoán.
+   */
+  const nativePageSize =
+    uniquePageSizes.length === 1
+      ? uniquePageSizes[0] ??
+        null
+      : null;
+
+  const combinedSource =
+    [
+      input.source,
+      ...dependencySources,
+    ].join("\n");
+
+  /**
+   * Generic source signatures, không phụ thuộc tên Horizon/Dawn.
+   */
+  const hasInfiniteScroll =
+    /\binfinite-scroll\b|\benable_infinite_scroll\b|\bviewMoreNext\b|\bviewMorePrevious\b/i.test(
+      combinedSource,
+    );
+
+  const hasPagination =
+    /\bpagination-controls\b|\bpaginate\.pages\b|\brender\s+['"]pagination['"]/i.test(
+      combinedSource,
+    );
+
+  const paginationMode:
+    ThemeMapV4TransportProfile["paginationMode"] =
+      hasInfiniteScroll
+        ? "INFINITE_SCROLL"
+        : hasPagination
+          ? "PAGINATION"
+          : "UNKNOWN";
+
+  const preferredBatchSize =
+    nativePageSize != null
+      ? Math.max(
+          1,
+          Math.min(
+            THEME_TRANSPORT_MAX_BATCH_SIZE,
+            nativePageSize,
+          ),
+        )
+      : THEME_TRANSPORT_FALLBACK_BATCH_SIZE;
+
+  return {
+    version:
+      THEME_TRANSPORT_PROFILE_VERSION,
+
+    nativePageSize,
+
+    preferredBatchSize,
+
+    maxEncodedQueryLength:
+      THEME_TRANSPORT_MAX_ENCODED_QUERY_LENGTH,
+
+    paginationMode,
+
+    mustSuspendNativePagination:
+      paginationMode ===
+      "INFINITE_SCROLL",
+
+    sourceProven:
+      nativePageSize != null ||
+      paginationMode !==
+        "UNKNOWN",
+  };
+}
+
+function withTransportProfile(
+  map: ThemeMapV4,
+  transportProfile: ThemeMapV4TransportProfile,
+): ThemeMapV4 {
+  /**
+   * Giữ type ThemeMapV4 hiện tại backward-compatible.
+   * Có thể nâng field này vào theme-map-v4.types.ts sau khi rollout
+   * ổn định, nhưng compiler không cần phá schema chỉ để tối ưu runtime.
+   */
+  return Object.assign(
+    map,
+    {
+      transportProfile,
+    },
+  ) as ThemeMapV4;
+}
+
 function normalizeFilename(
   filename: string,
 ): string {
@@ -3364,6 +3735,20 @@ export function compileThemeMapV4(
     );
 
   /**
+   * Fast-path metadata được compile sẵn.
+   *
+   * Không đổi fingerprint semantics: fingerprint vẫn chỉ phản ánh
+   * exact theme dependencies như V4 cũ. Nhờ vậy lifecycle/store hiện
+   * tại không bị lệch logic validation.
+   */
+  const transportProfile =
+    compileThemeTransportProfile(
+      input,
+      files,
+      dependencyNames,
+    );
+
+  /**
    * VERIFIED hiện tại chỉ nghĩa là:
    *
    * có renderer mà backend runtime hiện tại
@@ -3387,7 +3772,42 @@ export function compileThemeMapV4(
   if (
     !hasEligible
   ) {
-    return {
+    return withTransportProfile(
+      {
+        version:
+          THEME_MAP_V4_VERSION,
+
+        theme:
+          input.theme,
+
+        search:
+          input.search,
+
+        rendererCandidates:
+          candidates,
+
+        dependencies,
+
+        fingerprint,
+
+        pageSize:
+          THEME_MAP_V4_DEFAULT_PAGE_SIZE,
+
+        status:
+          "UNSUPPORTED",
+
+        unsupportedReason:
+          candidates.length ===
+          0
+            ? "PRODUCT_RENDERER_NOT_FOUND"
+            : "NO_SAFE_RENDERER_CANDIDATE",
+      },
+      transportProfile,
+    );
+  }
+
+  return withTransportProfile(
+    {
       version:
         THEME_MAP_V4_VERSION,
 
@@ -3408,39 +3828,10 @@ export function compileThemeMapV4(
         THEME_MAP_V4_DEFAULT_PAGE_SIZE,
 
       status:
-        "UNSUPPORTED",
-
-      unsupportedReason:
-        candidates.length ===
-        0
-          ? "PRODUCT_RENDERER_NOT_FOUND"
-          : "NO_SAFE_RENDERER_CANDIDATE",
-    };
-  }
-
-  return {
-    version:
-      THEME_MAP_V4_VERSION,
-
-    theme:
-      input.theme,
-
-    search:
-      input.search,
-
-    rendererCandidates:
-      candidates,
-
-    dependencies,
-
-    fingerprint,
-
-    pageSize:
-      THEME_MAP_V4_DEFAULT_PAGE_SIZE,
-
-    status:
-      "VERIFIED",
-  };
+        "VERIFIED",
+    },
+    transportProfile,
+  );
 }
 
 /**
