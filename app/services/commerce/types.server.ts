@@ -16,6 +16,7 @@ export type ShopSettingsSnapshot = {
   searchLanguage: string | null;
   shop: string;
   aiSearchEnabled: boolean;
+  customDataModeEnabled: boolean;
   fallbackEnabled: boolean;
   productLimitOverride: number | null;
   searchLimitOverride: number | null;

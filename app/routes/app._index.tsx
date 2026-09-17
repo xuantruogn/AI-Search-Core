@@ -10,10 +10,33 @@ import { getThemeAppEmbedDeepLink } from "../services/theme/app-embed.server";
 import { getThemeSyncStatus, isStoredThemeMapV4Usable } from "../services/theme/theme-sync-status.server";
 import { rebuildActiveThemeMapV4 } from "../services/theme/theme-map-v4-lifecycle.server";
 
+import { getShopSettings, updateShopSettings } from "../services/commerce/shop-registry.server";
+
 export const action = async ({ request }: ActionFunctionArgs) => {
   const { admin, session } = await authenticate.admin(request);
   const form = await request.formData();
-  if (form.get("intent") !== "sync-theme-map") {
+  const intent = form.get("intent");
+
+  // === THÊM ĐOẠN NÀY ===
+  if (intent === "toggle-custom-data-mode") {
+    const customDataModeEnabled = form.get("customDataModeEnabled") === "on";
+    const currentSettings = await getShopSettings(session.shop);
+
+    await updateShopSettings({
+      shop: session.shop,
+      aiSearchEnabled: currentSettings.aiSearchEnabled,
+      customDataModeEnabled,
+      searchLanguage: currentSettings.searchLanguage,
+      resultLimit: currentSettings.resultLimit,
+    });
+
+    return {
+      success: true,
+      message: `Đã ${customDataModeEnabled ? "bật" : "tắt"} chế độ Custom Data API.`,
+    };
+  }
+
+  if (intent !== "sync-theme-map") {
     throw new Response("Unknown action", { status: 400 });
   }
 
@@ -67,11 +90,12 @@ function remaining(limit: number | null, used: number) {
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { admin, session } = await authenticate.admin(request);
 
-  const [entitlement, queue, catalogJob, themeIntegration] = await Promise.all([
+  const [entitlement, queue, catalogJob, themeIntegration, settings] = await Promise.all([
     getShopEntitlement(session.shop),
     getProductSyncQueueStats(session.shop),
     getLatestCatalogSyncJob(session.shop),
     getThemeSyncStatus({ admin, shop: session.shop }),
+    getShopSettings(session.shop),
   ]);
 
   return {
@@ -94,6 +118,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     appEmbed: themeIntegration.appEmbed,
     themeIntegration,
     appEmbedUrl: getThemeAppEmbedDeepLink(session.shop),
+    customDataModeEnabled: settings.customDataModeEnabled, // <--- THÊM MỚI
   };
 };
 
@@ -196,6 +221,29 @@ export default function Dashboard() {
           <s-text>
             Integration: {data.themeIntegration.status}
           </s-text>
+          
+             {/* === THÊM KHỐI NÀY === */}
+          <div style={{ marginTop: 8, marginBottom: 8, padding: 12, border: "1px dashed #cccccc", borderRadius: 6, backgroundColor: "#fafafa" }}>
+            <Form method="post">
+              <input type="hidden" name="intent" value="toggle-custom-data-mode" />
+              <label style={{ display: "flex", gap: 10, alignItems: "flex-start", cursor: "pointer" }}>
+                <input
+                  type="checkbox"
+                  name="customDataModeEnabled"
+                  defaultChecked={data.customDataModeEnabled}
+                  onChange={(e) => e.target.form?.requestSubmit()}
+                  style={{ marginTop: 3 }}
+                />
+                <div>
+                  <strong style={{ color: "#202223" }}>Chế độ Custom Data API (Tắt Theme Sync & Render HTML)</strong>
+                  <div style={{ fontSize: 13, color: "#6d7175", marginTop: 2 }}>
+                    Khi bật, hệ thống <strong>bỏ qua hoàn toàn bước kiểm tra/đồng bộ Theme Map</strong> và ngắt luồng render Liquid cũ. API sẽ trả về thẳng danh sách <code>Product IDs / Handles</code> do AI & Qdrant tìm thấy.
+                  </div>
+                </div>
+              </label>
+            </Form>
+          </div>
+
           <s-text>Shopify dùng theme hiện tại để tạo HTML sản phẩm. Cần thử tìm kiếm trên storefront để xác nhận giao diện thực tế.</s-text>
           {data.themeIntegration.themeMap ? (
             <s-text>
