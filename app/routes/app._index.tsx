@@ -1,6 +1,6 @@
-import type * as React from "react";
+
 import type { LoaderFunctionArgs } from "react-router";
-import { Link, useLoaderData } from "react-router";
+import { Link, useFetcher, useLoaderData } from "react-router";
 
 import { authenticate } from "../shopify.server";
 import { getShopEntitlement } from "../services/commerce/entitlement.server";
@@ -224,6 +224,7 @@ function ReadinessItem({
   state,
   status,
   action,
+  actionNode,
 }: {
   index: number;
   title: string;
@@ -231,6 +232,7 @@ function ReadinessItem({
   state: UiState;
   status: string;
   action?: { label: string; href: string; targetTop?: boolean };
+  actionNode?: React.ReactNode;
 }) {
   return (
     <div className="vip-check-row">
@@ -242,7 +244,9 @@ function ReadinessItem({
         </div>
         <div className="vip-check-detail">{detail}</div>
       </div>
-      {action ? (
+      {actionNode ? (
+        <div className="vip-check-action">{actionNode}</div>
+      ) : action ? (
         <div className="vip-check-action">
           {action.targetTop ? (
             <a href={action.href} target="_top" rel="noreferrer">
@@ -780,6 +784,24 @@ const dashboardCss = `
   .vip-check-title-row strong { font-size: 13px; }
   .vip-check-detail { margin-top: 5px; color: var(--vip-muted); font-size: 12px; line-height: 1.45; }
   .vip-check-action { font-size: 12px; white-space: nowrap; }
+  .vip-check-button {
+    appearance: none;
+    border: 0;
+    padding: 0;
+    background: transparent;
+    color: #4f46c8;
+    font: inherit;
+    font-weight: 650;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+    cursor: pointer;
+  }
+  .vip-check-button:hover { color: #3328a7; }
+  .vip-check-button:disabled {
+    color: #9a9daa;
+    cursor: wait;
+    text-decoration: none;
+  }
 
   .vip-side-stack { display: grid; gap: 16px; }
   .vip-health { padding: 20px; }
@@ -1033,6 +1055,8 @@ const dashboardCss = `
 
 export default function Dashboard() {
   const data = useLoaderData<typeof loader>();
+  const themeSyncFetcher = useFetcher<{ success?: boolean; message?: string }>();
+  const themeSyncing = themeSyncFetcher.state !== "idle";
   const { entitlement } = data;
 
   const catalogStatus = (data.catalogJob?.status ?? "NOT_STARTED").toUpperCase();
@@ -1265,10 +1289,9 @@ export default function Dashboard() {
                   AI search đã ghi nhận.
                 </p>
               </div>
-              <StatusPill
-                state={ctr != null && ctr >= 20 ? "success" : "neutral"}
-                children={`${impact.ai.searches.toLocaleString("vi-VN")} searches`}
-              />
+              <StatusPill state={ctr != null && ctr >= 20 ? "success" : "neutral"}>
+                {`${impact.ai.searches.toLocaleString("vi-VN")} searches`}
+              </StatusPill>
             </div>
 
             <div className="vip-impact-kpis">
@@ -1457,10 +1480,45 @@ export default function Dashboard() {
               <ReadinessItem
                 index={5}
                 title="Theme rendering"
-                state={themeReady ? "success" : "warning"}
-                status={themeReady ? "Ready" : "Needs check"}
-                detail={`Integration: ${data.theme.integrationStatus}${data.theme.renderStrategy ? ` · ${data.theme.renderStrategy}` : ""}`}
-                action={{ label: "Theme settings", href: "/app/settings" }}
+                state={
+                  themeSyncFetcher.data?.success === false
+                    ? "critical"
+                    : themeReady
+                      ? "success"
+                      : "warning"
+                }
+                status={
+                  themeSyncing
+                    ? "Syncing"
+                    : themeSyncFetcher.data?.success === false
+                      ? "Sync failed"
+                      : themeReady
+                        ? "Ready"
+                        : "Needs check"
+                }
+                detail={
+                  themeSyncFetcher.data?.message
+                    ? themeSyncFetcher.data.message
+                    : `Integration: ${data.theme.integrationStatus}${
+                        data.theme.renderStrategy ? ` · ${data.theme.renderStrategy}` : ""
+                      }`
+                }
+                actionNode={
+                  <themeSyncFetcher.Form method="post" action="/app/settings">
+                    <input type="hidden" name="intent" value="sync_theme_map" />
+                    <button
+                      type="submit"
+                      className="vip-check-button"
+                      disabled={themeSyncing}
+                    >
+                      {themeSyncing
+                        ? "Syncing theme..."
+                        : themeReady
+                          ? "Resync theme"
+                          : "Sync theme"}
+                    </button>
+                  </themeSyncFetcher.Form>
+                }
               />
             </div>
           </div>
