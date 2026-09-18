@@ -36,6 +36,7 @@ type SettingsRow = {
   shop: string;
   aiSearchEnabled: boolean | number;
   fallbackEnabled: boolean | number;
+  customDataModeEnabled?: boolean | number;
   productLimitOverride: number | null;
   searchLimitOverride: number | null;
   vectorUpdateLimitOverride: number | null;
@@ -394,6 +395,7 @@ export async function getShopSettings(
     SELECT
       "shop",
       "aiSearchEnabled",
+      "customDataModeEnabled",
       "searchLanguage",
       "fallbackEnabled",
       "productLimitOverride",
@@ -415,6 +417,7 @@ export async function getShopSettings(
     shop: row.shop,
     aiSearchEnabled: Boolean(row.aiSearchEnabled),
     searchLanguage: row.searchLanguage,
+    customDataModeEnabled: Boolean(row.customDataModeEnabled ?? false),
     fallbackEnabled: Boolean(row.fallbackEnabled),
     productLimitOverride: row.productLimitOverride,
     searchLimitOverride: row.searchLimitOverride,
@@ -427,10 +430,12 @@ export async function updateShopSettings({
   searchLanguage,
   shop,
   aiSearchEnabled,
+  customDataModeEnabled,
   resultLimit,
 }: {
   shop: string;
   aiSearchEnabled: boolean;
+  customDataModeEnabled?: boolean;
   resultLimit: number;
   searchLanguage?: string | null;
 }) {
@@ -442,6 +447,7 @@ export async function updateShopSettings({
     UPDATE "AiSearchShopSettings"
     SET
       "aiSearchEnabled" = ${aiSearchEnabled},
+      "customDataModeEnabled" = COALESCE(${customDataModeEnabled ?? null}, "customDataModeEnabled"),
       "fallbackEnabled" = true,
       "resultLimit" = ${safeLimit},
       "searchLanguage" = COALESCE(${searchLanguage ?? null}, "searchLanguage"),

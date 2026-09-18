@@ -48,6 +48,12 @@ import {
   type UsageReservation,
 } from "../services/commerce/usage.server";
 
+import { getShopSettings } from "../services/commerce/shop-registry.server";
+import {
+  fetchProductsByGids as fetchAppSelfRenderProductsByGids,
+  renderAppSelfSearchPage,
+} from "../services/renderer/app-self-render-v3.server";
+
 const NATIVE_BYPASS_PARAM = "_ai_search_bypass";
 const SEARCH_LIMIT = 1000;
 
@@ -171,13 +177,13 @@ function isThemeContextTransportCandidate(
   }
 
   /**
-   * THEME_CONTEXT_REQUIRED là rejection có chủ đích:
+   * THEME_CONTEXT_REQUIRED l├á rejection c├│ chß╗º ─æ├¡ch:
    *
-   * App Proxy Liquid không có section/block context để replay
+   * App Proxy Liquid kh├┤ng c├│ section/block context ─æß╗â replay
    * merchant Theme Blocks.
    *
-   * Những rejection khác vẫn là lỗi thật và không được phép
-   * biến thành Section Rendering transport.
+   * Nhß╗»ng rejection kh├íc vß║½n l├á lß╗ùi thß║¡t v├á kh├┤ng ─æã░ß╗úc ph├®p
+   * biß║┐n th├ánh Section Rendering transport.
    */
   return candidate.rejectionReasons.every(
     (reason) =>
@@ -211,13 +217,13 @@ function themeMapSupportsSearchExecution(
 ): boolean {
   /**
    * Classic theme:
-   * APP_PROXY_LIQUID candidate đã VERIFIED.
+   * APP_PROXY_LIQUID candidate ─æ├ú VERIFIED.
    *
    * Modern Theme Blocks:
-   * map có thể là UNSUPPORTED đối với App Proxy replay,
-   * nhưng vẫn có source-proven THEME_CONTEXT_REQUIRED candidate.
-   * Trường hợp đó AI search vẫn được phép chạy vì rendering sẽ
-   * đi qua Shopify Section Rendering API ở transport-v4.
+   * map c├│ thß╗â l├á UNSUPPORTED ─æß╗æi vß╗øi App Proxy replay,
+   * nhã░ng vß║½n c├│ source-proven THEME_CONTEXT_REQUIRED candidate.
+   * Trã░ß╗Øng hß╗úp ─æ├│ AI search vß║½n ─æã░ß╗úc ph├®p chß║íy v├¼ rendering sß║¢
+   * ─æi qua Shopify Section Rendering API ß╗ƒ transport-v4.
    */
   return (
     map.status ===
@@ -287,9 +293,9 @@ function themeTransportPlannerOptions(
 
   if (!profile) {
     /**
-     * Theme Map cũ chưa có transportProfile.
-     * Omit options để planner giữ nguyên fallback
-     * production cũ (8 products / 1400 encoded chars).
+     * Theme Map c┼® chã░a c├│ transportProfile.
+     * Omit options ─æß╗â planner giß╗» nguy├¬n fallback
+     * production c┼® (8 products / 1400 encoded chars).
      */
     return undefined;
   }
@@ -313,7 +319,7 @@ function themeTransportPlannerOptions(
 }
 
 // ==========================================
-// THEME MAP V4 — STORED ARTIFACT ONLY
+// THEME MAP V4 ÔÇö STORED ARTIFACT ONLY
 // ==========================================
 
 function normalizeStorefrontThemeId(value: string | null | undefined): string {
@@ -336,18 +342,18 @@ async function loadSyncedThemeMapForStorefront(args: {
   const themeId = normalizeStorefrontThemeId(args.themeId);
 
   /**
-   * Storefront runtime KHÔNG gọi Shopify Admin API để:
-   * - tìm active theme
+   * Storefront runtime KH├öNG gß╗ìi Shopify Admin API ─æß╗â:
+   * - t├¼m active theme
    * - check App Embed
    * - validate dependency
    * - rebuild Theme Map
    *
-   * Theme Map chỉ được tạo khi:
-   * 1. app vừa được cài/khởi tạo;
-   * 2. merchant chủ động bấm "Đồng bộ theme".
+   * Theme Map chß╗ë ─æã░ß╗úc tß║ío khi:
+   * 1. app vß╗½a ─æã░ß╗úc c├ái/khß╗ƒi tß║ío;
+   * 2. merchant chß╗º ─æß╗Öng bß║Ñm "─Éß╗ông bß╗Ö theme".
    *
-   * theme_id đến từ Liquid của chính theme đang chạy.
-   * Nếu theme mới chưa từng sync thì không có row tương ứng -> native fallback.
+   * theme_id ─æß║┐n tß╗½ Liquid cß╗ºa ch├¡nh theme ─æang chß║íy.
+   * Nß║┐u theme mß╗øi chã░a tß╗½ng sync th├¼ kh├┤ng c├│ row tã░ãíng ß╗®ng -> native fallback.
    */
   if (!themeId) {
     return {
@@ -395,7 +401,7 @@ async function loadSyncedThemeMapForStorefront(args: {
 }
 
 // ==========================================
-// LOGIC PHÂN TRANG ĐỘNG
+// LOGIC PH├éN TRANG ─Éß╗ÿNG
 // ==========================================
 
 type CandidateProduct = {
@@ -575,13 +581,67 @@ const resultCacheStatus = "MISS" as const;
       authStartedAt;
 
     if (!admin || !session) {
+      if (
+        requestUrl.searchParams.get(
+          "mode",
+        ) === "runtime-config"
+      ) {
+        return Response.json(
+          {
+            status: "fallback",
+            engine: "v4",
+            reason: "APP_PROXY_SESSION_MISSING",
+          },
+          {
+            headers: {
+              "Cache-Control": "no-store",
+            },
+          },
+        );
+      }
+
       return nativeRedirect(
         query,
         nativeSearchTarget,
         "APP_PROXY_SESSION_MISSING",
       );
     }
-    
+
+    if (
+      requestUrl.searchParams.get(
+        "mode",
+      ) === "runtime-config"
+    ) {
+      const shopSettings =
+        await getShopSettings(
+          session.shop,
+        );
+
+      const isCustomDataMode =
+        Boolean(
+          shopSettings
+            .customDataModeEnabled,
+        );
+
+      return Response.json(
+        {
+          status: "success",
+          engine:
+            isCustomDataMode
+              ? "v3"
+              : "v4",
+          customDataModeEnabled:
+            isCustomDataMode,
+        },
+        {
+          headers: {
+            "Cache-Control":
+              "no-store",
+          },
+        },
+      );
+    }
+
     // =========================================================================
     // THEME CONTEXT TRANSPORT V4
     //
@@ -1157,11 +1217,11 @@ const resultCacheStatus = "MISS" as const;
       /*
        * FAST PATH V4
        *
-       * Receipt đã chứa ranked product IDs/handles theo đúng thứ tự AI.
-       * getSearchResultPage() tự slice đúng pageSize nên render-v4 không
-       * cần gọi Shopify Admin API để revalidate/backfill thêm lần nữa.
+       * Receipt ─æ├ú chß╗®a ranked product IDs/handles theo ─æ├║ng thß╗® tß╗▒ AI.
+       * getSearchResultPage() tß╗▒ slice ─æ├║ng pageSize n├¬n render-v4 kh├┤ng
+       * cß║ºn gß╗ìi Shopify Admin API ─æß╗â revalidate/backfill th├¬m lß║ºn nß╗»a.
        *
-       * Search core vẫn giữ nguyên. Đây chỉ tối ưu đường render receipt.
+       * Search core vß║½n giß╗» nguy├¬n. ─É├óy chß╗ë tß╗æi ã░u ─æã░ß╗Øng render receipt.
        */
       const receiptCacheStartedAt =
         Date.now();
@@ -1215,10 +1275,10 @@ const resultCacheStatus = "MISS" as const;
         pageSliceStartedAt;
 
       /*
-       * Theme Map là artifact đã đồng bộ sẵn.
+       * Theme Map l├á artifact ─æ├ú ─æß╗ông bß╗Ö sß║Án.
        *
-       * Render path chỉ đọc SQLite theo theme_id mà storefront gửi lên.
-       * Không gọi Admin API, không check App Embed, không tự rebuild.
+       * Render path chß╗ë ─æß╗ìc SQLite theo theme_id m├á storefront gß╗¡i l├¬n.
+       * Kh├┤ng gß╗ìi Admin API, kh├┤ng check App Embed, kh├┤ng tß╗▒ rebuild.
        */
       const themeMapLoadStartedAt =
         Date.now();
@@ -1367,16 +1427,16 @@ const resultCacheStatus = "MISS" as const;
           );
 
         /*
-         * App Proxy có thể không forward custom response headers
+         * App Proxy c├│ thß╗â kh├┤ng forward custom response headers
          * ra browser storefront.
          *
-         * Vì vậy metadata V4 được gửi bằng 2 đường:
+         * V├¼ vß║¡y metadata V4 ─æã░ß╗úc gß╗¡i bß║▒ng 2 ─æã░ß╗Øng:
          *
-         * 1. Header — giữ compatibility/debug.
-         * 2. HTML body — contract đáng tin cậy cho storefront V4.
+         * 1. Header ÔÇö giß╗» compatibility/debug.
+         * 2. HTML body ÔÇö contract ─æ├íng tin cß║¡y cho storefront V4.
          *
-         * Script type=application/json là inert. Nó không chạy JavaScript.
-         * Frontend sẽ đọc + remove node này trước khi mount card HTML.
+         * Script type=application/json l├á inert. N├│ kh├┤ng chß║íy JavaScript.
+         * Frontend sß║¢ ─æß╗ìc + remove node n├áy trã░ß╗øc khi mount card HTML.
          */
         const renderLiquid = [
           `<script type="application/json" data-ai-search-render-meta>${renderMeta}</script>`,
@@ -1540,58 +1600,187 @@ const resultCacheStatus = "MISS" as const;
       );
     }
 
-    if (!wantsJson) {
-      return nativeRedirect(
-        query,
-        nativeSearchTarget,
-        "JSON_RUNTIME_REQUIRED",
+    const shopSettings =
+      await getShopSettings(
+        session.shop,
       );
+
+    const isCustomDataMode =
+      Boolean(
+        shopSettings
+          .customDataModeEnabled,
+      );
+
+    if (isCustomDataMode) {
+      const hasSectionId =
+        requestUrl.searchParams.has(
+          "section_id",
+        ) ||
+        requestUrl.searchParams.has(
+          "sections",
+        );
+
+      const isPredictive =
+        requestUrl.pathname.includes(
+          "predictive",
+        ) ||
+        requestUrl.searchParams.has(
+          "predictive",
+        );
+
+      if (
+        hasSectionId ||
+        isPredictive
+      ) {
+        if (wantsJson) {
+          return Response.json(
+            {},
+            {
+              status: 200,
+              headers: {
+                "Cache-Control":
+                  "no-store",
+              },
+            },
+          );
+        }
+
+        return new Response(
+          "",
+          {
+            status: 200,
+            headers: {
+              "Content-Type":
+                "application/liquid; charset=utf-8",
+              "Cache-Control":
+                "no-store",
+            },
+          },
+        );
+      }
+
+      const idsParam =
+        requestUrl.searchParams.get(
+          "ids",
+        );
+
+      if (
+        wantsJson &&
+        idsParam
+      ) {
+        const rawIds =
+          idsParam
+            .split(",")
+            .map((id) =>
+              id.trim(),
+            )
+            .filter(Boolean);
+
+        try {
+          const gids =
+            rawIds.map((id) =>
+              id.startsWith(
+                "gid://",
+              )
+                ? id
+                : `gid://shopify/Product/${id}`,
+            );
+
+          const products =
+            await fetchAppSelfRenderProductsByGids(
+              admin,
+              gids,
+            );
+
+          return Response.json(
+            {
+              status: "success",
+              products,
+            },
+            {
+              headers: {
+                "Cache-Control":
+                  "no-store",
+              },
+            },
+          );
+        } catch (error) {
+          console.error(
+            "[AI Search][Custom Data Mode] product hydration failed:",
+            error,
+          );
+
+          return Response.json(
+            {
+              status: "error",
+              products: [],
+            },
+            {
+              status: 200,
+              headers: {
+                "Cache-Control":
+                  "no-store",
+              },
+            },
+          );
+        }
+      }
     }
 
-    const routingStartedAt =
-      Date.now();
-
-    const routeDecision =
-      classifySearchRequest({
-        query,
-        nativeSearchTarget,
-        maxQueryChars:
-          MAX_QUERY_CHARS,
-        minSemanticQueryChars:
-          MIN_SEMANTIC_QUERY_CHARS,
-      });
-
-    requestRoutingCodeMs =
-      Date.now() -
-      routingStartedAt;
-
-    if (
-      routeDecision.engine ===
-      "NATIVE"
-    ) {
-      console.warn(
-        "[AI Search] Request routed to native search",
-        {
-          shop:
-            session.shop,
-
+    if (!isCustomDataMode) {
+      if (!wantsJson) {
+        return nativeRedirect(
           query,
-
-          reason:
-            routeDecision.reason,
-
           nativeSearchTarget,
+          "JSON_RUNTIME_REQUIRED",
+        );
+      }
 
-          resourceTypes:
-            routeDecision.resourceTypes,
-        },
-      );
+      const routingStartedAt =
+        Date.now();
 
-      return nativeRedirect(
-        query,
-        nativeSearchTarget,
-        routeDecision.reason,
-      );
+      const routeDecision =
+        classifySearchRequest({
+          query,
+          nativeSearchTarget,
+          maxQueryChars:
+            MAX_QUERY_CHARS,
+          minSemanticQueryChars:
+            MIN_SEMANTIC_QUERY_CHARS,
+        });
+
+      requestRoutingCodeMs =
+        Date.now() -
+        routingStartedAt;
+
+      if (
+        routeDecision.engine ===
+        "NATIVE"
+      ) {
+        console.warn(
+          "[AI Search] Request routed to native search",
+          {
+            shop:
+              session.shop,
+
+            query,
+
+            reason:
+              routeDecision.reason,
+
+            nativeSearchTarget,
+
+            resourceTypes:
+              routeDecision.resourceTypes,
+          },
+        );
+
+        return nativeRedirect(
+          query,
+          nativeSearchTarget,
+          routeDecision.reason,
+        );
+      }
     }
 
     // Billing Check & Reconciliation
@@ -1701,72 +1890,93 @@ const resultCacheStatus = "MISS" as const;
     // ============================================================
     // STORED THEME MAP LOOKUP
     //
-    // KHÔNG gọi Shopify Admin API ở search path.
-    // Theme Map chỉ được build khi install hoặc merchant bấm sync.
+    // V4 needs a stored Theme Map. Custom Data Mode renders through
+    // the app-owned dedicated renderer and skips this lookup.
     // ============================================================
 
-    const themeMapLookupStartedAt =
-      Date.now();
+    let syncedThemeMap:
+      | ThemeMapV4
+      | null =
+      null;
 
-    const clientThemeId =
-      requestUrl.searchParams.get(
-        "theme_id",
-      );
+    let preflightMap:
+      | {
+          theme: {
+            id: string;
+            gid: string;
+          };
+          fingerprint: string;
+          search: {
+            searchTemplate: string;
+          };
+        }
+      | null =
+      null;
 
-    const clientFingerprint =
-      requestUrl.searchParams.get(
-        "map_fingerprint",
-      );
+    if (!isCustomDataMode) {
+      const themeMapLookupStartedAt =
+        Date.now();
 
-    const storedTheme =
-      await loadSyncedThemeMapForStorefront({
-        shop:
-          session.shop,
+      const clientThemeId =
+        requestUrl.searchParams.get(
+          "theme_id",
+        );
 
-        themeId:
-          clientThemeId,
+      const clientFingerprint =
+        requestUrl.searchParams.get(
+          "map_fingerprint",
+        );
+
+      const storedTheme =
+        await loadSyncedThemeMapForStorefront({
+          shop:
+            session.shop,
+
+          themeId:
+            clientThemeId,
+
+          fingerprint:
+            clientFingerprint,
+        });
+
+      themeMapLookupMs =
+        Date.now() -
+        themeMapLookupStartedAt;
+
+      if (storedTheme.ok === false) {
+        return fallback(
+          storedTheme.reason,
+        );
+      }
+
+      syncedThemeMap =
+        storedTheme.map;
+
+      preflightMap = {
+        theme: {
+          id:
+            syncedThemeMap.theme.id,
+
+          gid:
+            `gid://shopify/Theme/${syncedThemeMap.theme.id}`,
+        },
 
         fingerprint:
-          clientFingerprint,
-      });
+          syncedThemeMap.fingerprint,
 
-    themeMapLookupMs =
-      Date.now() -
-      themeMapLookupStartedAt;
-
-    if (storedTheme.ok === false) {
-      return fallback(
-        storedTheme.reason,
-      );
+        search: {
+          searchTemplate:
+            syncedThemeMap.search
+              .templateFile,
+        },
+      };
     }
-
-    const syncedThemeMap =
-      storedTheme.map;
-
-    const preflightMap = {
-      theme: {
-        id:
-          syncedThemeMap.theme.id,
-
-        gid:
-          `gid://shopify/Theme/${syncedThemeMap.theme.id}`,
-      },
-
-      fingerprint:
-        syncedThemeMap.fingerprint,
-
-      search: {
-        searchTemplate:
-          syncedThemeMap.search
-            .templateFile,
-      },
-    };
 
     const pageSize =
       THEME_MAP_V4_DEFAULT_PAGE_SIZE;
 
     // =========================================================================
-    // TRƯỜNG HỢP 2: TÌM TỪ KHÓA MỚI
+    // TRã»ß╗£NG Hß╗óP 2: T├îM Tß╗¬ KH├ôA Mß╗ÜI
     // =========================================================================
 
     const reservationStartedAt =
@@ -2716,6 +2926,83 @@ const resultCacheStatus = "MISS" as const;
         },
       );
 
+      if (isCustomDataMode) {
+        const allIds =
+          allProducts.map(
+            (product) =>
+              product.id,
+          );
+
+        const dynamicPageSize =
+          entitlement.resultLimit &&
+          entitlement.resultLimit > 0
+            ? entitlement.resultLimit
+            : 5;
+
+        const appSelfRenderPage =
+          await renderAppSelfSearchPage({
+            admin,
+            query,
+            productIds:
+              allIds,
+            pageSize:
+              dynamicPageSize,
+          });
+
+        try {
+          await markUsageReservationEffectApplied(
+            reservation,
+          );
+        } catch (usageError) {
+          console.error(
+            "[AI Search][Custom Data Mode] search reservation effect marker failed:",
+            usageError,
+          );
+        }
+
+        try {
+          await commitSearchUsage(
+            reservation,
+            {
+              resultCount:
+                allProducts.length,
+
+              durationMs:
+                Date.now() -
+                startedAt,
+
+              rendererSource:
+                "custom-dedicated-page",
+            },
+          );
+        } catch (usageError) {
+          console.error(
+            "[AI Search][Custom Data Mode] search usage commit logging failed:",
+            usageError,
+          );
+        }
+
+        return liquid(
+          appSelfRenderPage.html,
+          {
+            layout: true,
+            headers: {
+              "Cache-Control":
+                "no-store",
+            },
+          },
+        );
+      }
+
+      if (
+        !syncedThemeMap ||
+        !preflightMap
+      ) {
+        throw new Error(
+          "THEME_MAP_MISSING_AFTER_PREFLIGHT",
+        );
+      }
+
       // V4 migration state:
       // persist ranked list once.
       // Pagination/render reuses receipt.
@@ -2762,16 +3049,16 @@ const resultCacheStatus = "MISS" as const;
         paginationStartedAt;
 
       /**
-       * FAST PATH — THEME CONTEXT PAGE 1/CURRENT PAGE
+       * FAST PATH ÔÇö THEME CONTEXT PAGE 1/CURRENT PAGE
        *
-       * Semantic search đã có ranked product IDs và Theme Map đã được
-       * load ở đầu request. Nếu candidate cần Shopify Section Rendering,
-       * build luôn transport plan trong response search đầu tiên để browser
-       * không phải gọi thêm transport-v4 trước khi render.
+       * Semantic search ─æ├ú c├│ ranked product IDs v├á Theme Map ─æ├ú ─æã░ß╗úc
+       * load ß╗ƒ ─æß║ºu request. Nß║┐u candidate cß║ºn Shopify Section Rendering,
+       * build lu├┤n transport plan trong response search ─æß║ºu ti├¬n ─æß╗â browser
+       * kh├┤ng phß║úi gß╗ìi th├¬m transport-v4 trã░ß╗øc khi render.
        *
-       * Đây là best-effort optimization. Lỗi build plan KHÔNG được phép
-       * làm hỏng semantic search; client vẫn có thể gọi transport-v4 như
-       * đường cũ.
+       * ─É├óy l├á best-effort optimization. Lß╗ùi build plan KH├öNG ─æã░ß╗úc ph├®p
+       * l├ám hß╗Ång semantic search; client vß║½n c├│ thß╗â gß╗ìi transport-v4 nhã░
+       * ─æã░ß╗Øng c┼®.
        */
       let initialTransportPlan:
         | Record<string, unknown>

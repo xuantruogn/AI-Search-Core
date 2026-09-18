@@ -1,182 +1,38 @@
 {% comment %}
-  AI Search Bridge V4
+  AI Search Bridge
 
-  Early boot:
-  - Chạy trong <head> trước khi storefront body được paint.
-  - Chỉ kích hoạt trên /search có query.
-  - Không kích hoạt khi đang native fallback.
-  - Mục tiêu: không để Shopify native search ló ra trước AI Search V4.
+  Engine selection:
+  - Dashboard customDataModeEnabled = ON  -> load V3 App Self Render.
+  - Dashboard customDataModeEnabled = OFF -> load V4 Theme Map flow.
+  - This file does not run Search/Qdrant. It only asks the App Proxy which
+    storefront engine is enabled, then loads exactly one client engine.
 
-  Runtime:
-  - search-interceptor.v4.js vẫn chịu trách nhiệm:
-    + semantic search
-    + receipt
-    + Theme Map V4 render
-    + pagination
-    + result count
-    + click telemetry
-    + fallback
+  IMPORTANT:
+  - V4 early-boot behaviour is preserved for the V4 branch.
+  - V3 does not use Theme Map V4.
+  - When V3 is selected on an existing /search?q=... page,
+    this bridge redirects immediately to the Dedicated Page after
+    the V3 client has been loaded.
 {% endcomment %}
 
 <style>
   /*
-   * Chỉ áp dụng trong lần boot đầu của AI Search.
-   *
-   * Native HTML vẫn được Shopify SSR bình thường,
-   * nhưng chưa được phép paint ra màn hình trước
-   * khi AI Search V4 hoàn thành.
+   * Early boot is enabled only for the V4 branch.
+   * V3 releases these attributes before its client script starts.
    */
   html[data-ai-search-v4-early-boot="pending"] body {
     visibility: hidden;
   }
 
   /*
-   * search-interceptor.v4.js tạo loading layer này.
-   *
-   * Cho phép loading layer hiện ra dù body đang
-   * bị visibility:hidden.
+   * search-interceptor.v4.js creates this loading layer.
+   * It must remain visible while the body is hidden.
    */
   html[data-ai-search-v4-early-boot="pending"]
     [data-ai-search-v4-loading] {
     visibility: visible;
   }
 </style>
-
-<script>
-  (function () {
-    "use strict";
-
-    var pathname =
-      window.location.pathname || "";
-
-    var isSearchPage =
-      /\/search\/?$/.test(pathname);
-
-    if (!isSearchPage) {
-      return;
-    }
-
-    var params =
-      new URLSearchParams(
-        window.location.search
-      );
-
-    var query =
-      (
-        params.get("q") ||
-        ""
-      ).trim();
-
-    var bypass =
-      params.get(
-        "_ai_search_bypass"
-      ) === "1";
-
-    /*
-     * Không có query:
-     * để theme render search page bình thường.
-     *
-     * Native fallback:
-     * tuyệt đối không che kết quả native.
-     */
-    if (
-      !query ||
-      bypass
-    ) {
-      return;
-    }
-
-    var root =
-      document.documentElement;
-
-    root.setAttribute(
-      "data-ai-search-v4-early-boot",
-      "pending"
-    );
-
-    /*
-     * Đồng bộ với loading contract hiện có của V4.
-     *
-     * search-interceptor.v4.js:
-     * - showLoading() => aria-busy=true
-     * - hideLoading() => remove aria-busy
-     */
-    root.setAttribute(
-      "aria-busy",
-      "true"
-    );
-
-    /*
-     * Khi V4 hoàn tất hoặc kết thúc loading,
-     * hideLoading() sẽ remove aria-busy.
-     *
-     * Observer dùng tín hiệu đó để gỡ early boot
-     * mà không cần phụ thuộc selector của theme.
-     */
-    var observer =
-      new MutationObserver(
-        function () {
-          if (
-            !root.hasAttribute(
-              "aria-busy"
-            )
-          ) {
-            root.removeAttribute(
-              "data-ai-search-v4-early-boot"
-            );
-
-            observer.disconnect();
-          }
-        }
-      );
-
-    observer.observe(
-      root,
-      {
-        attributes: true,
-        attributeFilter: [
-          "aria-busy"
-        ]
-      }
-    );
-
-    /*
-     * Fail-safe:
-     *
-     * Nếu asset JS không tải được hoặc có lỗi
-     * nghiêm trọng trước khi V4 khởi động,
-     * không để storefront bị ẩn vô thời hạn.
-     *
-     * 45 giây đủ rộng hơn timeout AI hiện tại.
-     */
-    window.setTimeout(
-      function () {
-        if (
-          root.getAttribute(
-            "data-ai-search-v4-early-boot"
-          ) !== "pending"
-        ) {
-          return;
-        }
-
-        console.warn(
-          "[AI SEARCH V4] early boot fail-safe released"
-        );
-
-        root.removeAttribute(
-          "data-ai-search-v4-early-boot"
-        );
-
-        root.removeAttribute(
-          "aria-busy"
-        );
-
-        observer.disconnect();
-      },
-      45000
-    );
-  })();
-</script>
 
 <script>
   window.AI_SEARCH_CONFIG = {
@@ -189,10 +45,279 @@
   };
 </script>
 
-<script
-  src="{{ 'search-interceptor.v4.js' | asset_url }}"
-  defer
-></script>
+<script>
+  (function () {
+    "use strict";
+
+    var config = window.AI_SEARCH_CONFIG || {};
+    var pathname = window.location.pathname || "";
+    var isSearchPage = /\/search\/?$/.test(pathname);
+    var currentParams = new URLSearchParams(window.location.search);
+    var isBypassSearch =
+      isSearchPage && currentParams.get("_ai_search_bypass") === "1";
+    var endpoint = config.search_endpoint || "/apps/ai-search";
+
+    /*
+     * V3 phải được bootstrap trên storefront pages vì ô Search của Theme
+     * có thể xuất hiện ở Homepage, Collection, Product, v.v.
+     *
+     * V4 vẫn giữ nguyên nguyên tắc cũ: chỉ boot trên native /search page.
+     */
+
+    var root = document.documentElement;
+
+    function setV4EarlyBoot() {
+      root.setAttribute("data-ai-search-v4-early-boot", "pending");
+      root.setAttribute("aria-busy", "true");
+    }
+
+    function releaseEarlyBoot() {
+      root.removeAttribute("data-ai-search-v4-early-boot");
+      root.removeAttribute("aria-busy");
+    }
+
+    function loadScript(src, label) {
+      return new Promise(function (resolve, reject) {
+        var selector =
+          'script[data-ai-search-engine="' + label + '"]';
+
+        var existing = document.querySelector(selector);
+
+        if (existing) {
+          if (existing.dataset.aiSearchLoaded === "true") {
+            resolve();
+            return;
+          }
+
+          existing.addEventListener("load", function () {
+            resolve();
+          }, { once: true });
+
+          existing.addEventListener("error", function (error) {
+            reject(error);
+          }, { once: true });
+
+          return;
+        }
+
+        var script = document.createElement("script");
+        script.src = src;
+        script.async = false;
+        script.dataset.aiSearchEngine = label;
+
+        script.onload = function () {
+          script.dataset.aiSearchLoaded = "true";
+          resolve();
+        };
+
+        script.onerror = function (error) {
+          reject(error);
+        };
+
+        document.head.appendChild(script);
+      });
+    }
+
+    function verifyV3Loaded() {
+      if (window.__aiSearchV3Installed === true) {
+        return true;
+      }
+
+      console.warn(
+        "[AI SEARCH BRIDGE] V3 script đã load nhưng " +
+        "window.__aiSearchV3Installed chưa được thiết lập."
+      );
+
+      return false;
+    }
+
+    function redirectCurrentSearchToDedicatedPage() {
+      if (!isSearchPage) return;
+
+      var currentParams = new URLSearchParams(
+        window.location.search
+      );
+
+      var currentQuery =
+        (currentParams.get("q") || "").trim();
+
+      if (!currentQuery) return;
+
+      var currentPathname =
+        window.location.pathname || "";
+
+      if (currentPathname === endpoint) return;
+
+      var targetUrl =
+        endpoint +
+        "?q=" +
+        encodeURIComponent(currentQuery);
+
+      console.log(
+        "[AI SEARCH BRIDGE] V3 Dedicated Page redirect:",
+        targetUrl
+      );
+
+      window.location.assign(targetUrl);
+    }
+
+    async function boot() {
+      var runtimeConfigUrl;
+
+      try {
+        runtimeConfigUrl = new URL(
+          endpoint,
+          window.location.origin
+        );
+
+        runtimeConfigUrl.searchParams.set(
+          "mode",
+          "runtime-config"
+        );
+      } catch (error) {
+        runtimeConfigUrl = new URL(
+          "/apps/ai-search?mode=runtime-config",
+          window.location.origin
+        );
+      }
+
+      try {
+        /*
+         * Runtime config chỉ đọc Dashboard engine flag.
+         * Không chạy Search Pipeline / Qdrant / Embedding / Theme Map.
+         */
+        var response = await fetch(
+          runtimeConfigUrl.toString(),
+          {
+            method: "GET",
+            credentials: "same-origin",
+            headers: {
+              Accept: "application/json"
+            },
+            cache: "no-store"
+          }
+        );
+
+        if (!response.ok) {
+          throw new Error(
+            "Runtime config HTTP " + response.status
+          );
+        }
+
+        var runtimeConfig = await response.json();
+        var engine = runtimeConfig && runtimeConfig.engine;
+
+        console.log(
+          "[AI SEARCH BRIDGE] Runtime engine:",
+          engine,
+          runtimeConfig
+        );
+
+        /*
+         * =====================================================
+         * V3 — APP SELF RENDER / DEDICATED PAGE
+         * =====================================================
+         *
+         * V3 cần tồn tại trên storefront pages để chặn submit
+         * Search ngay tại nguồn, thay vì để Theme điều hướng qua
+         * /search trước.
+         *
+         * Đồng thời V3 cần được load trên /apps/ai-search để
+         * initPagination() gắn click handler cho các nút pagination.
+         */
+        if (engine === "v3") {
+          /*
+           * Giữ nguyên bypass của native Search.
+           * Khi fallback của V4 đã đưa user về /search?...&_ai_search_bypass=1,
+           * V3 tuyệt đối không được bắt lại submit hoặc redirect vòng.
+           */
+          if (isBypassSearch) {
+            releaseEarlyBoot();
+            return;
+          }
+
+          releaseEarlyBoot();
+
+          var v3Src =
+            {{ 'search-interceptor.v3.js' | asset_url | json }};
+
+          await loadScript(v3Src, "v3");
+          verifyV3Loaded();
+
+          /*
+           * Nếu đang ở native /search?q=...
+           * thì đây là navigation đã xảy ra trước khi V3 được boot.
+           * Sau khi V3 xác định engine, chuyển sang Dedicated Page.
+           *
+           * Nếu đang ở Homepage / Collection / Product / Dedicated Page,
+           * KHÔNG redirect. V3 client chỉ tiếp tục hoạt động bình thường.
+           */
+          redirectCurrentSearchToDedicatedPage();
+
+          return;
+        }
+
+        /*
+         * =====================================================
+         * V4 — EXISTING THEME MAP FLOW
+         * =====================================================
+         *
+         * Giữ nguyên behaviour V4:
+         * chỉ load V4 trên native Shopify /search page.
+         * Các trang khác không bị V4 can thiệp.
+         */
+        if (!isSearchPage) {
+          return;
+        }
+
+        setV4EarlyBoot();
+
+        var v4Src =
+          {{ 'search-interceptor.v4.js' | asset_url | json }};
+
+        await loadScript(v4Src, "v4");
+      } catch (error) {
+        /*
+         * =====================================================
+         * FAIL-OPEN
+         * =====================================================
+         *
+         * Nếu runtime-config lỗi:
+         * - native /search vẫn được bảo vệ bằng V4 như trước;
+         * - các trang khác không bị can thiệp.
+         */
+        console.warn(
+          "[AI SEARCH BRIDGE] Runtime config unavailable; " +
+          "falling back to V4 on native Search page.",
+          error
+        );
+
+        if (!isSearchPage) {
+          releaseEarlyBoot();
+          return;
+        }
+
+        setV4EarlyBoot();
+
+        try {
+          var fallbackV4Src =
+            {{ 'search-interceptor.v4.js' | asset_url | json }};
+
+          await loadScript(fallbackV4Src, "v4");
+        } catch (v4Error) {
+          console.error(
+            "[AI SEARCH BRIDGE] Failed to load V4 engine.",
+            v4Error
+          );
+
+          releaseEarlyBoot();
+        }
+      }
+    }
+
+    boot();
+  })();
+</script>
 
 {% schema %}
 {

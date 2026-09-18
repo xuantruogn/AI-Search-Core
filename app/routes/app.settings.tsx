@@ -203,6 +203,7 @@ export default function SettingsPage() {
               Sau khi đổi ngôn ngữ, vào Catalog &amp; Vector Index và quét lại
               toàn bộ catalog để đồng bộ sản phẩm.
             </s-text>
+            
             <label style={{ display: "flex", gap: 10, alignItems: "center" }}>
               <input
                 type="checkbox"

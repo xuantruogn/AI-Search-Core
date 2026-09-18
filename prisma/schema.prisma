@@ -107,6 +107,7 @@ model AiSearchShopSettings {
   searchLanguage            String?
   shop                      String   @id
   aiSearchEnabled           Boolean  @default(true)
+  customDataModeEnabled     Boolean  @default(false)
   fallbackEnabled           Boolean  @default(true)
   productLimitOverride      Int?
   searchLimitOverride       Int?
