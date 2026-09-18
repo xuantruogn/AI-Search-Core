@@ -283,7 +283,7 @@ export async function getSearchImpactSnapshot(
         count: item.count,
         detail:
           avgScore == null
-            ? "Kết quả có điểm cao nhưng không tạo click."
+            ? "Kết quả tìm kiếm tốt nhưng không tạo click."
             : `Top similarity trung bình ${avgScore.toFixed(2)} nhưng không có click.`,
       };
     });
@@ -342,7 +342,7 @@ export async function getSearchImpactSnapshot(
       searches: 0,
       clickedSearches: 0,
       note:
-        "Không có dữ liệu native trước khi app được cài. Dashboard không bịa baseline.",
+        "Không có dữ liệu native trước khi app được cài. Dashboard không thể hiển thị baseline.",
     },
     series,
     alerts: alerts.slice(0, 6),

@@ -1,6 +1,6 @@
-
+import type * as React from "react";
 import type { LoaderFunctionArgs } from "react-router";
-import { useLoaderData } from "react-router";
+import { Link, useLoaderData } from "react-router";
 
 import { authenticate } from "../shopify.server";
 import { getShopEntitlement } from "../services/commerce/entitlement.server";
@@ -244,12 +244,13 @@ function ReadinessItem({
       </div>
       {action ? (
         <div className="vip-check-action">
-          <s-link
-            href={action.href}
-            {...(action.targetTop ? { target: "_top" } : {})}
-          >
-            {action.label}
-          </s-link>
+          {action.targetTop ? (
+            <a href={action.href} target="_top" rel="noreferrer">
+              {action.label}
+            </a>
+          ) : (
+            <Link to={action.href}>{action.label}</Link>
+          )}
         </div>
       ) : null}
     </div>
@@ -309,18 +310,29 @@ function QuickLink({
   href: string;
   targetTop?: boolean;
 }) {
-  return (
-    <a
-      className="vip-quick-link"
-      href={href}
-      {...(targetTop ? { target: "_top" } : {})}
-    >
+  const content = (
+    <>
       <div>
         <strong>{title}</strong>
         <span>{detail}</span>
       </div>
       <span className="vip-quick-arrow">→</span>
+    </>
+  );
+
+  return targetTop ? (
+    <a
+      className="vip-quick-link"
+      href={href}
+      target="_top"
+      rel="noreferrer"
+    >
+      {content}
     </a>
+  ) : (
+    <Link className="vip-quick-link" to={href}>
+      {content}
+    </Link>
   );
 }
 
@@ -1141,12 +1153,12 @@ export default function Dashboard() {
               <p className="vip-hero__subtitle">{overall.detail}</p>
 
               <div className="vip-actions">
-                <a className="vip-action vip-action--primary" href="/app/settings">
+                <Link className="vip-action vip-action--primary" to="/app/settings">
                   Configure search
-                </a>
-                <a className="vip-action vip-action--ghost" href="/app/search-intelligence">
-                  Search Intelligence
-                </a>
+                </Link>
+                <Link className="vip-action vip-action--ghost" to="/app/search-analytics">
+                  Search Analytics
+                </Link>
                 {data.pricingUrl ? (
                   <a
                     className="vip-action vip-action--ghost"
@@ -1355,9 +1367,7 @@ export default function Dashboard() {
             )}
 
             <div style={{ marginTop: 16 }}>
-              <s-link href="/app/search-intelligence">
-                Mở Search Intelligence →
-              </s-link>
+              <Link to="/app/search-analytics">Mở Search Analytics →</Link>
             </div>
           </aside>
         </section>
@@ -1488,32 +1498,50 @@ export default function Dashboard() {
 
             <div className="vip-panel vip-intel">
               <div className="vip-intel__icon">AI</div>
-              <h3>Search Intelligence</h3>
+              <h3>Search Analytics</h3>
               <p>
                 Theo dõi NO_RESULTS, LOW_SIMILARITY và HIGH_SIMILARITY_NO_CLICK để biết khách đang tìm gì nhưng chưa nhận được kết quả đủ tốt.
               </p>
-              <s-link href="/app/search-intelligence">Open intelligence →</s-link>
+              <Link to="/app/search-analytics">Open analytics →</Link>
             </div>
           </div>
         </section>
 
         <section className="vip-quick-grid">
           <QuickLink
-            title="Search settings"
-            detail="Ngôn ngữ, kết quả/search và storefront state."
+            title="Catalog"
+            detail="Theo dõi đồng bộ sản phẩm, vector index và trạng thái catalog."
+            href="/app/catalog-sync"
+          />
+          <QuickLink
+            title="Search Analytics"
+            detail="Xem CTR, click, truy vấn bất thường và chất lượng kết quả."
+            href="/app/search-analytics"
+          />
+          <QuickLink
+            title="Usage"
+            detail="Theo dõi search quota, embeddings, fallback và mức sử dụng."
+            href="/app/usage"
+          />
+          <QuickLink
+            title="Plans & Billing"
+            detail="Quản lý gói AI Search và giới hạn thương mại."
+            href="/app/billing"
+          />
+          <QuickLink
+            title="Settings"
+            detail="Ngôn ngữ search, số kết quả, trạng thái AI và cấu hình storefront."
             href="/app/settings"
           />
           <QuickLink
             title="Theme integration"
-            detail={data.theme.themeName ? `Current theme · ${data.theme.themeName}` : "Check App Embed & Theme Map."}
+            detail={
+              data.theme.themeName
+                ? `Current theme · ${data.theme.themeName}`
+                : "Kiểm tra App Embed và theme integration."
+            }
             href={data.appEmbedUrl ?? "/app/settings"}
             targetTop={Boolean(data.appEmbedUrl)}
-          />
-          <QuickLink
-            title="Usage period"
-            detail={`${new Date(entitlement.usage.periodStart).toLocaleDateString("vi-VN")} → ${new Date(entitlement.usage.periodEnd).toLocaleDateString("vi-VN")}`}
-            href={data.pricingUrl ?? "/app/settings"}
-            targetTop={Boolean(data.pricingUrl)}
           />
         </section>
       </div>
