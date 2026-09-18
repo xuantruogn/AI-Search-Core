@@ -140,6 +140,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   }
 
   const aiSearchEnabled = form.get("aiSearchEnabled") === "on";
+  const customDataModeEnabled = form.get("customDataModeEnabled") === "on";
   const searchLanguage = String(form.get("searchLanguage") ?? "").trim();
   try {
     if (!searchLanguage || Intl.getCanonicalLocales(searchLanguage).length !== 1) {
@@ -156,6 +157,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   await updateShopSettings({
     shop: session.shop,
     aiSearchEnabled,
+    customDataModeEnabled,
     searchLanguage,
     resultLimit: Number.isFinite(resultLimit) ? resultLimit : 20,
   });
@@ -211,6 +213,15 @@ export default function SettingsPage() {
                 defaultChecked={data.aiSearchEnabled}
               />
               Bật AI Search trên storefront
+            </label>
+
+            <label style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 10 }}>
+              <input
+                type="checkbox"
+                name="customDataModeEnabled"
+                defaultChecked={data.customDataModeEnabled}
+              />
+              Bật chế độ App tự render V3 (Không cần đồng bộ Theme Map)
             </label>
 
             <s-text>
