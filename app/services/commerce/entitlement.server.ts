@@ -23,7 +23,7 @@ export async function getShopEntitlement(
 ): Promise<EntitlementSnapshot> {
   // Bootstrap at most once per entitlement read, then keep the hot storefront
   // path read-only. Older code called ensureShopRecord independently from
-  // three getters, creating avoidable SQLite write contention.
+  // three getters, creating avoidable database write contention.
   await ensureShopRecord({ shop });
 
   const [subscription, shopLifecycleStatus, settings, productStats] =
@@ -48,10 +48,10 @@ export async function getShopEntitlement(
   });
 
   const catalogRows = await db.$queryRaw<Array<{ status: string }>>`
-    SELECT "status"
-    FROM "AiSearchCatalogSyncJob"
-    WHERE "shop" = ${shop}
-    ORDER BY "id" DESC
+    SELECT \`status\`
+    FROM \`AiSearchCatalogSyncJob\`
+    WHERE \`shop\` = ${shop}
+    ORDER BY \`id\` DESC
     LIMIT 1
   `;
   const catalogSyncStatus = catalogRows[0]?.status ?? null;

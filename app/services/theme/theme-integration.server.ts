@@ -1,10 +1,11 @@
-// app/services/theme/theme-integration.server.ts
+
 
 import { getActiveTheme } from "./theme-reader.server";
 import { getAiSearchAppEmbedStatusForTheme } from "./app-embed.server";
 import { loadStoredThemeMapV4 } from "./theme-map-v4-store.server";
 import type { ThemeMapV4 } from "./theme-map-v4.types";
 import type { AdminGraphqlClient } from "./theme-map-v4-shopify.server";
+import { isStoredThemeMapV4Usable } from "./theme-sync-status.server";
 
 export type ThemeIntegrationStatus =
   | "READY"
@@ -258,9 +259,22 @@ export async function getThemeIntegrationStatus({
        *
        * Có map trong DB không đồng nghĩa renderer dùng được.
        */
+      /**
+       * IMPORTANT: Theme Map V4 has two valid production paths:
+       *
+       * 1. VERIFIED -> App Proxy Liquid can replay the renderer directly.
+       * 2. UNSUPPORTED + a source-proven THEME_CONTEXT_REQUIRED candidate ->
+       *    storefront renders through Shopify theme context / Section Rendering.
+       *
+       * Manual sync and storefront preflight already accept both paths. Admin
+       * status must use the exact same capability rule or a successful sync
+       * appears as THEME_MAP_UNAVAILABLE after page reload.
+       */
       const themeMapReady =
-        map?.status ===
-        "VERIFIED";
+        map != null &&
+        isStoredThemeMapV4Usable(
+          map,
+        );
 
       let status:
         ThemeIntegrationStatus;
@@ -301,6 +315,7 @@ export async function getThemeIntegrationStatus({
 
       if (
         !themeMapError &&
+        !themeMapReady &&
         map?.status ===
           "UNSUPPORTED"
       ) {

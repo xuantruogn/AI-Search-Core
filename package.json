@@ -20,7 +20,8 @@
     "typecheck": "react-router typegen && tsc --noEmit",
     "test:v3": "node scripts/v3-selftest.cjs && node scripts/theme-map-selftest.cjs",
     "test:storefront": "node scripts/storefront-selftest.cjs",
-    "test:v4": "tsx --env-file=.env scripts/theme-map-v4-selftest.ts"
+    "test:v4": "tsx --env-file=.env scripts/theme-map-v4-selftest.ts",
+    "test:query-plan": "tsx scripts/query-plan-shadow-selftest.ts"
   },
   "type": "module",
   "engines": {
@@ -42,6 +43,7 @@
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-router": "^7.12.0",
+    "undici": "7.29.0",
     "vite-tsconfig-paths": "^5.1.4"
   },
   "devDependencies": {

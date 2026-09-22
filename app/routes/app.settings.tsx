@@ -8,7 +8,10 @@ import {
   updateShopSettings,
 } from "../services/commerce/shop-registry.server";
 import { getThemeAppEmbedDeepLink } from "../services/theme/app-embed.server";
-import { getThemeSyncStatus } from "../services/theme/theme-sync-status.server";
+import {
+  getThemeSyncStatus,
+  isStoredThemeMapV4Usable,
+} from "../services/theme/theme-sync-status.server";
 import { canUseQuotaOverrideUi } from "../services/commerce/support-access.server";
 import { rebuildActiveThemeMapV4 } from "../services/theme/theme-map-v4-lifecycle.server";
 
@@ -63,19 +66,13 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         },
       );
 
-      const hasThemeContextRenderer =
-        map.rendererCandidates.some((candidate) =>
-          candidate.renderStrategy === "THEME_CONTEXT_REQUIRED" &&
-          candidate.mount != null &&
-          candidate.usesAllProducts === false &&
-          candidate.rejectionReasons.every(
-            (reason) => reason === "THEME_CONTEXT_REQUIRED",
-          ),
-        );
-
+      // Use the same capability rule as admin status + storefront preflight.
+      // This prevents manual sync and reload from disagreeing about whether
+      // a THEME_CONTEXT_REQUIRED renderer is production-usable.
       const usable =
-        map.status === "VERIFIED" ||
-        hasThemeContextRenderer;
+        isStoredThemeMapV4Usable(
+          map,
+        );
 
       if (!usable) {
         return {
@@ -86,6 +83,40 @@ export const action = async ({ request }: ActionFunctionArgs) => {
                 ? map.unsupportedReason ?? "UNKNOWN"
                 : "NO_SAFE_RENDERER"
             }. Storefront sẽ dùng Shopify Search mặc định.`,
+        };
+      }
+
+      /**
+       * Read back through the same persistent status path used after reload.
+       * This prevents a transient in-memory success message when the map was
+       * not actually persisted or the active theme changed during the sync.
+       */
+      const verifiedStatus =
+        await getThemeSyncStatus({
+          admin,
+          shop: session.shop,
+        });
+
+      const persisted =
+        verifiedStatus.themeMapReady === true &&
+        verifiedStatus.fingerprint === map.fingerprint;
+
+      if (!persisted) {
+        console.error(
+          "[AI Search][Theme Map V4] manual sync read-back verification failed:",
+          {
+            shop: session.shop,
+            compiledThemeId: map.theme.id,
+            compiledFingerprint: map.fingerprint,
+            storedFingerprint: verifiedStatus.fingerprint,
+            status: verifiedStatus.status,
+          },
+        );
+
+        return {
+          success: false,
+          message:
+            `Theme Map đã compile nhưng chưa xác nhận được bản persist sau khi đọc lại (${verifiedStatus.status}).`,
         };
       }
 
@@ -318,7 +349,7 @@ export default function SettingsPage() {
             </s-text>
           )}
           <s-text>
-            Lưu ý: Theme Map chỉ được tạo khi cài app lần đầu hoặc khi bạn bấm "Đồng bộ theme hiện tại". Sau khi đổi/publish theme mới, AI Search sẽ tạm fallback về Shopify Search cho đến khi bạn đồng bộ theme mới.
+            Lưu ý:  Sau khi đổi/publish theme mới, AI Search sẽ tạm fallback về Shopify Search cho đến khi bạn đồng bộ theme mới.
           </s-text>
         </s-stack>
       </s-section>

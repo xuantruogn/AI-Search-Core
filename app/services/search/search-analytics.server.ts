@@ -1,3 +1,4 @@
+
 import db from "../../db.server";
 import { hashSearchQuery } from "../commerce/usage.server";
 
@@ -17,8 +18,58 @@ export type SearchAnalyticsDiagnostics = {
   llmFallbackReason: string | null;
 };
 
+export type SearchClusterClassification =
+  | "HEALTHY"
+  | "NO_RESULTS"
+  | "LOW_SIMILARITY"
+  | "HIGH_SIMILARITY_NO_CLICK";
+
+const MAX_RANKED_PRODUCTS_FOR_ANALYTICS = 20;
+const QUERY_FINGERPRINT_DIMENSIONS = 64;
+const RESULT_CLUSTER_SIMILARITY = 0.7;
+const EMPTY_CLUSTER_SIMILARITY = 0.82;
+const LOW_SIMILARITY_MARGIN = 0.03;
+const HIGH_SIMILARITY_MARGIN = 0.08;
+const MIN_RECURRING_SEARCHES = 2;
+const MIN_NO_CLICK_SEARCHES = 3;
+const DEFAULT_NO_CLICK_GRACE_MINUTES = 30;
+
 function normalizeQuery(query: string) {
   return query.replace(/\s+/g, " ").trim().toLocaleLowerCase("en-US");
+}
+
+/**
+ * Compact the already-created embedding into a small deterministic fingerprint.
+ * This never makes another embedding request and avoids persisting the complete
+ * query embedding just to group NO_RESULTS searches.
+ */
+function createQueryFingerprint(queryVector?: number[] | null) {
+  if (
+    !queryVector?.length ||
+    !queryVector.every((value) => Number.isFinite(value))
+  ) {
+    return null;
+  }
+
+  const projected = Array.from(
+    { length: QUERY_FINGERPRINT_DIMENSIONS },
+    () => 0,
+  );
+
+  for (let index = 0; index < queryVector.length; index += 1) {
+    const bucket = index % QUERY_FINGERPRINT_DIMENSIONS;
+    // Deterministic alternating sign prevents every source dimension in a
+    // bucket from simply summing in the same direction.
+    const sign = ((index * 2654435761) >>> 30) % 2 === 0 ? 1 : -1;
+    projected[bucket] += queryVector[index] * sign;
+  }
+
+  const magnitude = Math.sqrt(
+    projected.reduce((sum, value) => sum + value * value, 0),
+  );
+  if (!Number.isFinite(magnitude) || magnitude === 0) return null;
+
+  return projected.map((value) => Number((value / magnitude).toFixed(6)));
 }
 
 export async function recordSearchQueryLog({
@@ -50,17 +101,20 @@ export async function recordSearchQueryLog({
 }) {
   const totalStartedAt = Date.now();
   const serializationStartedAt = Date.now();
-  const queryVectorJson =
-    rankedProducts.length === 0 &&
-    queryVector?.length &&
-    queryVector.every(Number.isFinite)
-      ? JSON.stringify(queryVector.map((value) => Number(value.toFixed(6))))
-      : null;
+  const compactProducts = rankedProducts.slice(
+    0,
+    MAX_RANKED_PRODUCTS_FOR_ANALYTICS,
+  );
+  const queryFingerprint =
+    compactProducts.length === 0 ? createQueryFingerprint(queryVector) : null;
+  const queryVectorJson = queryFingerprint
+    ? JSON.stringify(queryFingerprint)
+    : null;
   const llmAnalysisJson = llmAnalysis ? JSON.stringify(llmAnalysis) : null;
   const selectedContextJson = selectedContext
     ? JSON.stringify(selectedContext)
     : null;
-  const rankedProductsJson = JSON.stringify(rankedProducts);
+  const rankedProductsJson = JSON.stringify(compactProducts);
   const serializationCodeMs = Date.now() - serializationStartedAt;
   const dbStartedAt = Date.now();
   const log = await db.aiSearchQueryLog.create({
@@ -69,12 +123,14 @@ export async function recordSearchQueryLog({
       query: query.slice(0, 500),
       normalizedQuery: normalizeQuery(query).slice(0, 500),
       queryHash: hashSearchQuery(query),
+      // Historical column name retained for migration compatibility. The value
+      // is now a compact 64D semantic fingerprint, not the full embedding.
       queryVectorJson,
       analyzedQuery: analyzedQuery?.slice(0, 4_000) ?? null,
       llmAnalysisJson,
       selectedContextJson,
-      // Store the complete post-threshold list once. Pagination is a browser
-      // concern and must never create additional analytics rows.
+      // Only the compact top-ranked set is needed for cluster similarity,
+      // product statistics and click attribution across pagination.
       rankedProductsJson,
       resultCount: rankedProducts.length,
       candidateCount: diagnostics.candidateCount,
@@ -136,9 +192,51 @@ export async function recordSearchProductClick({
   });
   if (!log) return false;
 
-  const product = parseRankedProducts(log.rankedProductsJson).find(
+  let product = parseRankedProducts(log.rankedProductsJson).find(
     (candidate) => candidate.productId === productId,
   );
+
+  // SearchLog intentionally keeps only the compact top-20 list. For clicks on
+  // later pagination pages, resolve rank/score from the receipt that stores the
+  // complete ranked list instead of bloating every analytics row.
+  if (!product) {
+    const receipt = await db.aiSearchResultReceipt.findFirst({
+      where: { searchLogId, shop },
+      orderBy: { createdAt: "desc" },
+      select: { rankedProductsJson: true },
+    });
+
+    if (receipt) {
+      try {
+        const parsed = JSON.parse(receipt.rankedProductsJson) as unknown;
+        if (Array.isArray(parsed)) {
+          const index = parsed.findIndex(
+            (entry) =>
+              entry &&
+              typeof entry === "object" &&
+              (entry as { productId?: unknown }).productId === productId,
+          );
+          if (index >= 0) {
+            const row = parsed[index] as {
+              productId: string;
+              handle?: unknown;
+              score?: unknown;
+            };
+            product = {
+              productId: row.productId,
+              handle: typeof row.handle === "string" ? row.handle : "",
+              rank: index + 1,
+              score: typeof row.score === "number" ? row.score : 0,
+            };
+          }
+        }
+      } catch {
+        // Best-effort telemetry: malformed/expired receipt data must never
+        // affect storefront navigation.
+      }
+    }
+  }
+
   if (!product) return false;
 
   await db.aiSearchQueryClick.upsert({
@@ -182,7 +280,7 @@ function rankSimilarity(
   return union > 0 ? intersection / union : 0;
 }
 
-function parseQueryVector(value: string | null): number[] | null {
+function parseQueryFingerprint(value: string | null): number[] | null {
   if (!value) return null;
   try {
     const parsed = JSON.parse(value) as unknown;
@@ -217,14 +315,22 @@ function cosineSimilarity(left: number[] | null, right: number[] | null) {
   return denominator > 0 ? dot / denominator : 0;
 }
 
+type QueryStats = {
+  count: number;
+  latestAt: number;
+};
+
 type ClusterAccumulator = {
-  label: string;
+  normalizedLabel: string;
   representative: RankedSearchProduct[];
-  representativeQueryVector: number[] | null;
-  queryCounts: Map<string, number>;
+  representativeQueryFingerprint: number[] | null;
+  hasResults: boolean;
+  queryCounts: Map<string, QueryStats>;
   searchCount: number;
   searchesWithResults: number;
   clickedSearches: number;
+  matureSearches: number;
+  matureClickedSearches: number;
   clickCount: number;
   zeroResultCount: number;
   scoreTotal: number;
@@ -252,39 +358,55 @@ export async function getMerchantSearchClusters(shop: string, days = 30) {
   });
 
   const clusters: ClusterAccumulator[] = [];
+  const configuredGrace = Number.parseFloat(
+    process.env.AI_SEARCH_QUALITY_NO_CLICK_GRACE_MINUTES ?? "",
+  );
+  const graceMinutes = Number.isFinite(configuredGrace)
+    ? Math.max(0, configuredGrace)
+    : DEFAULT_NO_CLICK_GRACE_MINUTES;
+  const graceCutoff = Date.now() - graceMinutes * 60_000;
 
   for (const log of logs) {
     const products = parseRankedProducts(log.rankedProductsJson);
-    const queryVector = parseQueryVector(log.queryVectorJson);
-    const hasResults = products.length > 0;
+    const queryFingerprint = parseQueryFingerprint(log.queryVectorJson);
+    const hasResults = log.resultCount > 0;
     const cluster =
       clusters.find((candidate) => {
-        if (candidate.label === log.normalizedQuery) return true;
+        // Never combine a NO_RESULTS event with a result-bearing event. The same
+        // literal query can change behaviour as inventory/index state changes.
+        if (candidate.hasResults !== hasResults) return false;
 
-        const candidateHasResults = candidate.representative.length > 0;
-        if (hasResults && candidateHasResults) {
-          return rankSimilarity(candidate.representative, products) >= 0.7;
+        if (candidate.normalizedLabel === log.normalizedQuery) return true;
+
+        if (hasResults) {
+          return (
+            rankSimilarity(candidate.representative, products) >=
+            RESULT_CLUSTER_SIMILARITY
+          );
         }
 
-        // Empty result lists contain no product signal. Compare two such
-        // queries through the embedding already created during search, and
-        // never merge them into a product-rank cluster.
+        // Empty result lists have no product signal. Compare only the compact
+        // semantic fingerprints derived from embeddings already created during
+        // the original searches.
         return (
-          !hasResults &&
-          !candidateHasResults &&
-          cosineSimilarity(candidate.representativeQueryVector, queryVector) >=
-            0.82
+          cosineSimilarity(
+            candidate.representativeQueryFingerprint,
+            queryFingerprint,
+          ) >= EMPTY_CLUSTER_SIMILARITY
         );
       }) ??
       (() => {
         const created: ClusterAccumulator = {
-          label: log.normalizedQuery,
+          normalizedLabel: log.normalizedQuery,
           representative: products,
-          representativeQueryVector: queryVector,
+          representativeQueryFingerprint: queryFingerprint,
+          hasResults,
           queryCounts: new Map(),
           searchCount: 0,
           searchesWithResults: 0,
           clickedSearches: 0,
+          matureSearches: 0,
+          matureClickedSearches: 0,
           clickCount: 0,
           zeroResultCount: 0,
           scoreTotal: 0,
@@ -296,23 +418,22 @@ export async function getMerchantSearchClusters(shop: string, days = 30) {
         return created;
       })();
 
-    if (cluster.representative.length === 0 && products.length > 0) {
-      cluster.representative = products;
-    }
-    if (!cluster.representativeQueryVector && queryVector) {
-      cluster.representativeQueryVector = queryVector;
-    }
-
     cluster.searchCount += 1;
-    cluster.searchesWithResults += log.resultCount > 0 ? 1 : 0;
-    cluster.zeroResultCount += log.resultCount === 0 ? 1 : 0;
+    cluster.searchesWithResults += hasResults ? 1 : 0;
+    cluster.zeroResultCount += hasResults ? 0 : 1;
     cluster.clickedSearches += log.clicks.length > 0 ? 1 : 0;
+    if (log.createdAt.getTime() <= graceCutoff) {
+      cluster.matureSearches += 1;
+      cluster.matureClickedSearches += log.clicks.length > 0 ? 1 : 0;
+    }
     cluster.clickCount += log.clicks.length;
     cluster.thresholdTotal += log.vectorThreshold;
-    cluster.queryCounts.set(
-      log.query,
-      (cluster.queryCounts.get(log.query) ?? 0) + 1,
-    );
+
+    const existingQuery = cluster.queryCounts.get(log.query);
+    cluster.queryCounts.set(log.query, {
+      count: (existingQuery?.count ?? 0) + 1,
+      latestAt: Math.max(existingQuery?.latestAt ?? 0, log.createdAt.getTime()),
+    });
 
     const comparisonScore = log.topScore ?? log.topCandidateScore;
     if (comparisonScore !== null) {
@@ -338,6 +459,7 @@ export async function getMerchantSearchClusters(shop: string, days = 30) {
   }
 
   return clusters
+    .filter((cluster) => cluster.searchCount >= MIN_RECURRING_SEARCHES)
     .map((cluster) => {
       const averageTopScore =
         cluster.scoreCount > 0 ? cluster.scoreTotal / cluster.scoreCount : null;
@@ -348,27 +470,39 @@ export async function getMerchantSearchClusters(shop: string, days = 30) {
           ? cluster.clickedSearches / cluster.searchesWithResults
           : 0;
 
-      let classification = "HEALTHY";
-      if (cluster.searchesWithResults === 0) {
+      let classification: SearchClusterClassification = "HEALTHY";
+      if (!cluster.hasResults) {
         classification = "NO_RESULTS";
       } else if (
         averageTopScore !== null &&
-        averageTopScore < averageThreshold
+        averageTopScore < averageThreshold + LOW_SIMILARITY_MARGIN
       ) {
         classification = "LOW_SIMILARITY";
       } else if (
-        cluster.searchesWithResults >= 3 &&
-        cluster.clickedSearches === 0
+        cluster.matureSearches >= MIN_NO_CLICK_SEARCHES &&
+        cluster.matureClickedSearches === 0 &&
+        averageTopScore !== null &&
+        averageTopScore >= averageThreshold + HIGH_SIMILARITY_MARGIN
       ) {
-        classification = "RESULTS_WITHOUT_CLICKS";
+        classification = "HIGH_SIMILARITY_NO_CLICK";
       }
 
       const variants = [...cluster.queryCounts.entries()]
-        .map(([query, searchCount]) => ({ query, searchCount }))
-        .sort((left, right) => right.searchCount - left.searchCount);
+        .map(([query, stats]) => ({
+          query,
+          searchCount: stats.count,
+          latestAt: stats.latestAt,
+        }))
+        .sort(
+          (left, right) =>
+            right.searchCount - left.searchCount ||
+            right.latestAt - left.latestAt ||
+            left.query.localeCompare(right.query),
+        )
+        .map(({ query, searchCount }) => ({ query, searchCount }));
 
       return {
-        label: variants[0]?.query ?? cluster.label,
+        label: variants[0]?.query ?? cluster.normalizedLabel,
         variants,
         searchCount: cluster.searchCount,
         zeroResultCount: cluster.zeroResultCount,
@@ -377,6 +511,7 @@ export async function getMerchantSearchClusters(shop: string, days = 30) {
         clickCount: cluster.clickCount,
         clickThroughRate,
         averageTopScore,
+        averageThreshold,
         classification,
         commonProducts: [...cluster.productStats.entries()]
           .map(([productId, stats]) => ({

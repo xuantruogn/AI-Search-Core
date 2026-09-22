@@ -220,18 +220,18 @@ export async function refreshShopifyAppPricingSubscription({
 
   if (!result.subscription) {
     await db.$executeRaw`
-      UPDATE "AiSearchSubscription"
+      UPDATE \`AiSearchSubscription\`
       SET
-        "plan" = 'NONE',
-        "status" = 'INACTIVE',
-        "planHandle" = NULL,
-        "shopifySubscriptionId" = NULL,
-        "billingPeriodStart" = NULL,
-        "billingPeriodEnd" = NULL,
-        "source" = 'SHOPIFY_APP_PRICING',
-        "lastSyncedAt" = CURRENT_TIMESTAMP,
-        "updatedAt" = CURRENT_TIMESTAMP
-      WHERE "shop" = ${shop}
+        \`plan\` = 'NONE',
+        \`status\` = 'INACTIVE',
+        \`planHandle\` = NULL,
+        \`shopifySubscriptionId\` = NULL,
+        \`billingPeriodStart\` = NULL,
+        \`billingPeriodEnd\` = NULL,
+        \`source\` = 'SHOPIFY_APP_PRICING',
+        \`lastSyncedAt\` = UTC_TIMESTAMP(3),
+        \`updatedAt\` = UTC_TIMESTAMP(3)
+      WHERE \`shop\` = ${shop}
     `;
 
     const subscription = await getSubscriptionSnapshot(shop);
@@ -266,18 +266,18 @@ export async function refreshShopifyAppPricingSubscription({
     // fail closed. Keeping the previous local PRO/BASIC row would allow stale
     // paid entitlement indefinitely after a pricing configuration change.
     await db.$executeRaw`
-      UPDATE "AiSearchSubscription"
+      UPDATE \`AiSearchSubscription\`
       SET
-        "plan" = 'NONE',
-        "status" = 'INACTIVE',
-        "planHandle" = ${inferred.planHandle},
-        "shopifySubscriptionId" = ${result.subscription.legacySubscriptionId ?? null},
-        "billingPeriodStart" = NULL,
-        "billingPeriodEnd" = NULL,
-        "source" = 'SHOPIFY_APP_PRICING',
-        "lastSyncedAt" = CURRENT_TIMESTAMP,
-        "updatedAt" = CURRENT_TIMESTAMP
-      WHERE "shop" = ${shop}
+        \`plan\` = 'NONE',
+        \`status\` = 'INACTIVE',
+        \`planHandle\` = ${inferred.planHandle},
+        \`shopifySubscriptionId\` = ${result.subscription.legacySubscriptionId ?? null},
+        \`billingPeriodStart\` = NULL,
+        \`billingPeriodEnd\` = NULL,
+        \`source\` = 'SHOPIFY_APP_PRICING',
+        \`lastSyncedAt\` = UTC_TIMESTAMP(3),
+        \`updatedAt\` = UTC_TIMESTAMP(3)
+      WHERE \`shop\` = ${shop}
     `;
 
     throw new Error(
@@ -293,18 +293,18 @@ export async function refreshShopifyAppPricingSubscription({
   );
 
   await db.$executeRaw`
-    UPDATE "AiSearchSubscription"
+    UPDATE \`AiSearchSubscription\`
     SET
-      "plan" = ${inferred.plan},
-      "status" = 'ACTIVE',
-      "planHandle" = ${inferred.planHandle},
-      "shopifySubscriptionId" = ${result.subscription.legacySubscriptionId ?? null},
-      "billingPeriodStart" = ${start},
-      "billingPeriodEnd" = ${end},
-      "source" = 'SHOPIFY_APP_PRICING',
-      "lastSyncedAt" = CURRENT_TIMESTAMP,
-      "updatedAt" = CURRENT_TIMESTAMP
-    WHERE "shop" = ${shop}
+      \`plan\` = ${inferred.plan},
+      \`status\` = 'ACTIVE',
+      \`planHandle\` = ${inferred.planHandle},
+      \`shopifySubscriptionId\` = ${result.subscription.legacySubscriptionId ?? null},
+      \`billingPeriodStart\` = ${start},
+      \`billingPeriodEnd\` = ${end},
+      \`source\` = 'SHOPIFY_APP_PRICING',
+      \`lastSyncedAt\` = UTC_TIMESTAMP(3),
+      \`updatedAt\` = UTC_TIMESTAMP(3)
+    WHERE \`shop\` = ${shop}
   `;
 
   const subscription = await getSubscriptionSnapshot(shop);

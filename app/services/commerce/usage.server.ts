@@ -137,21 +137,22 @@ export async function ensureUsagePeriod({
   const periodKey = buildPeriodKey(start, end);
 
   await db.$executeRaw`
-    INSERT OR IGNORE INTO "AiSearchUsagePeriod" (
-      "shop", "periodKey", "periodStart", "periodEnd", "createdAt", "updatedAt"
+    INSERT INTO \`AiSearchUsagePeriod\` (
+      \`shop\`, \`periodKey\`, \`periodStart\`, \`periodEnd\`, \`createdAt\`, \`updatedAt\`
     ) VALUES (
-      ${shop}, ${periodKey}, ${start}, ${end}, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+      ${shop}, ${periodKey}, ${start}, ${end}, UTC_TIMESTAMP(3), UTC_TIMESTAMP(3)
     )
+    ON DUPLICATE KEY UPDATE \`id\` = \`id\`
   `;
 
   const rows = await db.$queryRaw<UsageRow[]>`
     SELECT
-      "id", "shop", "periodKey", "periodStart", "periodEnd",
-      "searchCount", "vectorUpdateCount", "productIndexCount", "productDeleteCount",
-      "queryEmbeddingCount", "productEmbeddingCount", "fallbackCount",
-      "blockedSearchCount", "blockedVectorCount"
-    FROM "AiSearchUsagePeriod"
-    WHERE "shop" = ${shop} AND "periodKey" = ${periodKey}
+      \`id\`, \`shop\`, \`periodKey\`, \`periodStart\`, \`periodEnd\`,
+      \`searchCount\`, \`vectorUpdateCount\`, \`productIndexCount\`, \`productDeleteCount\`,
+      \`queryEmbeddingCount\`, \`productEmbeddingCount\`, \`fallbackCount\`,
+      \`blockedSearchCount\`, \`blockedVectorCount\`
+    FROM \`AiSearchUsagePeriod\`
+    WHERE \`shop\` = ${shop} AND \`periodKey\` = ${periodKey}
     LIMIT 1
   `;
 
@@ -165,12 +166,12 @@ export async function ensureUsagePeriod({
 export async function getUsagePeriodById(periodId: number) {
   const rows = await db.$queryRaw<UsageRow[]>`
     SELECT
-      "id", "shop", "periodKey", "periodStart", "periodEnd",
-      "searchCount", "vectorUpdateCount", "productIndexCount", "productDeleteCount",
-      "queryEmbeddingCount", "productEmbeddingCount", "fallbackCount",
-      "blockedSearchCount", "blockedVectorCount"
-    FROM "AiSearchUsagePeriod"
-    WHERE "id" = ${periodId}
+      \`id\`, \`shop\`, \`periodKey\`, \`periodStart\`, \`periodEnd\`,
+      \`searchCount\`, \`vectorUpdateCount\`, \`productIndexCount\`, \`productDeleteCount\`,
+      \`queryEmbeddingCount\`, \`productEmbeddingCount\`, \`fallbackCount\`,
+      \`blockedSearchCount\`, \`blockedVectorCount\`
+    FROM \`AiSearchUsagePeriod\`
+    WHERE \`id\` = ${periodId}
     LIMIT 1
   `;
 
@@ -227,12 +228,12 @@ async function insertUsageEvent({
   const json = metadataJson(metadata);
 
   await db.$executeRaw`
-    INSERT INTO "AiSearchUsageEvent" (
-      "shop", "periodId", "type", "quantity", "success", "productId",
-      "queryHash", "jobId", "metadataJson", "createdAt"
+    INSERT INTO \`AiSearchUsageEvent\` (
+      \`shop\`, \`periodId\`, \`type\`, \`quantity\`, \`success\`, \`productId\`,
+      \`queryHash\`, \`jobId\`, \`metadataJson\`, \`createdAt\`
     ) VALUES (
       ${shop}, ${periodId}, ${type}, ${quantity}, ${success}, ${productId ?? null},
-      ${queryHash ?? null}, ${jobId ?? null}, ${json}, CURRENT_TIMESTAMP
+      ${queryHash ?? null}, ${jobId ?? null}, ${json}, UTC_TIMESTAMP(3)
     )
   `;
 }
@@ -240,11 +241,11 @@ async function insertUsageEvent({
 async function reservationStatus(id: string) {
   const rows = await db.$queryRaw<UsageReservationRow[]>`
     SELECT
-      "id", "shop", "periodId", "kind", "status", "countsVectorUpdate",
-      "productId", "queryHash", "embeddingConsumedAt", "effectAppliedAt",
-      "resolvedAt", "createdAt", "updatedAt"
-    FROM "AiSearchUsageReservation"
-    WHERE "id" = ${id}
+      \`id\`, \`shop\`, \`periodId\`, \`kind\`, \`status\`, \`countsVectorUpdate\`,
+      \`productId\`, \`queryHash\`, \`embeddingConsumedAt\`, \`effectAppliedAt\`,
+      \`resolvedAt\`, \`createdAt\`, \`updatedAt\`
+    FROM \`AiSearchUsageReservation\`
+    WHERE \`id\` = ${id}
     LIMIT 1
   `;
   return rows[0] ?? null;
@@ -281,35 +282,35 @@ export async function reserveSearchUsage({
     const updated =
       searchLimit === null
         ? await tx.$executeRaw`
-            UPDATE "AiSearchUsagePeriod"
-            SET "searchCount" = "searchCount" + 1, "updatedAt" = CURRENT_TIMESTAMP
-            WHERE "id" = ${periodId} AND "shop" = ${shop}
+            UPDATE \`AiSearchUsagePeriod\`
+            SET \`searchCount\` = \`searchCount\` + 1, \`updatedAt\` = UTC_TIMESTAMP(3)
+            WHERE \`id\` = ${periodId} AND \`shop\` = ${shop}
           `
         : await tx.$executeRaw`
-            UPDATE "AiSearchUsagePeriod"
-            SET "searchCount" = "searchCount" + 1, "updatedAt" = CURRENT_TIMESTAMP
+            UPDATE \`AiSearchUsagePeriod\`
+            SET \`searchCount\` = \`searchCount\` + 1, \`updatedAt\` = UTC_TIMESTAMP(3)
             WHERE
-              "id" = ${periodId}
-              AND "shop" = ${shop}
-              AND "searchCount" < ${searchLimit}
+              \`id\` = ${periodId}
+              AND \`shop\` = ${shop}
+              AND \`searchCount\` < ${searchLimit}
           `;
 
     if (updated !== 1) {
       await tx.$executeRaw`
-        UPDATE "AiSearchUsagePeriod"
-        SET "blockedSearchCount" = "blockedSearchCount" + 1, "updatedAt" = CURRENT_TIMESTAMP
-        WHERE "id" = ${periodId} AND "shop" = ${shop}
+        UPDATE \`AiSearchUsagePeriod\`
+        SET \`blockedSearchCount\` = \`blockedSearchCount\` + 1, \`updatedAt\` = UTC_TIMESTAMP(3)
+        WHERE \`id\` = ${periodId} AND \`shop\` = ${shop}
       `;
       return false;
     }
 
     await tx.$executeRaw`
-      INSERT INTO "AiSearchUsageReservation" (
-        "id", "shop", "periodId", "kind", "status", "countsVectorUpdate",
-        "queryHash", "createdAt", "updatedAt"
+      INSERT INTO \`AiSearchUsageReservation\` (
+        \`id\`, \`shop\`, \`periodId\`, \`kind\`, \`status\`, \`countsVectorUpdate\`,
+        \`queryHash\`, \`createdAt\`, \`updatedAt\`
       ) VALUES (
         ${id}, ${shop}, ${periodId}, 'SEARCH', 'PENDING', false,
-        ${queryHash}, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+        ${queryHash}, UTC_TIMESTAMP(3), UTC_TIMESTAMP(3)
       )
     `;
 
@@ -366,45 +367,45 @@ export async function reserveProductEmbeddingUsage({
 
     if (!countAsVectorUpdate) {
       const rows = await tx.$queryRaw<Array<{ id: number }>>`
-        SELECT "id"
-        FROM "AiSearchUsagePeriod"
-        WHERE "id" = ${periodId} AND "shop" = ${shop}
+        SELECT \`id\`
+        FROM \`AiSearchUsagePeriod\`
+        WHERE \`id\` = ${periodId} AND \`shop\` = ${shop}
         LIMIT 1
       `;
       updated = rows[0]?.id === periodId ? 1 : 0;
     } else if (vectorUpdateLimit === null) {
       updated = await tx.$executeRaw`
-        UPDATE "AiSearchUsagePeriod"
-        SET "vectorUpdateCount" = "vectorUpdateCount" + 1, "updatedAt" = CURRENT_TIMESTAMP
-        WHERE "id" = ${periodId} AND "shop" = ${shop}
+        UPDATE \`AiSearchUsagePeriod\`
+        SET \`vectorUpdateCount\` = \`vectorUpdateCount\` + 1, \`updatedAt\` = UTC_TIMESTAMP(3)
+        WHERE \`id\` = ${periodId} AND \`shop\` = ${shop}
       `;
     } else {
       updated = await tx.$executeRaw`
-        UPDATE "AiSearchUsagePeriod"
-        SET "vectorUpdateCount" = "vectorUpdateCount" + 1, "updatedAt" = CURRENT_TIMESTAMP
+        UPDATE \`AiSearchUsagePeriod\`
+        SET \`vectorUpdateCount\` = \`vectorUpdateCount\` + 1, \`updatedAt\` = UTC_TIMESTAMP(3)
         WHERE
-          "id" = ${periodId}
-          AND "shop" = ${shop}
-          AND "vectorUpdateCount" < ${vectorUpdateLimit}
+          \`id\` = ${periodId}
+          AND \`shop\` = ${shop}
+          AND \`vectorUpdateCount\` < ${vectorUpdateLimit}
       `;
     }
 
     if (updated !== 1) {
       await tx.$executeRaw`
-        UPDATE "AiSearchUsagePeriod"
-        SET "blockedVectorCount" = "blockedVectorCount" + 1, "updatedAt" = CURRENT_TIMESTAMP
-        WHERE "id" = ${periodId} AND "shop" = ${shop}
+        UPDATE \`AiSearchUsagePeriod\`
+        SET \`blockedVectorCount\` = \`blockedVectorCount\` + 1, \`updatedAt\` = UTC_TIMESTAMP(3)
+        WHERE \`id\` = ${periodId} AND \`shop\` = ${shop}
       `;
       return false;
     }
 
     await tx.$executeRaw`
-      INSERT INTO "AiSearchUsageReservation" (
-        "id", "shop", "periodId", "kind", "status", "countsVectorUpdate",
-        "productId", "createdAt", "updatedAt"
+      INSERT INTO \`AiSearchUsageReservation\` (
+        \`id\`, \`shop\`, \`periodId\`, \`kind\`, \`status\`, \`countsVectorUpdate\`,
+        \`productId\`, \`createdAt\`, \`updatedAt\`
       ) VALUES (
         ${id}, ${shop}, ${periodId}, ${kind}, 'PENDING', ${countAsVectorUpdate},
-        ${productId}, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+        ${productId}, UTC_TIMESTAMP(3), UTC_TIMESTAMP(3)
       )
     `;
 
@@ -469,14 +470,14 @@ async function recordEmbeddingConsumed(
 
   const changed = await db.$transaction(async (tx) => {
     const reservationUpdated = await tx.$executeRaw`
-      UPDATE "AiSearchUsageReservation"
-      SET "embeddingConsumedAt" = CURRENT_TIMESTAMP, "updatedAt" = CURRENT_TIMESTAMP
+      UPDATE \`AiSearchUsageReservation\`
+      SET \`embeddingConsumedAt\` = UTC_TIMESTAMP(3), \`updatedAt\` = UTC_TIMESTAMP(3)
       WHERE
-        "id" = ${reservation.id}
-        AND "shop" = ${reservation.shop}
-        AND "periodId" = ${reservation.periodId}
-        AND "status" = 'PENDING'
-        AND "embeddingConsumedAt" IS NULL
+        \`id\` = ${reservation.id}
+        AND \`shop\` = ${reservation.shop}
+        AND \`periodId\` = ${reservation.periodId}
+        AND \`status\` = 'PENDING'
+        AND \`embeddingConsumedAt\` IS NULL
     `;
 
     if (reservationUpdated !== 1) return false;
@@ -484,14 +485,14 @@ async function recordEmbeddingConsumed(
     const usageUpdated =
       counter === "queryEmbeddingCount"
         ? await tx.$executeRaw`
-            UPDATE "AiSearchUsagePeriod"
-            SET "queryEmbeddingCount" = "queryEmbeddingCount" + 1, "updatedAt" = CURRENT_TIMESTAMP
-            WHERE "id" = ${reservation.periodId} AND "shop" = ${reservation.shop}
+            UPDATE \`AiSearchUsagePeriod\`
+            SET \`queryEmbeddingCount\` = \`queryEmbeddingCount\` + 1, \`updatedAt\` = UTC_TIMESTAMP(3)
+            WHERE \`id\` = ${reservation.periodId} AND \`shop\` = ${reservation.shop}
           `
         : await tx.$executeRaw`
-            UPDATE "AiSearchUsagePeriod"
-            SET "productEmbeddingCount" = "productEmbeddingCount" + 1, "updatedAt" = CURRENT_TIMESTAMP
-            WHERE "id" = ${reservation.periodId} AND "shop" = ${reservation.shop}
+            UPDATE \`AiSearchUsagePeriod\`
+            SET \`productEmbeddingCount\` = \`productEmbeddingCount\` + 1, \`updatedAt\` = UTC_TIMESTAMP(3)
+            WHERE \`id\` = ${reservation.periodId} AND \`shop\` = ${reservation.shop}
           `;
 
     if (usageUpdated !== 1) {
@@ -515,14 +516,14 @@ export async function markUsageReservationEffectApplied(
   reservation: UsageReservation,
 ) {
   const updated = await db.$executeRaw`
-    UPDATE "AiSearchUsageReservation"
-    SET "effectAppliedAt" = COALESCE("effectAppliedAt", CURRENT_TIMESTAMP),
-        "updatedAt" = CURRENT_TIMESTAMP
+    UPDATE \`AiSearchUsageReservation\`
+    SET \`effectAppliedAt\` = COALESCE(\`effectAppliedAt\`, UTC_TIMESTAMP(3)),
+        \`updatedAt\` = UTC_TIMESTAMP(3)
     WHERE
-      "id" = ${reservation.id}
-      AND "shop" = ${reservation.shop}
-      AND "periodId" = ${reservation.periodId}
-      AND "status" = 'PENDING'
+      \`id\` = ${reservation.id}
+      AND \`shop\` = ${reservation.shop}
+      AND \`periodId\` = ${reservation.periodId}
+      AND \`status\` = 'PENDING'
   `;
 
   if (updated === 1) return;
@@ -546,29 +547,29 @@ export async function commitSearchUsage(
 
   const committed = await db.$transaction(async (tx) => {
     const updated = await tx.$executeRaw`
-      UPDATE "AiSearchUsageReservation"
+      UPDATE \`AiSearchUsageReservation\`
       SET
-        "status" = 'COMMITTED',
-        "effectAppliedAt" = COALESCE("effectAppliedAt", CURRENT_TIMESTAMP),
-        "resolvedAt" = CURRENT_TIMESTAMP,
-        "updatedAt" = CURRENT_TIMESTAMP
+        \`status\` = 'COMMITTED',
+        \`effectAppliedAt\` = COALESCE(\`effectAppliedAt\`, UTC_TIMESTAMP(3)),
+        \`resolvedAt\` = UTC_TIMESTAMP(3),
+        \`updatedAt\` = UTC_TIMESTAMP(3)
       WHERE
-        "id" = ${reservation.id}
-        AND "shop" = ${reservation.shop}
-        AND "periodId" = ${reservation.periodId}
-        AND "kind" = 'SEARCH'
-        AND "status" = 'PENDING'
+        \`id\` = ${reservation.id}
+        AND \`shop\` = ${reservation.shop}
+        AND \`periodId\` = ${reservation.periodId}
+        AND \`kind\` = 'SEARCH'
+        AND \`status\` = 'PENDING'
     `;
 
     if (updated !== 1) return false;
 
     await tx.$executeRaw`
-      INSERT INTO "AiSearchUsageEvent" (
-        "shop", "periodId", "type", "quantity", "success", "queryHash",
-        "metadataJson", "createdAt"
+      INSERT INTO \`AiSearchUsageEvent\` (
+        \`shop\`, \`periodId\`, \`type\`, \`quantity\`, \`success\`, \`queryHash\`,
+        \`metadataJson\`, \`createdAt\`
       ) VALUES (
         ${reservation.shop}, ${reservation.periodId}, 'SEARCH', 1, true,
-        ${reservation.queryHash ?? null}, ${json}, CURRENT_TIMESTAMP
+        ${reservation.queryHash ?? null}, ${json}, UTC_TIMESTAMP(3)
       )
     `;
     return true;
@@ -592,33 +593,33 @@ export async function rollbackSearchUsage(
 
   const rolledBack = await db.$transaction(async (tx) => {
     const updated = await tx.$executeRaw`
-      UPDATE "AiSearchUsageReservation"
-      SET "status" = 'ROLLED_BACK', "resolvedAt" = CURRENT_TIMESTAMP, "updatedAt" = CURRENT_TIMESTAMP
+      UPDATE \`AiSearchUsageReservation\`
+      SET \`status\` = 'ROLLED_BACK', \`resolvedAt\` = UTC_TIMESTAMP(3), \`updatedAt\` = UTC_TIMESTAMP(3)
       WHERE
-        "id" = ${reservation.id}
-        AND "shop" = ${reservation.shop}
-        AND "periodId" = ${reservation.periodId}
-        AND "kind" = 'SEARCH'
-        AND "status" = 'PENDING'
+        \`id\` = ${reservation.id}
+        AND \`shop\` = ${reservation.shop}
+        AND \`periodId\` = ${reservation.periodId}
+        AND \`kind\` = 'SEARCH'
+        AND \`status\` = 'PENDING'
     `;
 
     if (updated !== 1) return false;
 
     await tx.$executeRaw`
-      UPDATE "AiSearchUsagePeriod"
+      UPDATE \`AiSearchUsagePeriod\`
       SET
-        "searchCount" = CASE WHEN "searchCount" > 0 THEN "searchCount" - 1 ELSE 0 END,
-        "updatedAt" = CURRENT_TIMESTAMP
-      WHERE "id" = ${reservation.periodId} AND "shop" = ${reservation.shop}
+        \`searchCount\` = CASE WHEN \`searchCount\` > 0 THEN \`searchCount\` - 1 ELSE 0 END,
+        \`updatedAt\` = UTC_TIMESTAMP(3)
+      WHERE \`id\` = ${reservation.periodId} AND \`shop\` = ${reservation.shop}
     `;
 
     await tx.$executeRaw`
-      INSERT INTO "AiSearchUsageEvent" (
-        "shop", "periodId", "type", "quantity", "success", "queryHash",
-        "metadataJson", "createdAt"
+      INSERT INTO \`AiSearchUsageEvent\` (
+        \`shop\`, \`periodId\`, \`type\`, \`quantity\`, \`success\`, \`queryHash\`,
+        \`metadataJson\`, \`createdAt\`
       ) VALUES (
         ${reservation.shop}, ${reservation.periodId}, 'SEARCH', 0, false,
-        ${reservation.queryHash ?? null}, ${json}, CURRENT_TIMESTAMP
+        ${reservation.queryHash ?? null}, ${json}, UTC_TIMESTAMP(3)
       )
     `;
     return true;
@@ -645,38 +646,38 @@ export async function commitProductEmbeddingUsage(
 
   const committed = await db.$transaction(async (tx) => {
     const updated = await tx.$executeRaw`
-      UPDATE "AiSearchUsageReservation"
+      UPDATE \`AiSearchUsageReservation\`
       SET
-        "status" = 'COMMITTED',
-        "effectAppliedAt" = COALESCE("effectAppliedAt", CURRENT_TIMESTAMP),
-        "resolvedAt" = CURRENT_TIMESTAMP,
-        "updatedAt" = CURRENT_TIMESTAMP
+        \`status\` = 'COMMITTED',
+        \`effectAppliedAt\` = COALESCE(\`effectAppliedAt\`, UTC_TIMESTAMP(3)),
+        \`resolvedAt\` = UTC_TIMESTAMP(3),
+        \`updatedAt\` = UTC_TIMESTAMP(3)
       WHERE
-        "id" = ${reservation.id}
-        AND "shop" = ${reservation.shop}
-        AND "periodId" = ${reservation.periodId}
-        AND "kind" IN ('VECTOR_UPDATE', 'PRODUCT_EMBEDDING')
-        AND "status" = 'PENDING'
+        \`id\` = ${reservation.id}
+        AND \`shop\` = ${reservation.shop}
+        AND \`periodId\` = ${reservation.periodId}
+        AND \`kind\` IN ('VECTOR_UPDATE', 'PRODUCT_EMBEDDING')
+        AND \`status\` = 'PENDING'
     `;
 
     if (updated !== 1) return false;
 
     await tx.$executeRaw`
-      INSERT INTO "AiSearchUsageEvent" (
-        "shop", "periodId", "type", "quantity", "success", "productId",
-        "metadataJson", "createdAt"
+      INSERT INTO \`AiSearchUsageEvent\` (
+        \`shop\`, \`periodId\`, \`type\`, \`quantity\`, \`success\`, \`productId\`,
+        \`metadataJson\`, \`createdAt\`
       ) VALUES (
         ${reservation.shop}, ${reservation.periodId},
         ${reservation.countsVectorUpdate ? "VECTOR_UPDATE" : "PRODUCT_INDEX"},
-        1, true, ${reservation.productId ?? null}, ${json}, CURRENT_TIMESTAMP
+        1, true, ${reservation.productId ?? null}, ${json}, UTC_TIMESTAMP(3)
       )
     `;
 
     if (!reservation.countsVectorUpdate) {
       await tx.$executeRaw`
-        UPDATE "AiSearchUsagePeriod"
-        SET "productIndexCount" = "productIndexCount" + 1, "updatedAt" = CURRENT_TIMESTAMP
-        WHERE "id" = ${reservation.periodId} AND "shop" = ${reservation.shop}
+        UPDATE \`AiSearchUsagePeriod\`
+        SET \`productIndexCount\` = \`productIndexCount\` + 1, \`updatedAt\` = UTC_TIMESTAMP(3)
+        WHERE \`id\` = ${reservation.periodId} AND \`shop\` = ${reservation.shop}
       `;
     }
 
@@ -701,36 +702,36 @@ export async function rollbackProductEmbeddingUsage(
 
   const rolledBack = await db.$transaction(async (tx) => {
     const updated = await tx.$executeRaw`
-      UPDATE "AiSearchUsageReservation"
-      SET "status" = 'ROLLED_BACK', "resolvedAt" = CURRENT_TIMESTAMP, "updatedAt" = CURRENT_TIMESTAMP
+      UPDATE \`AiSearchUsageReservation\`
+      SET \`status\` = 'ROLLED_BACK', \`resolvedAt\` = UTC_TIMESTAMP(3), \`updatedAt\` = UTC_TIMESTAMP(3)
       WHERE
-        "id" = ${reservation.id}
-        AND "shop" = ${reservation.shop}
-        AND "periodId" = ${reservation.periodId}
-        AND "kind" IN ('VECTOR_UPDATE', 'PRODUCT_EMBEDDING')
-        AND "status" = 'PENDING'
+        \`id\` = ${reservation.id}
+        AND \`shop\` = ${reservation.shop}
+        AND \`periodId\` = ${reservation.periodId}
+        AND \`kind\` IN ('VECTOR_UPDATE', 'PRODUCT_EMBEDDING')
+        AND \`status\` = 'PENDING'
     `;
 
     if (updated !== 1) return false;
 
     if (reservation.countsVectorUpdate) {
       await tx.$executeRaw`
-        UPDATE "AiSearchUsagePeriod"
+        UPDATE \`AiSearchUsagePeriod\`
         SET
-          "vectorUpdateCount" = CASE WHEN "vectorUpdateCount" > 0 THEN "vectorUpdateCount" - 1 ELSE 0 END,
-          "updatedAt" = CURRENT_TIMESTAMP
-        WHERE "id" = ${reservation.periodId} AND "shop" = ${reservation.shop}
+          \`vectorUpdateCount\` = CASE WHEN \`vectorUpdateCount\` > 0 THEN \`vectorUpdateCount\` - 1 ELSE 0 END,
+          \`updatedAt\` = UTC_TIMESTAMP(3)
+        WHERE \`id\` = ${reservation.periodId} AND \`shop\` = ${reservation.shop}
       `;
     }
 
     await tx.$executeRaw`
-      INSERT INTO "AiSearchUsageEvent" (
-        "shop", "periodId", "type", "quantity", "success", "productId",
-        "metadataJson", "createdAt"
+      INSERT INTO \`AiSearchUsageEvent\` (
+        \`shop\`, \`periodId\`, \`type\`, \`quantity\`, \`success\`, \`productId\`,
+        \`metadataJson\`, \`createdAt\`
       ) VALUES (
         ${reservation.shop}, ${reservation.periodId},
         ${reservation.countsVectorUpdate ? "VECTOR_UPDATE" : "PRODUCT_INDEX"},
-        0, false, ${reservation.productId ?? null}, ${json}, CURRENT_TIMESTAMP
+        0, false, ${reservation.productId ?? null}, ${json}, UTC_TIMESTAMP(3)
       )
     `;
 
@@ -763,12 +764,12 @@ export async function reconcileStaleUsageReservations({
 
   const rows = await db.$queryRaw<UsageReservationRow[]>`
     SELECT
-      "id", "shop", "periodId", "kind", "status", "countsVectorUpdate",
-      "productId", "queryHash", "embeddingConsumedAt", "effectAppliedAt",
-      "resolvedAt", "createdAt", "updatedAt"
-    FROM "AiSearchUsageReservation"
-    WHERE "status" = 'PENDING' AND "updatedAt" < ${cutoff}
-    ORDER BY "updatedAt" ASC
+      \`id\`, \`shop\`, \`periodId\`, \`kind\`, \`status\`, \`countsVectorUpdate\`,
+      \`productId\`, \`queryHash\`, \`embeddingConsumedAt\`, \`effectAppliedAt\`,
+      \`resolvedAt\`, \`createdAt\`, \`updatedAt\`
+    FROM \`AiSearchUsageReservation\`
+    WHERE \`status\` = 'PENDING' AND \`updatedAt\` < ${cutoff}
+    ORDER BY \`updatedAt\` ASC
     LIMIT ${safeLimit}
   `;
 
@@ -869,11 +870,11 @@ export async function deleteResolvedUsageReservations({
   const cutoff = new Date(Date.now() - safeDays * 24 * 60 * 60_000);
 
   return db.$executeRaw`
-    DELETE FROM "AiSearchUsageReservation"
+    DELETE FROM \`AiSearchUsageReservation\`
     WHERE
-      "status" IN ('COMMITTED', 'ROLLED_BACK')
-      AND "resolvedAt" IS NOT NULL
-      AND "resolvedAt" < ${cutoff}
+      \`status\` IN ('COMMITTED', 'ROLLED_BACK')
+      AND \`resolvedAt\` IS NOT NULL
+      AND \`resolvedAt\` < ${cutoff}
   `;
 }
 
@@ -915,9 +916,9 @@ export async function recordProductDelete({
   productId: string;
 }) {
   await db.$executeRaw`
-    UPDATE "AiSearchUsagePeriod"
-    SET "productDeleteCount" = "productDeleteCount" + 1, "updatedAt" = CURRENT_TIMESTAMP
-    WHERE "id" = ${periodId} AND "shop" = ${shop}
+    UPDATE \`AiSearchUsagePeriod\`
+    SET \`productDeleteCount\` = \`productDeleteCount\` + 1, \`updatedAt\` = UTC_TIMESTAMP(3)
+    WHERE \`id\` = ${periodId} AND \`shop\` = ${shop}
   `;
 
   await insertUsageEvent({
@@ -941,9 +942,9 @@ export async function recordFallback({
   reason: string;
 }) {
   await db.$executeRaw`
-    UPDATE "AiSearchUsagePeriod"
-    SET "fallbackCount" = "fallbackCount" + 1, "updatedAt" = CURRENT_TIMESTAMP
-    WHERE "id" = ${periodId} AND "shop" = ${shop}
+    UPDATE \`AiSearchUsagePeriod\`
+    SET \`fallbackCount\` = \`fallbackCount\` + 1, \`updatedAt\` = UTC_TIMESTAMP(3)
+    WHERE \`id\` = ${periodId} AND \`shop\` = ${shop}
   `;
 
   await insertUsageEvent({
@@ -973,11 +974,11 @@ export async function getRecentUsageEvents(shop: string, limit = 50) {
     }>
   >`
     SELECT
-      "id", "type", "quantity", "success", "productId", "queryHash",
-      "jobId", "metadataJson", "createdAt"
-    FROM "AiSearchUsageEvent"
-    WHERE "shop" = ${shop}
-    ORDER BY "id" DESC
+      \`id\`, \`type\`, \`quantity\`, \`success\`, \`productId\`, \`queryHash\`,
+      \`jobId\`, \`metadataJson\`, \`createdAt\`
+    FROM \`AiSearchUsageEvent\`
+    WHERE \`shop\` = ${shop}
+    ORDER BY \`id\` DESC
     LIMIT ${safeLimit}
   `;
 }
@@ -986,10 +987,10 @@ export async function getUsageEventTypeCounts(shop: string, periodId: number) {
   const rows = await db.$queryRaw<
     Array<{ type: string; count: bigint | number }>
   >`
-    SELECT "type", COUNT(*) AS "count"
-    FROM "AiSearchUsageEvent"
-    WHERE "shop" = ${shop} AND "periodId" = ${periodId}
-    GROUP BY "type"
+    SELECT \`type\`, COUNT(*) AS \`count\`
+    FROM \`AiSearchUsageEvent\`
+    WHERE \`shop\` = ${shop} AND \`periodId\` = ${periodId}
+    GROUP BY \`type\`
   `;
 
   return Object.fromEntries(

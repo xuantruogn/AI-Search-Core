@@ -355,124 +355,155 @@ function signedPct(value: number | null, suffix = "%") {
   })}${suffix}`;
 }
 
-function SearchCtrChart({
+function SearchPerformanceChart({
   series,
 }: {
-  series: Array<{ date: string; ctr: number | null; searches: number }>;
+  series: Array<{
+    date: string;
+    searches: number;
+    clickedSearches: number;
+    abnormalSearches: number;
+  }>;
 }) {
-  const visible = series.slice(-30);
-  const points = visible.filter((item) => item.ctr != null);
+  const visible = series.slice(-7);
+  const totalSearches = visible.reduce((sum, item) => sum + item.searches, 0);
 
-  if (points.length < 2) {
+  if (totalSearches === 0) {
     return (
       <div className="vip-chart-empty">
-        Chưa đủ dữ liệu click để vẽ xu hướng CTR.
+        Chưa có lượt AI search nào trong 7 ngày gần đây.
       </div>
     );
   }
 
   const width = 720;
-  const height = 210;
-  const padX = 20;
-  const padY = 18;
-  const maxY = Math.max(
-    10,
-    Math.ceil(Math.max(...points.map((point) => point.ctr ?? 0)) / 10) * 10,
+  const height = 220;
+  const padLeft = 38;
+  const padRight = 18;
+  const padTop = 20;
+  const padBottom = 18;
+  const plotWidth = width - padLeft - padRight;
+  const plotHeight = height - padTop - padBottom;
+  const rawMax = Math.max(
+    ...visible.flatMap((item) => [
+      item.searches,
+      item.clickedSearches,
+      item.abnormalSearches,
+    ]),
+    1,
   );
+  const maxY =
+    rawMax <= 4
+      ? 4
+      : rawMax <= 20
+        ? Math.ceil(rawMax / 5) * 5
+        : Math.ceil(rawMax / 10) * 10;
 
-  const coords = visible.map((item, index) => {
-    const x =
-      padX +
-      (index / Math.max(1, visible.length - 1)) * (width - padX * 2);
-    const value = item.ctr ?? 0;
-    const y = height - padY - (value / maxY) * (height - padY * 2);
-    return { ...item, x, y };
-  });
+  const xFor = (index: number) =>
+    padLeft +
+    (index / Math.max(1, visible.length - 1)) * plotWidth;
+  const yFor = (value: number) =>
+    padTop + plotHeight - (value / maxY) * plotHeight;
 
-  const validCoords = coords.filter((item) => item.ctr != null);
-  const line = validCoords.map((item) => `${item.x},${item.y}`).join(" ");
+  const buildPoints = (
+    valueOf: (item: (typeof visible)[number]) => number,
+  ) =>
+    visible
+      .map((item, index) => `${xFor(index)},${yFor(valueOf(item))}`)
+      .join(" ");
+
+  const lines = [
+    {
+      key: "searches",
+      label: "Tổng search",
+      stroke: "#6f5cf5",
+      valueOf: (item: (typeof visible)[number]) => item.searches,
+    },
+    {
+      key: "clickedSearches",
+      label: "Search có click",
+      stroke: "#21a366",
+      valueOf: (item: (typeof visible)[number]) => item.clickedSearches,
+    },
+    {
+      key: "abnormalSearches",
+      label: "Search bất thường",
+      stroke: "#d89a17",
+      valueOf: (item: (typeof visible)[number]) => item.abnormalSearches,
+    },
+  ];
 
   return (
     <div className="vip-chart-shell">
+      <div className="vip-chart-legend" aria-label="Chú thích biểu đồ">
+        {lines.map((line) => (
+          <span key={line.key}>
+            <i style={{ background: line.stroke }} />
+            {line.label}
+          </span>
+        ))}
+      </div>
+
       <svg
         viewBox={`0 0 ${width} ${height}`}
         role="img"
-        aria-label="Search click-through rate over the last 30 days"
+        aria-label="Tổng AI search, search có click và search bất thường trong 7 ngày gần nhất"
         className="vip-chart"
       >
         {[0, 0.25, 0.5, 0.75, 1].map((ratio) => {
-          const y = padY + ratio * (height - padY * 2);
+          const y = padTop + ratio * plotHeight;
           const value = Math.round(maxY * (1 - ratio));
           return (
             <g key={ratio}>
               <line
-                x1={padX}
-                x2={width - padX}
+                x1={padLeft}
+                x2={width - padRight}
                 y1={y}
                 y2={y}
                 stroke="rgba(104,97,150,.12)"
                 strokeWidth="1"
               />
-              <text
-                x={padX}
-                y={Math.max(12, y - 5)}
-                className="vip-chart-label"
-              >
-                {value}%
+              <text x={8} y={Math.max(12, y + 3)} className="vip-chart-label">
+                {value}
               </text>
             </g>
           );
         })}
 
-        <defs>
-          <linearGradient id="vipCtrFill" x1="0" x2="0" y1="0" y2="1">
-            <stop offset="0%" stopColor="#7764ff" stopOpacity=".26" />
-            <stop offset="100%" stopColor="#7764ff" stopOpacity="0" />
-          </linearGradient>
-        </defs>
-
-        {line && validCoords.length > 1 ? (
-          <>
-            <polygon
-              points={`${line} ${validCoords[validCoords.length - 1].x},${
-                height - padY
-              } ${validCoords[0].x},${height - padY}`}
-              fill="url(#vipCtrFill)"
-            />
+        {lines.map((line) => (
+          <g key={line.key}>
             <polyline
-              points={line}
+              points={buildPoints(line.valueOf)}
               fill="none"
-              stroke="#6f5cf5"
-              strokeWidth="3.5"
+              stroke={line.stroke}
+              strokeWidth="3"
               strokeLinecap="round"
               strokeLinejoin="round"
             />
-          </>
-        ) : null}
-
-        {validCoords.map((item, index) => (
-          <circle
-            key={`${item.date}-${index}`}
-            cx={item.x}
-            cy={item.y}
-            r="3.5"
-            fill="#ffffff"
-            stroke="#6f5cf5"
-            strokeWidth="2"
-          />
+            {visible.map((item, index) => {
+              const value = line.valueOf(item);
+              return (
+                <circle
+                  key={`${line.key}-${item.date}`}
+                  cx={xFor(index)}
+                  cy={yFor(value)}
+                  r="3.5"
+                  fill="#ffffff"
+                  stroke={line.stroke}
+                  strokeWidth="2"
+                >
+                  <title>{`${item.date} · ${line.label}: ${value}`}</title>
+                </circle>
+              );
+            })}
+          </g>
         ))}
       </svg>
 
-      <div className="vip-chart-axis">
-        <span>{visible[0]?.date.slice(5).replace("-", "/")}</span>
-        <span>
-          {visible[Math.floor(visible.length / 2)]?.date
-            .slice(5)
-            .replace("-", "/")}
-        </span>
-        <span>
-          {visible[visible.length - 1]?.date.slice(5).replace("-", "/")}
-        </span>
+      <div className="vip-chart-axis vip-chart-axis--7">
+        {visible.map((item) => (
+          <span key={item.date}>{item.date.slice(5).replace("-", "/")}</span>
+        ))}
       </div>
     </div>
   );
@@ -925,12 +956,42 @@ const dashboardCss = `
 
   .vip-chart { display: block; width: 100%; height: 230px; }
   .vip-chart-label { font-size: 10px; fill: #9a9eaa; }
+  .vip-chart-value { font-size: 10px; font-weight: 800; fill: #6258a8; }
   .vip-chart-axis {
     display: flex;
     justify-content: space-between;
     padding: 0 9px 4px;
     color: #9a9eaa;
     font-size: 10px;
+  }
+  .vip-chart-axis--7 {
+    display: grid;
+    grid-template-columns: repeat(7, minmax(0, 1fr));
+    padding: 0 18px 4px;
+    text-align: center;
+  }
+
+  .vip-chart-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 14px;
+    padding: 2px 8px 8px;
+    color: #6f7380;
+    font-size: 10px;
+    font-weight: 700;
+  }
+
+  .vip-chart-legend span {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .vip-chart-legend i {
+    width: 9px;
+    height: 9px;
+    border-radius: 999px;
+    display: inline-block;
   }
 
   .vip-chart-empty {
@@ -1148,11 +1209,30 @@ export default function Dashboard() {
   const fallbackCount = entitlement.usage.fallbackCount;
   const storefrontSearches = entitlement.usage.searchCount + fallbackCount;
   const impact = data.searchImpact;
-  const ctr = impact.ai.ctr;
+  const current7dSeries = impact.series.slice(-7);
+  const previous7dSeries = impact.series.slice(-14, -7);
+  const current7dSearches = current7dSeries.reduce(
+    (sum, item) => sum + item.searches,
+    0,
+  );
+  const previous7dSearches = previous7dSeries.reduce(
+    (sum, item) => sum + item.searches,
+    0,
+  );
+  const current7dClickedSearches = current7dSeries.reduce(
+    (sum, item) => sum + item.clickedSearches,
+    0,
+  );
+  const current7dAbnormalSearches = current7dSeries.reduce(
+    (sum, item) => sum + item.abnormalSearches,
+    0,
+  );
   const current7dCtr = impact.comparison.current7dCtr;
   const previous7dCtr = impact.comparison.previous7dCtr;
-  const ctrDeltaPp = impact.comparison.deltaPercentagePoints;
-  const ctrDeltaRelative = impact.comparison.deltaRelativePercent;
+  const searchVolumeDeltaPercent =
+    previous7dSearches > 0
+      ? ((current7dSearches - previous7dSearches) / previous7dSearches) * 100
+      : null;
 
   const aiCoverage = percent(entitlement.usage.searchCount, storefrontSearches);
   const fallbackRate = percent(fallbackCount, storefrontSearches);
@@ -1285,64 +1365,60 @@ export default function Dashboard() {
               <div>
                 <h3>Search performance</h3>
                 <p>
-                  CTR = số lượt search có ít nhất một click sản phẩm / tổng lượt
-                  AI search đã ghi nhận.
+                  So sánh tổng search, search có click và search bất thường theo
+                  từng ngày trong 7 ngày gần nhất.
                 </p>
               </div>
-              <StatusPill state={ctr != null && ctr >= 20 ? "success" : "neutral"}>
-                {`${impact.ai.searches.toLocaleString("vi-VN")} searches`}
+              <StatusPill state={current7dSearches > 0 ? "success" : "neutral"}>
+                {`${current7dSearches.toLocaleString("vi-VN")} searches · 7 days`}
               </StatusPill>
             </div>
 
             <div className="vip-impact-kpis">
               <div className="vip-impact-kpi">
-                <span>AI search CTR</span>
-                <strong>{fmtPct(ctr)}</strong>
+                <span>AI searches · 7 days</span>
+                <strong>{current7dSearches.toLocaleString("vi-VN")}</strong>
                 <small>
-                  {impact.ai.clickedSearches.toLocaleString("vi-VN")} search có
-                  click
+                  {previous7dSearches > 0
+                    ? `${signedPct(searchVolumeDeltaPercent)} so với 7 ngày trước`
+                    : `7 ngày trước: ${previous7dSearches.toLocaleString("vi-VN")}`}
                 </small>
               </div>
 
               <div className="vip-impact-kpi">
-                <span>7 ngày gần nhất</span>
+                <span>Searches with click</span>
+                <strong>{current7dClickedSearches.toLocaleString("vi-VN")}</strong>
+                <small>
+                  {current7dSearches > 0
+                    ? `${Math.max(0, current7dSearches - current7dClickedSearches).toLocaleString("vi-VN")} search chưa có click`
+                    : "Chưa có search trong 7 ngày"}
+                </small>
+              </div>
+
+              <div className="vip-impact-kpi">
+                <span>CTR · 7 days</span>
                 <strong>{fmtPct(current7dCtr)}</strong>
                 <small>7 ngày trước: {fmtPct(previous7dCtr)}</small>
               </div>
 
               <div className="vip-impact-kpi">
-                <span>CTR delta</span>
-                <strong>{signedPct(ctrDeltaPp, " pp")}</strong>
-                <small>{signedPct(ctrDeltaRelative)} tương đối</small>
-              </div>
-
-              <div className="vip-impact-kpi">
-                <span>Avg clicked rank</span>
-                <strong>
-                  {impact.ai.avgClickedRank == null
-                    ? "—"
-                    : `#${impact.ai.avgClickedRank.toLocaleString("vi-VN", {
-                        maximumFractionDigits: 1,
-                      })}`}
-                </strong>
-                <small>
-                  {impact.ai.clicks.toLocaleString("vi-VN")} product clicks
-                </small>
+                <span>Search bất thường · 7 days</span>
+                <strong>{current7dAbnormalSearches.toLocaleString("vi-VN")}</strong>
+                <small>NO_RESULTS, LOW_SIMILARITY hoặc HIGH_SIMILARITY_NO_CLICK</small>
               </div>
             </div>
 
-            <SearchCtrChart series={impact.series} />
+            <SearchPerformanceChart series={impact.series} />
 
-            {!impact.nativeBaseline.available ? (
-              <div className="vip-baseline-note">
-                <strong>Before AI:</strong>
-                <span>
-                  Chưa có dữ liệu native trước thời điểm cài app nên dashboard
-                  không tạo baseline giả. Khi có native/control telemetry hợp
-                  lệ, biểu đồ sẽ hiện Native vs AI tại đây.
-                </span>
-              </div>
-            ) : null}
+            <div className="vip-baseline-note">
+              <strong>7-day view:</strong>
+              <span>
+                Ba đường dùng cùng một SearchLog theo ngày. “Search bất thường”
+                là lượt có tín hiệu NO_RESULTS, LOW_SIMILARITY hoặc
+                HIGH_SIMILARITY_NO_CLICK; Search Alerts bên cạnh vẫn chỉ nổi các
+                cụm bất thường lặp lại trong cửa sổ {impact.windowDays} ngày.
+              </span>
+            </div>
           </div>
 
           <aside className="vip-panel vip-alerts">

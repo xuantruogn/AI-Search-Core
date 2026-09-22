@@ -1,4 +1,5 @@
 import db from "../../db.server";
+import { getMerchantSearchClusters } from "./search-analytics.server";
 
 type SearchImpactLogRow = {
   id: string;
@@ -6,6 +7,8 @@ type SearchImpactLogRow = {
   normalizedQuery: string;
   resultCount: number;
   topScore: number | null;
+  topCandidateScore: number | null;
+  vectorThreshold: number;
   createdAt: Date;
   clicks: Array<{
     rank: number;
@@ -17,6 +20,7 @@ export type SearchImpactPoint = {
   date: string;
   searches: number;
   clickedSearches: number;
+  abnormalSearches: number;
   ctr: number | null;
 };
 
@@ -66,6 +70,10 @@ export type SearchImpactSnapshot = {
   };
 };
 
+const LOW_SIMILARITY_MARGIN = 0.03;
+const HIGH_SIMILARITY_MARGIN = 0.08;
+const DEFAULT_NO_CLICK_GRACE_MINUTES = 30;
+
 function envNumber(name: string, fallback: number) {
   const value = Number.parseFloat(process.env[name] ?? "");
   return Number.isFinite(value) ? value : fallback;
@@ -97,11 +105,12 @@ export async function getSearchImpactSnapshot(
   windowStart.setUTCDate(windowStart.getUTCDate() - (windowDays - 1));
   windowStart.setUTCHours(0, 0, 0, 0);
 
-  const lowScore = envNumber("AI_SEARCH_QUALITY_LOW_SCORE", 0.35);
-  const highScore = envNumber("AI_SEARCH_QUALITY_HIGH_SCORE", 0.65);
-  const noClickGraceMinutes = envNumber(
-    "AI_SEARCH_QUALITY_NO_CLICK_GRACE_MINUTES",
-    30,
+  const noClickGraceMinutes = Math.max(
+    0,
+    envNumber(
+      "AI_SEARCH_QUALITY_NO_CLICK_GRACE_MINUTES",
+      DEFAULT_NO_CLICK_GRACE_MINUTES,
+    ),
   );
   const graceCutoff = new Date(now.getTime() - noClickGraceMinutes * 60_000);
 
@@ -117,6 +126,8 @@ export async function getSearchImpactSnapshot(
       normalizedQuery: true,
       resultCount: true,
       topScore: true,
+      topCandidateScore: true,
+      vectorThreshold: true,
       createdAt: true,
       clicks: {
         select: {
@@ -127,60 +138,50 @@ export async function getSearchImpactSnapshot(
     },
   });
 
+  const clusters = await getMerchantSearchClusters(shop, windowDays);
+
   const seriesMap = new Map<
     string,
-    { searches: number; clickedSearches: number }
+    { searches: number; clickedSearches: number; abnormalSearches: number }
   >();
 
   for (let offset = 0; offset < windowDays; offset += 1) {
     const date = new Date(windowStart);
     date.setUTCDate(windowStart.getUTCDate() + offset);
-    seriesMap.set(dayKey(date), { searches: 0, clickedSearches: 0 });
+    seriesMap.set(dayKey(date), {
+      searches: 0,
+      clickedSearches: 0,
+      abnormalSearches: 0,
+    });
   }
 
   let clickedSearches = 0;
   let clickCount = 0;
   let clickedRankSum = 0;
 
-  const anomalies = new Map<
-    string,
-    {
-      type: Exclude<SearchImpactAlertType, "CTR_DROP">;
-      query: string;
-      count: number;
-      scoreSum: number;
-      scoreCount: number;
-    }
-  >();
-
-  const addAnomaly = (
-    type: Exclude<SearchImpactAlertType, "CTR_DROP">,
-    query: string,
-    score: number | null,
-  ) => {
-    const normalized = query.trim().toLocaleLowerCase("en-US") || "(empty)";
-    const key = `${type}\u0000${normalized}`;
-    const current = anomalies.get(key) ?? {
-      type,
-      query,
-      count: 0,
-      scoreSum: 0,
-      scoreCount: 0,
-    };
-    current.count += 1;
-    if (typeof score === "number" && Number.isFinite(score)) {
-      current.scoreSum += score;
-      current.scoreCount += 1;
-    }
-    anomalies.set(key, current);
-  };
 
   for (const log of logs) {
+    const comparisonScore = log.topScore ?? log.topCandidateScore;
+    const noResults = log.resultCount <= 0;
+    const lowSimilarity =
+      !noResults &&
+      comparisonScore !== null &&
+      comparisonScore < log.vectorThreshold + LOW_SIMILARITY_MARGIN;
+    const highSimilarityNoClick =
+      !noResults &&
+      comparisonScore !== null &&
+      comparisonScore >= log.vectorThreshold + HIGH_SIMILARITY_MARGIN &&
+      log.clicks.length === 0 &&
+      log.createdAt <= graceCutoff;
+    const abnormalSearch =
+      noResults || lowSimilarity || highSimilarityNoClick;
+
     const key = dayKey(log.createdAt);
     const bucket = seriesMap.get(key);
     if (bucket) {
       bucket.searches += 1;
       if (log.clicks.length > 0) bucket.clickedSearches += 1;
+      if (abnormalSearch) bucket.abnormalSearches += 1;
     }
 
     if (log.clicks.length > 0) {
@@ -189,31 +190,13 @@ export async function getSearchImpactSnapshot(
       clickedRankSum += log.clicks.reduce((sum: number, click: SearchImpactLogRow["clicks"][number]) => sum + click.rank, 0);
     }
 
-    const displayQuery = log.query || log.normalizedQuery || "(unknown query)";
-
-    if (log.resultCount <= 0) {
-      addAnomaly("NO_RESULTS", displayQuery, log.topScore);
-      continue;
-    }
-
-    if (typeof log.topScore === "number" && log.topScore < lowScore) {
-      addAnomaly("LOW_SIMILARITY", displayQuery, log.topScore);
-    }
-
-    if (
-      typeof log.topScore === "number" &&
-      log.topScore >= highScore &&
-      log.clicks.length === 0 &&
-      log.createdAt <= graceCutoff
-    ) {
-      addAnomaly("HIGH_SIMILARITY_NO_CLICK", displayQuery, log.topScore);
-    }
   }
 
   const series = Array.from(seriesMap.entries()).map(([date, value]) => ({
     date,
     searches: value.searches,
     clickedSearches: value.clickedSearches,
+    abnormalSearches: value.abnormalSearches,
     ctr: round1(safeCtr(value.clickedSearches, value.searches)),
   }));
 
@@ -245,46 +228,43 @@ export async function getSearchImpactSnapshot(
       ? ((current7dCtr - previous7dCtr) / previous7dCtr) * 100
       : null;
 
-  const alerts: SearchImpactAlert[] = Array.from(anomalies.values())
-    .filter((item) => item.count >= 3)
-    .sort((a, b) => b.count - a.count)
+  const alerts: SearchImpactAlert[] = clusters
+    .filter((cluster) => cluster.classification !== "HEALTHY")
+    .sort((a, b) => b.searchCount - a.searchCount)
     .slice(0, 6)
-    .map((item) => {
-      const avgScore =
-        item.scoreCount > 0 ? item.scoreSum / item.scoreCount : null;
-
-      if (item.type === "NO_RESULTS") {
+    .map((cluster) => {
+      if (cluster.classification === "NO_RESULTS") {
         return {
-          type: item.type,
-          severity: severityFor(item.count),
-          query: item.query,
-          count: item.count,
-          detail: `Không có kết quả hợp lệ trong ${item.count} lượt search.`,
+          type: "NO_RESULTS" as const,
+          severity: severityFor(cluster.searchCount),
+          query: cluster.label,
+          count: cluster.searchCount,
+          detail: `Không có kết quả hợp lệ trong ${cluster.searchCount} lượt search cùng lớp.`,
         };
       }
 
-      if (item.type === "LOW_SIMILARITY") {
+      if (cluster.classification === "LOW_SIMILARITY") {
         return {
-          type: item.type,
-          severity: severityFor(item.count),
-          query: item.query,
-          count: item.count,
+          type: "LOW_SIMILARITY" as const,
+          severity: severityFor(cluster.searchCount),
+          query: cluster.label,
+          count: cluster.searchCount,
           detail:
-            avgScore == null
+            cluster.averageTopScore == null
               ? "Kết quả có độ tương đồng thấp."
-              : `Top similarity trung bình ${avgScore.toFixed(2)}.`,
+              : `Top similarity trung bình ${cluster.averageTopScore.toFixed(2)} (threshold TB ${cluster.averageThreshold.toFixed(2)}).`,
         };
       }
 
       return {
-        type: item.type,
-        severity: severityFor(item.count),
-        query: item.query,
-        count: item.count,
+        type: "HIGH_SIMILARITY_NO_CLICK" as const,
+        severity: severityFor(cluster.searchCount),
+        query: cluster.label,
+        count: cluster.searchCount,
         detail:
-          avgScore == null
-            ? "Kết quả tìm kiếm tốt nhưng không tạo click."
-            : `Top similarity trung bình ${avgScore.toFixed(2)} nhưng không có click.`,
+          cluster.averageTopScore == null
+            ? "Kết quả có độ tương đồng cao nhưng không tạo click sau thời gian chờ."
+            : `Top similarity trung bình ${cluster.averageTopScore.toFixed(2)} nhưng không có click sau thời gian chờ.`,
       };
     });
 
@@ -306,17 +286,15 @@ export async function getSearchImpactSnapshot(
   }
 
   const anomalyCounts = {
-    noResults: logs.filter((log: SearchImpactLogRow) => log.resultCount <= 0).length,
-    lowSimilarity: logs.filter(
-      (log: SearchImpactLogRow) => typeof log.topScore === "number" && log.topScore < lowScore,
-    ).length,
-    highSimilarityNoClick: logs.filter(
-      (log: SearchImpactLogRow) =>
-        typeof log.topScore === "number" &&
-        log.topScore >= highScore &&
-        log.clicks.length === 0 &&
-        log.createdAt <= graceCutoff,
-    ).length,
+    noResults: clusters
+      .filter((cluster) => cluster.classification === "NO_RESULTS")
+      .reduce((sum, cluster) => sum + cluster.searchCount, 0),
+    lowSimilarity: clusters
+      .filter((cluster) => cluster.classification === "LOW_SIMILARITY")
+      .reduce((sum, cluster) => sum + cluster.searchCount, 0),
+    highSimilarityNoClick: clusters
+      .filter((cluster) => cluster.classification === "HIGH_SIMILARITY_NO_CLICK")
+      .reduce((sum, cluster) => sum + cluster.searchCount, 0),
   };
 
   return {

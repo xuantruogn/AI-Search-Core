@@ -89,15 +89,15 @@ async function enqueueCatalogSyncUnlocked({
   reason: string;
 }) {
   const active = await db.$queryRaw<Array<{ id: number }>>`
-    SELECT "id"
-    FROM "AiSearchCatalogSyncJob"
+    SELECT \`id\`
+    FROM \`AiSearchCatalogSyncJob\`
     WHERE
-      "shop" = ${shop}
+      \`shop\` = ${shop}
       AND (
-        "status" IN ('PENDING', 'PROCESSING')
-        OR ("status" = 'FAILED' AND "attempts" < ${MAX_ATTEMPTS})
+        \`status\` IN ('PENDING', 'PROCESSING')
+        OR (\`status\` = 'FAILED' AND \`attempts\` < ${MAX_ATTEMPTS})
       )
-    ORDER BY "id" DESC
+    ORDER BY \`id\` DESC
     LIMIT 1
   `;
 
@@ -109,18 +109,18 @@ async function enqueueCatalogSyncUnlocked({
   if (!force && entitlement.indexedProducts > 0) return null;
 
   await db.$executeRaw`
-    INSERT INTO "AiSearchCatalogSyncJob" (
-      "shop", "reason", "planAtStart", "status", "createdAt", "updatedAt"
+    INSERT INTO \`AiSearchCatalogSyncJob\` (
+      \`shop\`, \`reason\`, \`planAtStart\`, \`status\`, \`createdAt\`, \`updatedAt\`
     ) VALUES (
-      ${shop}, ${reason}, ${entitlement.plan}, 'PENDING', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+      ${shop}, ${reason}, ${entitlement.plan}, 'PENDING', UTC_TIMESTAMP(3), UTC_TIMESTAMP(3)
     )
   `;
 
   const created = await db.$queryRaw<Array<{ id: number }>>`
-    SELECT "id"
-    FROM "AiSearchCatalogSyncJob"
-    WHERE "shop" = ${shop}
-    ORDER BY "id" DESC
+    SELECT \`id\`
+    FROM \`AiSearchCatalogSyncJob\`
+    WHERE \`shop\` = ${shop}
+    ORDER BY \`id\` DESC
     LIMIT 1
   `;
 
@@ -174,23 +174,23 @@ async function candidates() {
   const [pending, processing, failed] = await Promise.all([
     db.$queryRaw<CatalogJobRow[]>`
       SELECT *
-      FROM "AiSearchCatalogSyncJob"
-      WHERE "attempts" < ${MAX_ATTEMPTS} AND "status" = 'PENDING'
-      ORDER BY "createdAt" ASC, "id" ASC
+      FROM \`AiSearchCatalogSyncJob\`
+      WHERE \`attempts\` < ${MAX_ATTEMPTS} AND \`status\` = 'PENDING'
+      ORDER BY \`createdAt\` ASC, \`id\` ASC
       LIMIT 20
     `,
     db.$queryRaw<CatalogJobRow[]>`
       SELECT *
-      FROM "AiSearchCatalogSyncJob"
-      WHERE "attempts" < ${MAX_ATTEMPTS} AND "status" = 'PROCESSING'
-      ORDER BY "updatedAt" ASC, "id" ASC
+      FROM \`AiSearchCatalogSyncJob\`
+      WHERE \`attempts\` < ${MAX_ATTEMPTS} AND \`status\` = 'PROCESSING'
+      ORDER BY \`updatedAt\` ASC, \`id\` ASC
       LIMIT 20
     `,
     db.$queryRaw<CatalogJobRow[]>`
       SELECT *
-      FROM "AiSearchCatalogSyncJob"
-      WHERE "attempts" < ${MAX_ATTEMPTS} AND "status" = 'FAILED'
-      ORDER BY "processedAt" ASC, "id" ASC
+      FROM \`AiSearchCatalogSyncJob\`
+      WHERE \`attempts\` < ${MAX_ATTEMPTS} AND \`status\` = 'FAILED'
+      ORDER BY \`processedAt\` ASC, \`id\` ASC
       LIMIT 50
     `,
   ]);
@@ -230,29 +230,28 @@ export async function claimNextCatalogSyncJob() {
 
   for (const candidate of claimableCandidates) {
     // `status + attempts` is the atomic compare-and-swap guard. Do not compare
-    // `updatedAt` here: SQLite/Prisma can round-trip the same timestamp with a
-    // different textual precision/representation, which can make a valid
-    // PENDING job impossible to claim. `attempts` changes on every claim, so
+    // `updatedAt` here: timestamp precision varies across storage backends.
+    // `attempts` changes on every claim, so
     // concurrent workers are still safely fenced without timestamp equality.
     const updated = await db.$executeRaw`
-      UPDATE "AiSearchCatalogSyncJob"
+      UPDATE \`AiSearchCatalogSyncJob\`
       SET
-        "status" = 'PROCESSING',
-        "attempts" = "attempts" + 1,
-        "scanStartedAt" = COALESCE("scanStartedAt", CURRENT_TIMESTAMP),
-        "startedAt" = CURRENT_TIMESTAMP,
-        "processedAt" = NULL,
-        "lastError" = NULL,
-        "updatedAt" = CURRENT_TIMESTAMP
+        \`status\` = 'PROCESSING',
+        \`attempts\` = \`attempts\` + 1,
+        \`scanStartedAt\` = COALESCE(\`scanStartedAt\`, UTC_TIMESTAMP(3)),
+        \`startedAt\` = UTC_TIMESTAMP(3),
+        \`processedAt\` = NULL,
+        \`lastError\` = NULL,
+        \`updatedAt\` = UTC_TIMESTAMP(3)
       WHERE
-        "id" = ${candidate.id}
-        AND "status" = ${candidate.status}
-        AND "attempts" = ${candidate.attempts}
+        \`id\` = ${candidate.id}
+        AND \`status\` = ${candidate.status}
+        AND \`attempts\` = ${candidate.attempts}
     `;
 
     if (updated === 1) {
       const rows = await db.$queryRaw<CatalogJobRow[]>`
-        SELECT * FROM "AiSearchCatalogSyncJob" WHERE "id" = ${candidate.id} LIMIT 1
+        SELECT * FROM \`AiSearchCatalogSyncJob\` WHERE \`id\` = ${candidate.id} LIMIT 1
       `;
       const claimed = rows[0] ?? null;
       if (claimed) {
@@ -284,20 +283,20 @@ export async function checkpointCatalogSyncJob(
   },
 ) {
   const updated = await db.$executeRaw`
-    UPDATE "AiSearchCatalogSyncJob"
+    UPDATE \`AiSearchCatalogSyncJob\`
     SET
-      "cursor" = ${cursor},
-      "pagesProcessed" = ${progress.pagesProcessed},
-      "productsProcessed" = ${progress.productsProcessed},
-      "productsIndexed" = ${progress.productsIndexed},
-      "productsSkipped" = ${progress.productsSkipped},
-      "productsBlocked" = ${progress.productsBlocked},
-      "productsFailed" = ${progress.productsFailed},
-      "updatedAt" = CURRENT_TIMESTAMP
+      \`cursor\` = ${cursor},
+      \`pagesProcessed\` = ${progress.pagesProcessed},
+      \`productsProcessed\` = ${progress.productsProcessed},
+      \`productsIndexed\` = ${progress.productsIndexed},
+      \`productsSkipped\` = ${progress.productsSkipped},
+      \`productsBlocked\` = ${progress.productsBlocked},
+      \`productsFailed\` = ${progress.productsFailed},
+      \`updatedAt\` = UTC_TIMESTAMP(3)
     WHERE
-      "id" = ${jobId}
-      AND "status" = 'PROCESSING'
-      AND "attempts" = ${expectedAttempt}
+      \`id\` = ${jobId}
+      AND \`status\` = 'PROCESSING'
+      AND \`attempts\` = ${expectedAttempt}
   `;
 
   return updated === 1;
@@ -308,12 +307,12 @@ export async function heartbeatCatalogSyncJob(
   expectedAttempt: number,
 ) {
   const updated = await db.$executeRaw`
-    UPDATE "AiSearchCatalogSyncJob"
-    SET "updatedAt" = CURRENT_TIMESTAMP
+    UPDATE \`AiSearchCatalogSyncJob\`
+    SET \`updatedAt\` = UTC_TIMESTAMP(3)
     WHERE
-      "id" = ${jobId}
-      AND "status" = 'PROCESSING'
-      AND "attempts" = ${expectedAttempt}
+      \`id\` = ${jobId}
+      AND \`status\` = 'PROCESSING'
+      AND \`attempts\` = ${expectedAttempt}
   `;
 
   return updated === 1;
@@ -332,22 +331,22 @@ export async function markCatalogSyncDone(
   },
 ) {
   const updated = await db.$executeRaw`
-    UPDATE "AiSearchCatalogSyncJob"
+    UPDATE \`AiSearchCatalogSyncJob\`
     SET
-      "status" = 'DONE',
-      "cursor" = NULL,
-      "pagesProcessed" = ${progress.pagesProcessed},
-      "productsProcessed" = ${progress.productsProcessed},
-      "productsIndexed" = ${progress.productsIndexed},
-      "productsSkipped" = ${progress.productsSkipped},
-      "productsBlocked" = ${progress.productsBlocked},
-      "productsFailed" = ${progress.productsFailed},
-      "processedAt" = CURRENT_TIMESTAMP,
-      "updatedAt" = CURRENT_TIMESTAMP
+      \`status\` = 'DONE',
+      \`cursor\` = NULL,
+      \`pagesProcessed\` = ${progress.pagesProcessed},
+      \`productsProcessed\` = ${progress.productsProcessed},
+      \`productsIndexed\` = ${progress.productsIndexed},
+      \`productsSkipped\` = ${progress.productsSkipped},
+      \`productsBlocked\` = ${progress.productsBlocked},
+      \`productsFailed\` = ${progress.productsFailed},
+      \`processedAt\` = UTC_TIMESTAMP(3),
+      \`updatedAt\` = UTC_TIMESTAMP(3)
     WHERE
-      "id" = ${jobId}
-      AND "status" = 'PROCESSING'
-      AND "attempts" = ${expectedAttempt}
+      \`id\` = ${jobId}
+      AND \`status\` = 'PROCESSING'
+      AND \`attempts\` = ${expectedAttempt}
   `;
 
   if (updated !== 1) {
@@ -373,16 +372,16 @@ export async function markCatalogSyncFailed(
   ).slice(0, 8_000);
 
   const updated = await db.$executeRaw`
-    UPDATE "AiSearchCatalogSyncJob"
+    UPDATE \`AiSearchCatalogSyncJob\`
     SET
-      "status" = 'FAILED',
-      "lastError" = ${message},
-      "processedAt" = CURRENT_TIMESTAMP,
-      "updatedAt" = CURRENT_TIMESTAMP
+      \`status\` = 'FAILED',
+      \`lastError\` = ${message},
+      \`processedAt\` = UTC_TIMESTAMP(3),
+      \`updatedAt\` = UTC_TIMESTAMP(3)
     WHERE
-      "id" = ${jobId}
-      AND "status" = 'PROCESSING'
-      AND "attempts" = ${expectedAttempt}
+      \`id\` = ${jobId}
+      AND \`status\` = 'PROCESSING'
+      AND \`attempts\` = ${expectedAttempt}
   `;
 
   if (updated !== 1) {
@@ -397,7 +396,7 @@ export async function markCatalogSyncFailed(
   }
 
   const rows = await db.$queryRaw<Array<{ attempts: number }>>`
-    SELECT "attempts" FROM "AiSearchCatalogSyncJob" WHERE "id" = ${jobId} LIMIT 1
+    SELECT \`attempts\` FROM \`AiSearchCatalogSyncJob\` WHERE \`id\` = ${jobId} LIMIT 1
   `;
   const attempts = rows[0]?.attempts ?? MAX_ATTEMPTS;
 
@@ -416,8 +415,8 @@ export async function markCatalogSyncFailed(
 export async function getCatalogSyncJob(jobId: number) {
   const rows = await db.$queryRaw<CatalogJobRow[]>`
     SELECT *
-    FROM "AiSearchCatalogSyncJob"
-    WHERE "id" = ${jobId}
+    FROM \`AiSearchCatalogSyncJob\`
+    WHERE \`id\` = ${jobId}
     LIMIT 1
   `;
   return rows[0] ?? null;
@@ -426,9 +425,9 @@ export async function getCatalogSyncJob(jobId: number) {
 export async function getLatestCatalogSyncJob(shop: string) {
   const rows = await db.$queryRaw<CatalogJobRow[]>`
     SELECT *
-    FROM "AiSearchCatalogSyncJob"
-    WHERE "shop" = ${shop}
-    ORDER BY "id" DESC
+    FROM \`AiSearchCatalogSyncJob\`
+    WHERE \`shop\` = ${shop}
+    ORDER BY \`id\` DESC
     LIMIT 1
   `;
   return rows[0] ?? null;
@@ -437,10 +436,10 @@ export async function getLatestCatalogSyncJob(shop: string) {
 // Manual recovery after a catalog job has exhausted automatic retries.
 export async function retryLatestFailedCatalogSyncJob(shop: string) {
   const rows = await db.$queryRaw<Array<{ id: number }>>`
-    SELECT "id"
-    FROM "AiSearchCatalogSyncJob"
-    WHERE "shop" = ${shop} AND "status" = 'FAILED'
-    ORDER BY "id" DESC
+    SELECT \`id\`
+    FROM \`AiSearchCatalogSyncJob\`
+    WHERE \`shop\` = ${shop} AND \`status\` = 'FAILED'
+    ORDER BY \`id\` DESC
     LIMIT 1
   `;
 
@@ -448,15 +447,15 @@ export async function retryLatestFailedCatalogSyncJob(shop: string) {
   if (!jobId) return null;
 
   const updated = await db.$executeRaw`
-    UPDATE "AiSearchCatalogSyncJob"
+    UPDATE \`AiSearchCatalogSyncJob\`
     SET
-      "status" = 'PENDING',
-      "attempts" = 0,
-      "lastError" = NULL,
-      "startedAt" = NULL,
-      "processedAt" = NULL,
-      "updatedAt" = CURRENT_TIMESTAMP
-    WHERE "id" = ${jobId} AND "shop" = ${shop} AND "status" = 'FAILED'
+      \`status\` = 'PENDING',
+      \`attempts\` = 0,
+      \`lastError\` = NULL,
+      \`startedAt\` = NULL,
+      \`processedAt\` = NULL,
+      \`updatedAt\` = UTC_TIMESTAMP(3)
+    WHERE \`id\` = ${jobId} AND \`shop\` = ${shop} AND \`status\` = 'FAILED'
   `;
 
   return updated === 1 ? jobId : null;

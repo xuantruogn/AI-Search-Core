@@ -34,18 +34,18 @@ export async function getIndexedProductStats(shop: string) {
     }>
   >`
     SELECT
-      SUM(CASE WHEN "hasVector" = true THEN 1 ELSE 0 END) AS "indexedProducts",
+      SUM(CASE WHEN \`hasVector\` = true THEN 1 ELSE 0 END) AS \`indexedProducts\`,
       SUM(
         CASE
-          WHEN "hasVector" = true OR "status" = 'PRODUCT_SLOT_RESERVED' THEN 1
+          WHEN \`hasVector\` = true OR \`status\` = 'PRODUCT_SLOT_RESERVED' THEN 1
           ELSE 0
         END
-      ) AS "productSlotsUsed",
-      SUM(CASE WHEN "status" = 'VECTOR_QUOTA_BLOCKED' THEN 1 ELSE 0 END) AS "vectorQuotaBlockedProducts",
-      SUM(CASE WHEN "status" = 'PRODUCT_LIMIT_BLOCKED' THEN 1 ELSE 0 END) AS "productLimitBlockedProducts",
-      SUM(CASE WHEN "status" = 'SUBSCRIPTION_BLOCKED' THEN 1 ELSE 0 END) AS "subscriptionBlockedProducts"
-    FROM "AiSearchIndexedProduct"
-    WHERE "shop" = ${shop}
+      ) AS \`productSlotsUsed\`,
+      SUM(CASE WHEN \`status\` = 'VECTOR_QUOTA_BLOCKED' THEN 1 ELSE 0 END) AS \`vectorQuotaBlockedProducts\`,
+      SUM(CASE WHEN \`status\` = 'PRODUCT_LIMIT_BLOCKED' THEN 1 ELSE 0 END) AS \`productLimitBlockedProducts\`,
+      SUM(CASE WHEN \`status\` = 'SUBSCRIPTION_BLOCKED' THEN 1 ELSE 0 END) AS \`subscriptionBlockedProducts\`
+    FROM \`AiSearchIndexedProduct\`
+    WHERE \`shop\` = ${shop}
   `;
 
   const row = rows[0];
@@ -60,9 +60,9 @@ export async function getIndexedProductStats(shop: string) {
 
 export async function countIndexedProducts(shop: string) {
   const rows = await db.$queryRaw<Array<{ count: bigint | number }>>`
-    SELECT COUNT(*) AS "count"
-    FROM "AiSearchIndexedProduct"
-    WHERE "shop" = ${shop} AND "hasVector" = true
+    SELECT COUNT(*) AS \`count\`
+    FROM \`AiSearchIndexedProduct\`
+    WHERE \`shop\` = ${shop} AND \`hasVector\` = true
   `;
 
   return Number(rows[0]?.count ?? 0);
@@ -72,13 +72,13 @@ export async function countIndexedProducts(shop: string) {
 // worker has atomically reserved capacity before calling OpenAI.
 export async function countProductSlotsUsed(shop: string) {
   const rows = await db.$queryRaw<Array<{ count: bigint | number }>>`
-    SELECT COUNT(*) AS "count"
-    FROM "AiSearchIndexedProduct"
+    SELECT COUNT(*) AS \`count\`
+    FROM \`AiSearchIndexedProduct\`
     WHERE
-      "shop" = ${shop}
+      \`shop\` = ${shop}
       AND (
-        "hasVector" = true
-        OR "status" = 'PRODUCT_SLOT_RESERVED'
+        \`hasVector\` = true
+        OR \`status\` = 'PRODUCT_SLOT_RESERVED'
       )
   `;
 
@@ -87,9 +87,9 @@ export async function countProductSlotsUsed(shop: string) {
 
 export async function countVectorQuotaBlockedProducts(shop: string) {
   const rows = await db.$queryRaw<Array<{ count: bigint | number }>>`
-    SELECT COUNT(*) AS "count"
-    FROM "AiSearchIndexedProduct"
-    WHERE "shop" = ${shop} AND "status" = 'VECTOR_QUOTA_BLOCKED'
+    SELECT COUNT(*) AS \`count\`
+    FROM \`AiSearchIndexedProduct\`
+    WHERE \`shop\` = ${shop} AND \`status\` = 'VECTOR_QUOTA_BLOCKED'
   `;
 
   return Number(rows[0]?.count ?? 0);
@@ -97,9 +97,9 @@ export async function countVectorQuotaBlockedProducts(shop: string) {
 
 export async function countProductLimitBlockedProducts(shop: string) {
   const rows = await db.$queryRaw<Array<{ count: bigint | number }>>`
-    SELECT COUNT(*) AS "count"
-    FROM "AiSearchIndexedProduct"
-    WHERE "shop" = ${shop} AND "status" = 'PRODUCT_LIMIT_BLOCKED'
+    SELECT COUNT(*) AS \`count\`
+    FROM \`AiSearchIndexedProduct\`
+    WHERE \`shop\` = ${shop} AND \`status\` = 'PRODUCT_LIMIT_BLOCKED'
   `;
 
   return Number(rows[0]?.count ?? 0);
@@ -107,9 +107,9 @@ export async function countProductLimitBlockedProducts(shop: string) {
 
 export async function countSubscriptionBlockedProducts(shop: string) {
   const rows = await db.$queryRaw<Array<{ count: bigint | number }>>`
-    SELECT COUNT(*) AS "count"
-    FROM "AiSearchIndexedProduct"
-    WHERE "shop" = ${shop} AND "status" = 'SUBSCRIPTION_BLOCKED'
+    SELECT COUNT(*) AS \`count\`
+    FROM \`AiSearchIndexedProduct\`
+    WHERE \`shop\` = ${shop} AND \`status\` = 'SUBSCRIPTION_BLOCKED'
   `;
 
   return Number(rows[0]?.count ?? 0);
@@ -118,10 +118,10 @@ export async function countSubscriptionBlockedProducts(shop: string) {
 export async function getIndexedProduct(shop: string, productId: string) {
   const rows = await db.$queryRaw<IndexedProductRow[]>`
     SELECT
-      "id", "shop", "productId", "handle", "title", "status", "hasVector",
-      "documentHash", "lastIndexedAt", "lastSeenAt", "lastCatalogSeenAt", "updatedAt"
-    FROM "AiSearchIndexedProduct"
-    WHERE "shop" = ${shop} AND "productId" = ${productId}
+      \`id\`, \`shop\`, \`productId\`, \`handle\`, \`title\`, \`status\`, \`hasVector\`,
+      \`documentHash\`, \`lastIndexedAt\`, \`lastSeenAt\`, \`lastCatalogSeenAt\`, \`updatedAt\`
+    FROM \`AiSearchIndexedProduct\`
+    WHERE \`shop\` = ${shop} AND \`productId\` = ${productId}
     LIMIT 1
   `;
 
@@ -151,17 +151,17 @@ export async function reserveProductSlot({
     // Serialize slot decisions per shop. This is a no-op data-wise, but forces
     // competing writers for the same shop through one DB write lock/row lock.
     await tx.$executeRaw`
-      UPDATE "AiSearchShopSettings"
-      SET "updatedAt" = "updatedAt"
-      WHERE "shop" = ${shop}
+      UPDATE \`AiSearchShopSettings\`
+      SET \`updatedAt\` = \`updatedAt\`
+      WHERE \`shop\` = ${shop}
     `;
 
     const existing = await tx.$queryRaw<
       Array<{ status: string; hasVector: boolean | number }>
     >`
-      SELECT "status", "hasVector"
-      FROM "AiSearchIndexedProduct"
-      WHERE "shop" = ${shop} AND "productId" = ${productId}
+      SELECT \`status\`, \`hasVector\`
+      FROM \`AiSearchIndexedProduct\`
+      WHERE \`shop\` = ${shop} AND \`productId\` = ${productId}
       LIMIT 1
     `;
 
@@ -173,13 +173,13 @@ export async function reserveProductSlot({
     }
 
     const usedRows = await tx.$queryRaw<Array<{ count: bigint | number }>>`
-      SELECT COUNT(*) AS "count"
-      FROM "AiSearchIndexedProduct"
+      SELECT COUNT(*) AS \`count\`
+      FROM \`AiSearchIndexedProduct\`
       WHERE
-        "shop" = ${shop}
+        \`shop\` = ${shop}
         AND (
-          "hasVector" = true
-          OR "status" = 'PRODUCT_SLOT_RESERVED'
+          \`hasVector\` = true
+          OR \`status\` = 'PRODUCT_SLOT_RESERVED'
         )
     `;
 
@@ -190,21 +190,21 @@ export async function reserveProductSlot({
     }
 
     await tx.$executeRaw`
-      INSERT INTO "AiSearchIndexedProduct" (
-        "shop", "productId", "handle", "title", "status", "hasVector",
-        "documentHash", "lastSeenAt", "createdAt", "updatedAt"
+      INSERT INTO \`AiSearchIndexedProduct\` (
+        \`shop\`, \`productId\`, \`handle\`, \`title\`, \`status\`, \`hasVector\`,
+        \`documentHash\`, \`lastSeenAt\`, \`createdAt\`, \`updatedAt\`
       ) VALUES (
         ${shop}, ${productId}, ${handle}, ${title}, 'PRODUCT_SLOT_RESERVED', false,
-        ${documentHash}, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+        ${documentHash}, UTC_TIMESTAMP(3), UTC_TIMESTAMP(3), UTC_TIMESTAMP(3)
       )
-      ON CONFLICT("shop", "productId") DO UPDATE SET
-        "handle" = excluded."handle",
-        "title" = excluded."title",
-        "status" = 'PRODUCT_SLOT_RESERVED',
-        "hasVector" = false,
-        "documentHash" = excluded."documentHash",
-        "lastSeenAt" = CURRENT_TIMESTAMP,
-        "updatedAt" = CURRENT_TIMESTAMP
+      ON DUPLICATE KEY UPDATE
+        \`handle\` = ${handle},
+        \`title\` = ${title},
+        \`status\` = 'PRODUCT_SLOT_RESERVED',
+        \`hasVector\` = false,
+        \`documentHash\` = ${documentHash},
+        \`lastSeenAt\` = UTC_TIMESTAMP(3),
+        \`updatedAt\` = UTC_TIMESTAMP(3)
     `;
 
     return { allowed: true, reserved: true } as const;
@@ -216,12 +216,12 @@ export async function releaseProductSlotReservation(
   productId: string,
 ) {
   await db.$executeRaw`
-    DELETE FROM "AiSearchIndexedProduct"
+    DELETE FROM \`AiSearchIndexedProduct\`
     WHERE
-      "shop" = ${shop}
-      AND "productId" = ${productId}
-      AND "status" = 'PRODUCT_SLOT_RESERVED'
-      AND "hasVector" = false
+      \`shop\` = ${shop}
+      AND \`productId\` = ${productId}
+      AND \`status\` = 'PRODUCT_SLOT_RESERVED'
+      AND \`hasVector\` = false
   `;
 }
 
@@ -239,22 +239,22 @@ export async function upsertIndexedProduct({
   documentHash: string;
 }) {
   await db.$executeRaw`
-    INSERT INTO "AiSearchIndexedProduct" (
-      "shop", "productId", "handle", "title", "status", "hasVector", "documentHash",
-      "lastIndexedAt", "lastSeenAt", "createdAt", "updatedAt"
+    INSERT INTO \`AiSearchIndexedProduct\` (
+      \`shop\`, \`productId\`, \`handle\`, \`title\`, \`status\`, \`hasVector\`, \`documentHash\`,
+      \`lastIndexedAt\`, \`lastSeenAt\`, \`createdAt\`, \`updatedAt\`
     ) VALUES (
       ${shop}, ${productId}, ${handle}, ${title}, 'INDEXED', true, ${documentHash},
-      CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+      UTC_TIMESTAMP(3), UTC_TIMESTAMP(3), UTC_TIMESTAMP(3), UTC_TIMESTAMP(3)
     )
-    ON CONFLICT("shop", "productId") DO UPDATE SET
-      "handle" = excluded."handle",
-      "title" = excluded."title",
-      "status" = 'INDEXED',
-      "hasVector" = true,
-      "documentHash" = excluded."documentHash",
-      "lastIndexedAt" = CURRENT_TIMESTAMP,
-      "lastSeenAt" = CURRENT_TIMESTAMP,
-      "updatedAt" = CURRENT_TIMESTAMP
+    ON DUPLICATE KEY UPDATE
+      \`handle\` = ${handle},
+      \`title\` = ${title},
+      \`status\` = 'INDEXED',
+      \`hasVector\` = true,
+      \`documentHash\` = ${documentHash},
+      \`lastIndexedAt\` = UTC_TIMESTAMP(3),
+      \`lastSeenAt\` = UTC_TIMESTAMP(3),
+      \`updatedAt\` = UTC_TIMESTAMP(3)
   `;
 }
 
@@ -283,21 +283,21 @@ export async function markIndexedProductBlocked({
         : INDEXED_PRODUCT_STATUS.vectorQuotaBlocked;
 
   await db.$executeRaw`
-    INSERT INTO "AiSearchIndexedProduct" (
-      "shop", "productId", "handle", "title", "status", "hasVector", "documentHash",
-      "lastSeenAt", "createdAt", "updatedAt"
+    INSERT INTO \`AiSearchIndexedProduct\` (
+      \`shop\`, \`productId\`, \`handle\`, \`title\`, \`status\`, \`hasVector\`, \`documentHash\`,
+      \`lastSeenAt\`, \`createdAt\`, \`updatedAt\`
     ) VALUES (
       ${shop}, ${productId}, ${handle}, ${title}, ${status}, ${hasVector}, ${documentHash},
-      CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+      UTC_TIMESTAMP(3), UTC_TIMESTAMP(3), UTC_TIMESTAMP(3)
     )
-    ON CONFLICT("shop", "productId") DO UPDATE SET
-      "handle" = excluded."handle",
-      "title" = excluded."title",
-      "status" = ${status},
-      "hasVector" = ${hasVector},
-      "documentHash" = excluded."documentHash",
-      "lastSeenAt" = CURRENT_TIMESTAMP,
-      "updatedAt" = CURRENT_TIMESTAMP
+    ON DUPLICATE KEY UPDATE
+      \`handle\` = ${handle},
+      \`title\` = ${title},
+      \`status\` = ${status},
+      \`hasVector\` = ${hasVector},
+      \`documentHash\` = ${documentHash},
+      \`lastSeenAt\` = UTC_TIMESTAMP(3),
+      \`updatedAt\` = UTC_TIMESTAMP(3)
   `;
 }
 
@@ -310,11 +310,11 @@ async function listBlockedByStatus(
 
   return db.$queryRaw<IndexedProductRow[]>`
     SELECT
-      "id", "shop", "productId", "handle", "title", "status", "hasVector",
-      "documentHash", "lastIndexedAt", "lastSeenAt", "lastCatalogSeenAt", "updatedAt"
-    FROM "AiSearchIndexedProduct"
-    WHERE "shop" = ${shop} AND "status" = ${status}
-    ORDER BY "updatedAt" ASC, "id" ASC
+      \`id\`, \`shop\`, \`productId\`, \`handle\`, \`title\`, \`status\`, \`hasVector\`,
+      \`documentHash\`, \`lastIndexedAt\`, \`lastSeenAt\`, \`lastCatalogSeenAt\`, \`updatedAt\`
+    FROM \`AiSearchIndexedProduct\`
+    WHERE \`shop\` = ${shop} AND \`status\` = ${status}
+    ORDER BY \`updatedAt\` ASC, \`id\` ASC
     LIMIT ${safeLimit}
   `;
 }
@@ -353,11 +353,11 @@ export async function listIndexedProductsBeyondLimit(
 
   return db.$queryRaw<IndexedProductRow[]>`
     SELECT
-      "id", "shop", "productId", "handle", "title", "status", "hasVector",
-      "documentHash", "lastIndexedAt", "lastSeenAt", "lastCatalogSeenAt", "updatedAt"
-    FROM "AiSearchIndexedProduct"
-    WHERE "shop" = ${shop} AND "hasVector" = true
-    ORDER BY "lastIndexedAt" DESC, "updatedAt" DESC, "id" DESC
+      \`id\`, \`shop\`, \`productId\`, \`handle\`, \`title\`, \`status\`, \`hasVector\`,
+      \`documentHash\`, \`lastIndexedAt\`, \`lastSeenAt\`, \`lastCatalogSeenAt\`, \`updatedAt\`
+    FROM \`AiSearchIndexedProduct\`
+    WHERE \`shop\` = ${shop} AND \`hasVector\` = true
+    ORDER BY \`lastIndexedAt\` DESC, \`updatedAt\` DESC, \`id\` DESC
     LIMIT ${safeLimit} OFFSET ${safeKeep}
   `;
 }
@@ -373,12 +373,12 @@ export async function markIndexedProductCatalogSeen({
   // ACTIVE. Do not overwrite handle/title with stale registry values while a
   // concurrent webhook may have just written fresher product metadata.
   return db.$executeRaw`
-    UPDATE "AiSearchIndexedProduct"
+    UPDATE \`AiSearchIndexedProduct\`
     SET
-      "lastSeenAt" = CURRENT_TIMESTAMP,
-      "lastCatalogSeenAt" = CURRENT_TIMESTAMP,
-      "updatedAt" = CURRENT_TIMESTAMP
-    WHERE "shop" = ${shop} AND "productId" = ${productId}
+      \`lastSeenAt\` = UTC_TIMESTAMP(3),
+      \`lastCatalogSeenAt\` = UTC_TIMESTAMP(3),
+      \`updatedAt\` = UTC_TIMESTAMP(3)
+    WHERE \`shop\` = ${shop} AND \`productId\` = ${productId}
   `;
 }
 
@@ -396,14 +396,14 @@ export async function touchIndexedProductCatalogSeen({
   // Update only an existing registry row. Creating a new row here would
   // accidentally reserve/count a product before quota/indexing decisions.
   return db.$executeRaw`
-    UPDATE "AiSearchIndexedProduct"
+    UPDATE \`AiSearchIndexedProduct\`
     SET
-      "handle" = ${handle},
-      "title" = ${title},
-      "lastSeenAt" = CURRENT_TIMESTAMP,
-      "lastCatalogSeenAt" = CURRENT_TIMESTAMP,
-      "updatedAt" = CURRENT_TIMESTAMP
-    WHERE "shop" = ${shop} AND "productId" = ${productId}
+      \`handle\` = ${handle},
+      \`title\` = ${title},
+      \`lastSeenAt\` = UTC_TIMESTAMP(3),
+      \`lastCatalogSeenAt\` = UTC_TIMESTAMP(3),
+      \`updatedAt\` = UTC_TIMESTAMP(3)
+    WHERE \`shop\` = ${shop} AND \`productId\` = ${productId}
   `;
 }
 
@@ -424,20 +424,20 @@ export async function touchIndexedProductLiveSeen({
   // mask a stale row from the scan that is responsible for authoritative
   // catalog reconciliation.
   return db.$executeRaw`
-    UPDATE "AiSearchIndexedProduct"
+    UPDATE \`AiSearchIndexedProduct\`
     SET
-      "handle" = ${handle},
-      "title" = ${title},
-      "lastSeenAt" = CURRENT_TIMESTAMP,
-      "updatedAt" = CURRENT_TIMESTAMP
-    WHERE "shop" = ${shop} AND "productId" = ${productId}
+      \`handle\` = ${handle},
+      \`title\` = ${title},
+      \`lastSeenAt\` = UTC_TIMESTAMP(3),
+      \`updatedAt\` = UTC_TIMESTAMP(3)
+    WHERE \`shop\` = ${shop} AND \`productId\` = ${productId}
   `;
 }
 
 export async function removeIndexedProduct(shop: string, productId: string) {
   await db.$executeRaw`
-    DELETE FROM "AiSearchIndexedProduct"
-    WHERE "shop" = ${shop} AND "productId" = ${productId}
+    DELETE FROM \`AiSearchIndexedProduct\`
+    WHERE \`shop\` = ${shop} AND \`productId\` = ${productId}
   `;
 }
 
@@ -446,11 +446,11 @@ export async function listIndexedProducts(shop: string, limit = 20) {
 
   return db.$queryRaw<IndexedProductRow[]>`
     SELECT
-      "id", "shop", "productId", "handle", "title", "status", "hasVector",
-      "documentHash", "lastIndexedAt", "lastSeenAt", "lastCatalogSeenAt", "updatedAt"
-    FROM "AiSearchIndexedProduct"
-    WHERE "shop" = ${shop}
-    ORDER BY "updatedAt" DESC
+      \`id\`, \`shop\`, \`productId\`, \`handle\`, \`title\`, \`status\`, \`hasVector\`,
+      \`documentHash\`, \`lastIndexedAt\`, \`lastSeenAt\`, \`lastCatalogSeenAt\`, \`updatedAt\`
+    FROM \`AiSearchIndexedProduct\`
+    WHERE \`shop\` = ${shop}
+    ORDER BY \`updatedAt\` DESC
     LIMIT ${safeLimit}
   `;
 }
@@ -464,13 +464,13 @@ export async function listStaleIndexedProducts(
 
   return db.$queryRaw<IndexedProductRow[]>`
     SELECT
-      "id", "shop", "productId", "handle", "title", "status", "hasVector",
-      "documentHash", "lastIndexedAt", "lastSeenAt", "lastCatalogSeenAt", "updatedAt"
-    FROM "AiSearchIndexedProduct"
+      \`id\`, \`shop\`, \`productId\`, \`handle\`, \`title\`, \`status\`, \`hasVector\`,
+      \`documentHash\`, \`lastIndexedAt\`, \`lastSeenAt\`, \`lastCatalogSeenAt\`, \`updatedAt\`
+    FROM \`AiSearchIndexedProduct\`
     WHERE
-      "shop" = ${shop}
-      AND ("lastCatalogSeenAt" IS NULL OR "lastCatalogSeenAt" < ${seenBefore})
-    ORDER BY "lastCatalogSeenAt" ASC, "id" ASC
+      \`shop\` = ${shop}
+      AND (\`lastCatalogSeenAt\` IS NULL OR \`lastCatalogSeenAt\` < ${seenBefore})
+    ORDER BY \`lastCatalogSeenAt\` ASC, \`id\` ASC
     LIMIT ${safeLimit}
   `;
 }

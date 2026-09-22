@@ -48,7 +48,7 @@ function readPositiveInteger(name: string, fallback: number) {
 
 const ENSURE_TTL_MS = readPositiveInteger(
   "AI_SEARCH_QDRANT_ENSURE_TTL_MS",
-  60_000,
+  6 * 60 * 60_000,
 );
 
 let ensuredAt = 0;
