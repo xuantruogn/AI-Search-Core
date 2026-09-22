@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { useFetcher, useLoaderData } from "react-router";
 
@@ -20,6 +20,22 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     ensure: false,
   });
 
+  // Calculate days remaining in current billing cycle
+  let daysRemaining: number | null = null;
+  let formattedPeriodEnd: string | null = null;
+
+  if (subscription.billingPeriodEnd) {
+    const endDate = new Date(subscription.billingPeriodEnd);
+    const now = new Date();
+    const diffTime = endDate.getTime() - now.getTime();
+    daysRemaining = Math.max(0, Math.ceil(diffTime / (1000 * 60 * 60 * 24)));
+    formattedPeriodEnd = endDate.toLocaleDateString("en-US", {
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+    });
+  }
+
   return {
     shop: session.shop,
     entitlement,
@@ -29,6 +45,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         subscription.billingPeriodStart?.toISOString() ?? null,
       billingPeriodEnd: subscription.billingPeriodEnd?.toISOString() ?? null,
       lastSyncedAt: subscription.lastSyncedAt?.toISOString() ?? null,
+      daysRemaining,
+      formattedPeriodEnd,
     },
     pricingUrl: getShopifyPricingPlansUrl(session.shop),
     partnerApiConfigured: isShopifyAppPricingConfigured(),
@@ -41,42 +59,126 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const form = await request.formData();
   const intent = String(form.get("intent") || "");
 
-  if (intent !== "refresh") {
-    return {
-      success: false,
-      message: "Unsupported billing action",
-    };
+  // 1. Sync billing status directly from Shopify
+  if (intent === "refresh") {
+    try {
+      const result = await refreshShopifyAppPricingSubscription({
+        shop: session.shop,
+        admin,
+      });
+
+      const reconciliation = await reconcileShopCommercialState({
+        shop: session.shop,
+        forceCatalogRefresh: result.changed,
+      });
+
+      return {
+        success: true,
+        message: result.configured
+          ? `Billing synced: ${result.subscription.plan} / ${result.subscription.status}. Reconcile: pruned ${reconciliation.pruned}, recovered ${reconciliation.recovered}.`
+          : "Partner API not configured; using local/dev subscription state.",
+      };
+    } catch (error) {
+      return {
+        success: false,
+        message: error instanceof Error ? error.message : String(error),
+      };
+    }
   }
 
-  try {
-    const result = await refreshShopifyAppPricingSubscription({
-      shop: session.shop,
-      admin,
-    });
+  // 2. Create subscription payment link via Shopify Billing API
+  if (intent === "subscribe") {
+    const planKey = String(form.get("planKey") || "");
+    const cycle = String(form.get("cycle") || "monthly");
 
-    const reconciliation = await reconcileShopCommercialState({
-      shop: session.shop,
-      forceCatalogRefresh: result.changed,
-    });
+    let price = planKey === "PRO" ? 29.9 : 9.9;
+    if (cycle === "yearly") price = price * 0.8;
+    if (cycle === "biyearly") price = price * 0.6;
 
-    return {
-      success: true,
-      message: result.configured
-        ? `Billing synced: ${result.subscription.plan} / ${result.subscription.status}. Reconcile: pruned ${reconciliation.pruned}, recovered ${reconciliation.recovered}.`
-        : "Partner API chưa được cấu hình; đang dùng subscription state local/dev.",
-    };
-  } catch (error) {
-    return {
-      success: false,
-      message: error instanceof Error ? error.message : String(error),
-    };
+    // Tự động nhận diện môi trường: Dev hay Production
+    const isProduction = process.env.NODE_ENV === "production";
+
+    try {
+      const returnUrl = `https://${session.shop}/admin/apps/billing`;
+
+      const response = await admin.graphql(
+        `#graphql
+        mutation createPaymentLink($name: String!, $price: Decimal!, $returnUrl: URL!, $test: Boolean) {
+          appSubscriptionCreate(
+            name: $name
+            returnUrl: $returnUrl
+            test: $test
+            lineItems: [{
+              plan: {
+                appRecurringPricingDetails: {
+                  price: { amount: $price, currencyCode: USD }
+                  interval: EVERY_30_DAYS
+                }
+              }
+            }]
+          ) {
+            userErrors { field message }
+            confirmationUrl
+          }
+        }`,
+        {
+          variables: {
+            name: `AI Search ${planKey} Plan (${cycle})`,
+            price: price.toFixed(2),
+            returnUrl: returnUrl,
+            // 🟢 TỰ ĐỘNG: Ở máy Local (Dev) -> test = true (Test miễn phí)
+            // Deploy lên Server Production -> test = false (Thu tiền thật)
+            test: !isProduction,
+          },
+        }
+      );
+
+      const responseJson = await response.json();
+      const subscriptionData = responseJson.data?.appSubscriptionCreate;
+
+      if (subscriptionData?.userErrors && subscriptionData.userErrors.length > 0) {
+        const errorMsg = subscriptionData.userErrors.map((e: any) => e.message).join(", ");
+
+        // Cơ chế Fallback mượt mà cho Dev khi chưa bật Public Distribution
+        if (errorMsg.includes("public distribution")) {
+          return {
+            success: true,
+            devFallback: true,
+            message: "App currently in Dev/Custom mode (No Public Distribution). Billing API simulated successfully!",
+          };
+        }
+
+        return {
+          success: false,
+          message: `Shopify Error: ${errorMsg}`,
+        };
+      }
+
+      const confirmationUrl = subscriptionData?.confirmationUrl;
+
+      if (confirmationUrl) {
+        return { success: true, confirmationUrl };
+      }
+
+      return {
+        success: false,
+        message: "Failed to create subscription charge link from Shopify.",
+      };
+    } catch (error) {
+      return {
+        success: false,
+        message: error instanceof Error ? error.message : String(error),
+      };
+    }
   }
+
+  return { success: false, message: "Invalid action intent" };
 };
 
 function limitText(value: number | null, suffix: string) {
   return value === null
-    ? `Không giới hạn ${suffix}`
-    : `${value.toLocaleString("vi-VN")} ${suffix}`;
+    ? `Unlimited ${suffix}`
+    : `${value.toLocaleString("en-US")} ${suffix}`;
 }
 
 type Cycle = "monthly" | "yearly" | "biyearly";
@@ -84,8 +186,16 @@ type Cycle = "monthly" | "yearly" | "biyearly";
 export default function BillingPage() {
   const data = useLoaderData<typeof loader>();
   const fetcher = useFetcher<typeof action>();
+  const subscribeFetcher = useFetcher<typeof action>();
 
   const [cycle, setCycle] = useState<Cycle>("monthly");
+
+  // Top-level redirect when confirmationUrl is generated by Shopify
+  useEffect(() => {
+    if (subscribeFetcher.data?.confirmationUrl) {
+      window.top!.location.href = subscribeFetcher.data.confirmationUrl;
+    }
+  }, [subscribeFetcher.data]);
 
   const cycleDiscount = {
     monthly: 0,
@@ -94,63 +204,65 @@ export default function BillingPage() {
   };
 
   const cycleText = {
-    monthly: "/tháng",
-    yearly: "/tháng (thanh toán hàng năm)",
-    biyearly: "/tháng (thanh toán 2 năm)",
+    monthly: "/month",
+    yearly: "/month (billed annually)",
+    biyearly: "/month (billed 2-yearly)",
   };
+
+  const currentPlanKey = data.entitlement.planLabel?.toUpperCase() || "NONE";
+  const isActive = data.entitlement.subscriptionStatus === "ACTIVE";
 
   const planConfigs = {
     BASIC: {
-      badge: "Phổ biến",
+      badge: "Popular",
       badgeBg: "#008060",
       priceBase: 9.9,
-      originalPrice: "$14.99/tháng",
+      originalPrice: "$14.99/month",
       isPopular: false,
       btnBg: "#008060",
       features: [
         limitText(
           data.plans[0]?.limits.productLimit ?? 500,
-          "sản phẩm được AI index",
+          "AI indexed products",
         ),
         limitText(
-          data.plans[0]?.limits.searchLimit ?? 2000,
-          "AI searches / kỳ",
+          data.plans[0]?.limits.searchLimit ?? 3000,
+          "AI searches / period",
         ),
         limitText(
           data.plans[0]?.limits.vectorUpdateLimit ?? 500,
-          "vector updates / kỳ",
+          "vector updates / period",
         ),
-        "Tự động fallback về Shopify Search khi hết quota",
-        "Hỗ trợ qua Email & Ticket 24/7",
+        "Auto-fallback to Shopify Search when quota exceeded",
+        "24/7 Email & Ticket Support",
       ],
-      buildWith: ["AI Search Engine", "Gợi ý từ khóa AI"],
+      buildWith: ["AI Search Engine", "AI Keyword Suggestions"],
     },
     PRO: {
-      badge: "Tiết kiệm 40%",
+      badge: "Save 40%",
       badgeBg: "#e51c00",
       priceBase: 29.9,
-      originalPrice: "$49.99/tháng",
+      originalPrice: "$49.99/month",
       isPopular: true,
       btnBg: "#e51c00",
       features: [
         limitText(
           data.plans[1]?.limits.productLimit ?? null,
-          "sản phẩm được AI index",
+          "AI indexed products",
         ),
         limitText(
           data.plans[1]?.limits.searchLimit ?? null,
-          "AI searches / kỳ",
+          "AI searches / period",
         ),
         limitText(
           data.plans[1]?.limits.vectorUpdateLimit ?? null,
-          "vector updates / kỳ",
+          "vector updates / period",
         ),
-        "Ưu tiên xử lý băng thông Vector Search",
-        "Tự động tối ưu Synonyms & Search Intent",
-        "Hỗ trợ kỹ thuật 1-1 chuyên sâu",
+        "Priority Vector Search bandwidth processing",
+        "Auto-optimized Synonyms & Search Intent",
+        "1-on-1 Dedicated Technical Support",
       ],
       buildWith: ["AI Vector Analytics", "Full Synonyms Map"],
-      included: ["Tối ưu hóa tìm kiếm không kết quả"],
     },
   };
 
@@ -164,14 +276,14 @@ export default function BillingPage() {
           "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
       }}
     >
-      {/* KHỐI 1: TỔNG QUAN GÓI HIỆN TẠI */}
+      {/* SECTION 1: ACCOUNT OVERVIEW & SUBSCRIPTION STATUS */}
       <div
         style={{
           background: "#fff",
           borderRadius: 12,
-          padding: 24,
+          padding: 20,
           border: "1px solid #e1e3e5",
-          marginBottom: 32,
+          marginBottom: 24,
           boxShadow: "0 1px 3px rgba(0,0,0,0.04)",
         }}
       >
@@ -184,9 +296,9 @@ export default function BillingPage() {
           }}
         >
           <h2
-            style={{ margin: 0, fontSize: 18, fontWeight: 700, color: "#1a1a1a" }}
+            style={{ margin: 0, fontSize: 17, fontWeight: 700, color: "#1a1a1a" }}
           >
-            Trạng thái gói hiện tại
+            Current Subscription Status
           </h2>
           <span
             style={{
@@ -194,17 +306,11 @@ export default function BillingPage() {
               borderRadius: 20,
               fontSize: 12,
               fontWeight: 700,
-              background:
-                data.entitlement.subscriptionStatus === "ACTIVE"
-                  ? "#e4f8f0"
-                  : "#ffebe9",
-              color:
-                data.entitlement.subscriptionStatus === "ACTIVE"
-                  ? "#008060"
-                  : "#d32f2f",
+              background: isActive ? "#e4f8f0" : "#ffebe9",
+              color: isActive ? "#008060" : "#d32f2f",
             }}
           >
-            {data.entitlement.subscriptionStatus}
+            {isActive ? "ACTIVE (PAID)" : data.entitlement.subscriptionStatus}
           </span>
         </div>
 
@@ -218,24 +324,30 @@ export default function BillingPage() {
           }}
         >
           <div>
-            <strong>Cửa hàng:</strong> {data.shop}
+            <strong>Store:</strong> {data.shop}
           </div>
           <div>
-            <strong>Gói đang dùng:</strong> {data.entitlement.planLabel}
+            <strong>Current Plan:</strong> {data.entitlement.planLabel}
           </div>
           <div>
-            <strong>Nguồn:</strong> {data.subscription.source}
+            <strong>Billing Cycle:</strong>{" "}
+            {data.subscription.formattedPeriodEnd
+              ? `${data.subscription.formattedPeriodEnd} (${data.subscription.daysRemaining} days left)`
+              : "Monthly (Auto-renew)"}
+          </div>
+          <div>
+            <strong>Source:</strong> {data.subscription.source}
           </div>
           <div>
             <strong>Partner API:</strong>{" "}
-            {data.partnerApiConfigured ? "🟢 Đã kết nối" : "🔴 Chưa cấu hình"}
+            {data.partnerApiConfigured ? "🟢 Connected" : "🔴 Not Configured"}
           </div>
         </div>
 
         <div
           style={{
-            marginTop: 20,
-            paddingTop: 16,
+            marginTop: 16,
+            paddingTop: 14,
             borderTop: "1px solid #f1f2f3",
             display: "flex",
             gap: 16,
@@ -258,8 +370,8 @@ export default function BillingPage() {
               }}
             >
               {fetcher.state !== "idle"
-                ? "Đang đồng bộ..."
-                : "Đồng bộ trạng thái Billing"}
+                ? "Syncing..."
+                : "Sync Billing Status"}
             </button>
           </fetcher.Form>
 
@@ -274,31 +386,81 @@ export default function BillingPage() {
                 textDecoration: "none",
               }}
             >
-              Mở trang quản lý đăng ký của Shopify →
+              Open Shopify Subscription Manager →
             </a>
           )}
         </div>
-        {fetcher.data ? (
+        {fetcher.data?.message ? (
           <p style={{ margin: "10px 0 0 0", fontSize: 12, color: "#008060" }}>
             {fetcher.data.message}
           </p>
         ) : null}
       </div>
 
-      {/* KHỐI 2: HEADER CHỌN GÓI & TOGGLE CHU KỲ */}
-      <div style={{ textAlign: "center", marginBottom: 36 }}>
+      {/* SECTION 2: CURRENT USAGE & QUOTA METRICS */}
+      <div
+        style={{
+          background: "#fff",
+          borderRadius: 12,
+          padding: 20,
+          border: "1px solid #e1e3e5",
+          marginBottom: 32,
+          boxShadow: "0 1px 3px rgba(0,0,0,0.04)",
+        }}
+      >
+        <h3 style={{ margin: "0 0 14px 0", fontSize: 15, fontWeight: 700, color: "#1a1a1a" }}>
+          📊 Usage & Capacity this Period
+        </h3>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 16 }}>
+          {/* AI Searches */}
+          <div style={{ border: "1px solid #f1f2f3", borderRadius: 8, padding: 14, background: "#fafafa" }}>
+            <div style={{ fontSize: 12, color: "#616161", marginBottom: 4 }}>AI Searches</div>
+            <div style={{ fontSize: 18, fontWeight: 700, color: "#1a1a1a" }}>
+              {data.entitlement.usage.searchCount.toLocaleString("en-US")} / {limitText(data.entitlement.limits.searchLimit, "")}
+            </div>
+            <div style={{ fontSize: 11, color: "#008060", marginTop: 4 }}>
+              Auto-fallbacks to Shopify Search when limit reached
+            </div>
+          </div>
+
+          {/* AI Indexed Products */}
+          <div style={{ border: "1px solid #f1f2f3", borderRadius: 8, padding: 14, background: "#fafafa" }}>
+            <div style={{ fontSize: 12, color: "#616161", marginBottom: 4 }}>AI Indexed Products</div>
+            <div style={{ fontSize: 18, fontWeight: 700, color: "#1a1a1a" }}>
+              {data.entitlement.indexedProducts.toLocaleString("en-US")} / {limitText(data.entitlement.limits.productLimit, "")}
+            </div>
+            <div style={{ fontSize: 11, color: "#616161", marginTop: 4 }}>
+              Products ready for AI ranking
+            </div>
+          </div>
+
+          {/* Vector Updates */}
+          <div style={{ border: "1px solid #f1f2f3", borderRadius: 8, padding: 14, background: "#fafafa" }}>
+            <div style={{ fontSize: 12, color: "#616161", marginBottom: 4 }}>Vector Updates</div>
+            <div style={{ fontSize: 18, fontWeight: 700, color: "#1a1a1a" }}>
+              {data.entitlement.usage.vectorUpdateCount.toLocaleString("en-US")} / {limitText(data.entitlement.limits.vectorUpdateLimit, "")}
+            </div>
+            <div style={{ fontSize: 11, color: "#616161", marginTop: 4 }}>
+              Vector data update executions
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* SECTION 3: PLAN SELECTION HEADER & CYCLE TOGGLE */}
+      <div style={{ textAlign: "center", marginBottom: 32 }}>
         <h1
           style={{
-            fontSize: 28,
+            fontSize: 26,
             fontWeight: 800,
             color: "#1a1a1a",
             margin: "0 0 8px 0",
           }}
         >
-          Chọn gói dịch vụ phù hợp cho cửa hàng
+          Choose the Right Plan for Your Store
         </h1>
-        <p style={{ color: "#616161", fontSize: 14, margin: "0 0 24px 0" }}>
-          Tối ưu trải nghiệm tìm kiếm AI, tăng tỷ lệ chuyển đổi đơn hàng ngay hôm nay.
+        <p style={{ color: "#616161", fontSize: 14, margin: "0 0 20px 0" }}>
+          Optimize AI search experiences and boost sales conversion rates today.
         </p>
 
         <div
@@ -326,7 +488,7 @@ export default function BillingPage() {
                 cycle === "monthly" ? "0 1px 3px rgba(0,0,0,0.1)" : "none",
             }}
           >
-            Hàng tháng
+            Monthly
           </button>
           <button
             type="button"
@@ -344,7 +506,7 @@ export default function BillingPage() {
                 cycle === "yearly" ? "0 1px 3px rgba(0,0,0,0.1)" : "none",
             }}
           >
-            Hàng năm <span style={{ color: "#008060", fontSize: 11 }}>(Giảm 20%)</span>
+            Yearly <span style={{ color: "#008060", fontSize: 11 }}>(Save 20%)</span>
           </button>
           <button
             type="button"
@@ -362,12 +524,12 @@ export default function BillingPage() {
                 cycle === "biyearly" ? "0 1px 3px rgba(0,0,0,0.1)" : "none",
             }}
           >
-            2 Năm <span style={{ color: "#e51c00", fontSize: 11 }}>(Giảm 40%)</span>
+            2-Year <span style={{ color: "#e51c00", fontSize: 11 }}>(Save 40%)</span>
           </button>
         </div>
       </div>
 
-      {/* KHỐI 3: DANH SÁCH 2 GÓI */}
+      {/* SECTION 4: PRICING CARDS */}
       <div
         style={{
           display: "flex",
@@ -386,6 +548,8 @@ export default function BillingPage() {
             (1 - cycleDiscount[cycle])
           ).toFixed(2);
 
+          const isCurrentPlan = isActive && currentPlanKey.includes(plan.key);
+
           return (
             <div
               key={plan.key}
@@ -400,7 +564,7 @@ export default function BillingPage() {
                 maxWidth: 420,
                 boxSizing: "border-box",
                 boxShadow: config.isPopular
-                  ? "0 8px 24px rgba(0,128,96,0.12)"
+                  ? "0 10px 30px rgba(0,128,96,0.12)"
                   : "0 2px 8px rgba(0,0,0,0.04)",
                 position: "relative",
                 display: "flex",
@@ -440,7 +604,7 @@ export default function BillingPage() {
                         borderRadius: 4,
                       }}
                     >
-                      Đăng ký nhiều nhất
+                      Most Popular
                     </span>
                   )}
                 </div>
@@ -491,29 +655,40 @@ export default function BillingPage() {
                       marginTop: 4,
                     }}
                   >
-                    Giá gốc: {config.originalPrice}
+                    Regular: {config.originalPrice}
                   </div>
                 </div>
 
-                <a
-                  href={data.pricingUrl || "#"}
-                  target="_top"
-                  style={{
-                    display: "block",
-                    textAlign: "center",
-                    background: config.btnBg,
-                    color: "#fff",
-                    padding: "12px 20px",
-                    borderRadius: 10,
-                    fontWeight: 700,
-                    fontSize: 14,
-                    textDecoration: "none",
-                    marginBottom: 24,
-                    boxShadow: "0 2px 4px rgba(0,0,0,0.1)",
-                  }}
-                >
-                  Chọn gói {plan.label}
-                </a>
+                {/* Subscription Form */}
+                <subscribeFetcher.Form method="post" style={{ marginBottom: 24 }}>
+                  <input type="hidden" name="intent" value="subscribe" />
+                  <input type="hidden" name="planKey" value={plan.key} />
+                  <input type="hidden" name="cycle" value={cycle} />
+
+                  <button
+                    type="submit"
+                    disabled={isCurrentPlan || subscribeFetcher.state !== "idle"}
+                    style={{
+                      width: "100%",
+                      textAlign: "center",
+                      background: isCurrentPlan ? "#8c9196" : config.btnBg,
+                      color: "#fff",
+                      padding: "12px 20px",
+                      borderRadius: 10,
+                      fontWeight: 700,
+                      fontSize: 14,
+                      border: "none",
+                      cursor: isCurrentPlan ? "not-allowed" : "pointer",
+                      boxShadow: "0 2px 4px rgba(0,0,0,0.1)",
+                    }}
+                  >
+                    {isCurrentPlan
+                      ? "Your Current Plan"
+                      : subscribeFetcher.state !== "idle"
+                      ? "Redirecting..."
+                      : `Choose ${plan.label}`}
+                  </button>
+                </subscribeFetcher.Form>
 
                 <div
                   style={{
@@ -529,7 +704,7 @@ export default function BillingPage() {
                       marginBottom: 12,
                     }}
                   >
-                    Tính năng bao gồm:
+                    Features Included:
                   </div>
                   <ul
                     style={{
@@ -570,7 +745,7 @@ export default function BillingPage() {
                           marginBottom: 8,
                         }}
                       >
-                        Công nghệ tích hợp:
+                        Integrated Tech:
                       </div>
                       <ul
                         style={{
@@ -604,6 +779,26 @@ export default function BillingPage() {
             </div>
           );
         })}
+      </div>
+
+      {/* SECTION 5: SHOPIFY BILLING DISCLAIMER */}
+      <div
+        style={{
+          maxWidth: 960,
+          margin: "40px auto 0 auto",
+          padding: 20,
+          background: "#f9fafb",
+          borderRadius: 12,
+          border: "1px solid #e5e7eb",
+          fontSize: 13,
+          color: "#6b7280",
+          lineHeight: 1.6,
+        }}
+      >
+        <strong style={{ color: "#374151", display: "block", marginBottom: 6 }}>
+          🔒 Secure Checkout via Shopify Billing API:
+        </strong>
+        All app charges are billed directly through your monthly Shopify Invoice. You can upgrade, downgrade, or cancel your subscription at any time within Shopify Admin without hidden fees.
       </div>
     </div>
   );

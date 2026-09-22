@@ -64,6 +64,8 @@ export type ContextualQueryResult = QueryRewriteResult & {
     scoreCodeMs: number;
     sortSelectCodeMs: number;
     composeCodeMs: number;
+    canonicalTypeCoverageComplete: boolean;
+    identityCandidateProductIds: string[];
   };
 };
 
@@ -343,6 +345,14 @@ function composeContextualEmbeddingInput(
   rewrite: QueryRewriteResult,
   selectedTerms: SelectedShopContext[],
 ) {
+  if (rewrite.planning) {
+    const base = normalizeContextTerm(clean(rewrite.planning.semanticQuery, 500));
+    const additions = selectedTerms
+      .filter((term) => term.kind !== "PRODUCT_TITLE")
+      .map((term) => normalizeContextTerm(clean(term.value, 220)))
+      .filter((term) => term && !base.includes(term));
+    return [base, ...new Set(additions)].filter(Boolean).join(" ; ");
+  }
   const semanticAttributes = [
     ...rewrite.analysis.requiredAttributes,
     ...rewrite.analysis.optionalPreferences,
@@ -601,6 +611,8 @@ export async function applyShopContextToQuery({
       scoreCodeMs,
       sortSelectCodeMs,
       composeCodeMs,
+      canonicalTypeCoverageComplete,
+      identityCandidateProductIds: [...matchingProductIds],
     },
   };
 }
@@ -752,6 +764,7 @@ export async function filterResultsByExplicitGender<
           "PRODUCT_TITLE", "PRODUCT_TYPE", "VENDOR", "TAG", "VARIANT",
           "SKU", "ATTRIBUTE", "USE_CASE", "ALIAS", "CATEGORY", "BRAND",
           "MODEL", "IDENTIFIER", "AUDIENCE", "COMPATIBILITY",
+          "CANONICAL_PRODUCT_TYPE",
         ],
       },
     },
@@ -924,7 +937,8 @@ export async function filterResultsByExplicitGender<
       genderFilteredCount += 1;
       return [];
     }
-    if (hasIdentityMatch && item.identityMatch < 0.34) {
+    const canonicalCoverageComplete = rewrite.context?.canonicalTypeCoverageComplete === true;
+    if (canonicalCoverageComplete && hasIdentityMatch && item.identityMatch < 0.34) {
       identityFilteredCount += 1;
       return [];
     }
@@ -946,7 +960,7 @@ export async function filterResultsByExplicitGender<
     }
 
     const lexicalBonus =
-      Math.min(0.08, item.identityMatch * 0.06) +
+      Math.min(canonicalCoverageComplete ? 0.24 : 0.14, item.identityMatch * (canonicalCoverageComplete ? 0.22 : 0.12)) +
       Math.min(0.03, item.attributeMatch * 0.03) +
       Math.min(
         0.08,

@@ -70,15 +70,15 @@ async function ensureBaseShopRows(
     const readBase = async () => {
       const rows = await db.$queryRaw<ShopBaseRow[]>`
         SELECT
-          s."shop", s."status", s."shopifyShopId",
+          s.\`shop\`, s.\`status\`, s.\`shopifyShopId\`,
           EXISTS(
-            SELECT 1 FROM "AiSearchShopSettings" st WHERE st."shop" = s."shop"
-          ) AS "hasSettings",
+            SELECT 1 FROM \`AiSearchShopSettings\` st WHERE st.\`shop\` = s.\`shop\`
+          ) AS \`hasSettings\`,
           EXISTS(
-            SELECT 1 FROM "AiSearchSubscription" sub WHERE sub."shop" = s."shop"
-          ) AS "hasSubscription"
-        FROM "AiSearchShop" s
-        WHERE s."shop" = ${cleanShop}
+            SELECT 1 FROM \`AiSearchSubscription\` sub WHERE sub.\`shop\` = s.\`shop\`
+          ) AS \`hasSubscription\`
+        FROM \`AiSearchShop\` s
+        WHERE s.\`shop\` = ${cleanShop}
         LIMIT 1
       `;
       return rows[0] ?? null;
@@ -87,32 +87,34 @@ async function ensureBaseShopRows(
     let row = await readBase();
 
     if (!row || !row.hasSettings || !row.hasSubscription) {
-      // Repair/bootstrap all required per-shop rows atomically. INSERT OR
-      // IGNORE makes this safe when another app instance races the same first
-      // authenticated/storefront request.
+      // Duplicate-key no-ops preserve existing settings during concurrent
+      // bootstrap without hiding foreign-key or invalid-data errors.
       await db.$transaction(async (tx) => {
         await tx.$executeRaw`
-          INSERT OR IGNORE INTO "AiSearchShop" (
-            "shop", "shopifyShopId", "status", "installedAt", "createdAt", "updatedAt"
+          INSERT INTO \`AiSearchShop\` (
+            \`shop\`, \`shopifyShopId\`, \`status\`, \`installedAt\`, \`createdAt\`, \`updatedAt\`
           ) VALUES (
-            ${cleanShop}, ${initialShopifyShopId ?? null}, 'ACTIVE', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+            ${cleanShop}, ${initialShopifyShopId ?? null}, 'ACTIVE', UTC_TIMESTAMP(3), UTC_TIMESTAMP(3), UTC_TIMESTAMP(3)
           )
+          ON DUPLICATE KEY UPDATE \`shop\` = \`shop\`
         `;
 
         await tx.$executeRaw`
-          INSERT OR IGNORE INTO "AiSearchShopSettings" (
-            "shop", "aiSearchEnabled", "fallbackEnabled", "resultLimit", "createdAt", "updatedAt"
+          INSERT INTO \`AiSearchShopSettings\` (
+            \`shop\`, \`aiSearchEnabled\`, \`fallbackEnabled\`, \`resultLimit\`, \`createdAt\`, \`updatedAt\`
           ) VALUES (
-            ${cleanShop}, true, true, 20, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+            ${cleanShop}, true, true, 20, UTC_TIMESTAMP(3), UTC_TIMESTAMP(3)
           )
+          ON DUPLICATE KEY UPDATE \`shop\` = \`shop\`
         `;
 
         await tx.$executeRaw`
-          INSERT OR IGNORE INTO "AiSearchSubscription" (
-            "shop", "plan", "status", "source", "createdAt", "updatedAt"
+          INSERT INTO \`AiSearchSubscription\` (
+            \`shop\`, \`plan\`, \`status\`, \`source\`, \`createdAt\`, \`updatedAt\`
           ) VALUES (
-            ${cleanShop}, 'NONE', 'INACTIVE', 'LOCAL', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+            ${cleanShop}, 'NONE', 'INACTIVE', 'LOCAL', UTC_TIMESTAMP(3), UTC_TIMESTAMP(3)
           )
+          ON DUPLICATE KEY UPDATE \`shop\` = \`shop\`
         `;
       });
 
@@ -211,13 +213,13 @@ export async function ensureShopRecord({
     // Reactivation only happens after authenticated Admin access, so this is
     // the one place where an UNINSTALLED shop is intentionally made ACTIVE.
     await db.$executeRaw`
-      UPDATE "AiSearchShop"
+      UPDATE \`AiSearchShop\`
       SET
-        "shopifyShopId" = COALESCE(${shopifyShopId ?? null}, "shopifyShopId"),
-        "status" = 'ACTIVE',
-        "uninstalledAt" = NULL,
-        "updatedAt" = CURRENT_TIMESTAMP
-      WHERE "shop" = ${cleanShop}
+        \`shopifyShopId\` = COALESCE(${shopifyShopId ?? null}, \`shopifyShopId\`),
+        \`status\` = 'ACTIVE',
+        \`uninstalledAt\` = NULL,
+        \`updatedAt\` = UTC_TIMESTAMP(3)
+      WHERE \`shop\` = ${cleanShop}
     `;
   } else if (
     shopifyShopId &&
@@ -227,9 +229,9 @@ export async function ensureShopRecord({
     // Background/non-authenticated reads must never reactivate an uninstalled
     // tenant. They may refresh the provider ID only while the shop is active.
     await db.$executeRaw`
-      UPDATE "AiSearchShop"
-      SET "shopifyShopId" = ${shopifyShopId}, "updatedAt" = CURRENT_TIMESTAMP
-      WHERE "shop" = ${cleanShop} AND "status" = 'ACTIVE'
+      UPDATE \`AiSearchShop\`
+      SET \`shopifyShopId\` = ${shopifyShopId}, \`updatedAt\` = UTC_TIMESTAMP(3)
+      WHERE \`shop\` = ${cleanShop} AND \`status\` = 'ACTIVE'
     `;
   }
 
@@ -241,45 +243,45 @@ export async function ensureShopRecord({
 
     if (explicitOverride) {
       await db.$executeRaw`
-        UPDATE "AiSearchSubscription"
+        UPDATE \`AiSearchSubscription\`
         SET
-          "plan" = ${devPlan},
-          "status" = ${devStatus},
-          "source" = 'DEV_OVERRIDE',
-          "lastSyncedAt" = CURRENT_TIMESTAMP,
-          "updatedAt" = CURRENT_TIMESTAMP
+          \`plan\` = ${devPlan},
+          \`status\` = ${devStatus},
+          \`source\` = 'DEV_OVERRIDE',
+          \`lastSyncedAt\` = UTC_TIMESTAMP(3),
+          \`updatedAt\` = UTC_TIMESTAMP(3)
         WHERE
-          "shop" = ${cleanShop}
+          \`shop\` = ${cleanShop}
           AND (
-            "plan" <> ${devPlan}
-            OR "status" <> ${devStatus}
-            OR "source" <> 'DEV_OVERRIDE'
+            \`plan\` <> ${devPlan}
+            OR \`status\` <> ${devStatus}
+            OR \`source\` <> 'DEV_OVERRIDE'
           )
           AND EXISTS (
-            SELECT 1 FROM "AiSearchShop"
-            WHERE "shop" = ${cleanShop} AND "status" = 'ACTIVE'
+            SELECT 1 FROM \`AiSearchShop\`
+            WHERE \`shop\` = ${cleanShop} AND \`status\` = 'ACTIVE'
           )
       `;
     } else {
       await db.$executeRaw`
-        UPDATE "AiSearchSubscription"
+        UPDATE \`AiSearchSubscription\`
         SET
-          "plan" = ${devPlan},
-          "status" = ${devStatus},
-          "source" = 'DEV_OVERRIDE',
-          "lastSyncedAt" = CURRENT_TIMESTAMP,
-          "updatedAt" = CURRENT_TIMESTAMP
+          \`plan\` = ${devPlan},
+          \`status\` = ${devStatus},
+          \`source\` = 'DEV_OVERRIDE',
+          \`lastSyncedAt\` = UTC_TIMESTAMP(3),
+          \`updatedAt\` = UTC_TIMESTAMP(3)
         WHERE
-          "shop" = ${cleanShop}
-          AND "source" IN ('LOCAL', 'DEV_OVERRIDE')
+          \`shop\` = ${cleanShop}
+          AND \`source\` IN ('LOCAL', 'DEV_OVERRIDE')
           AND (
-            "plan" <> ${devPlan}
-            OR "status" <> ${devStatus}
-            OR "source" <> 'DEV_OVERRIDE'
+            \`plan\` <> ${devPlan}
+            OR \`status\` <> ${devStatus}
+            OR \`source\` <> 'DEV_OVERRIDE'
           )
           AND EXISTS (
-            SELECT 1 FROM "AiSearchShop"
-            WHERE "shop" = ${cleanShop} AND "status" = 'ACTIVE'
+            SELECT 1 FROM \`AiSearchShop\`
+            WHERE \`shop\` = ${cleanShop} AND \`status\` = 'ACTIVE'
           )
       `;
     }
@@ -310,9 +312,9 @@ export async function getShopLifecycleStatus(
 ) {
   if (options?.ensure !== false) await ensureShopRecord({ shop });
   const rows = await db.$queryRaw<Array<{ status: string }>>`
-    SELECT "status"
-    FROM "AiSearchShop"
-    WHERE "shop" = ${shop}
+    SELECT \`status\`
+    FROM \`AiSearchShop\`
+    WHERE \`shop\` = ${shop}
     LIMIT 1
   `;
   return rows[0]?.status ?? "UNKNOWN";
@@ -347,17 +349,17 @@ export async function getSubscriptionSnapshot(
 
   const rows = await db.$queryRaw<SubscriptionRow[]>`
     SELECT
-      "shop",
-      "plan",
-      "status",
-      "planHandle",
-      "shopifySubscriptionId",
-      "billingPeriodStart",
-      "billingPeriodEnd",
-      "source",
-      "lastSyncedAt"
-    FROM "AiSearchSubscription"
-    WHERE "shop" = ${shop}
+      \`shop\`,
+      \`plan\`,
+      \`status\`,
+      \`planHandle\`,
+      \`shopifySubscriptionId\`,
+      \`billingPeriodStart\`,
+      \`billingPeriodEnd\`,
+      \`source\`,
+      \`lastSyncedAt\`
+    FROM \`AiSearchSubscription\`
+    WHERE \`shop\` = ${shop}
     LIMIT 1
   `;
 
@@ -393,17 +395,17 @@ export async function getShopSettings(
 
   const rows = await db.$queryRaw<SettingsRow[]>`
     SELECT
-      "shop",
-      "aiSearchEnabled",
-      "customDataModeEnabled",
-      "searchLanguage",
-      "fallbackEnabled",
-      "productLimitOverride",
-      "searchLimitOverride",
-      "vectorUpdateLimitOverride",
-      "resultLimit"
-    FROM "AiSearchShopSettings"
-    WHERE "shop" = ${shop}
+      \`shop\`,
+      \`aiSearchEnabled\`,
+      \`customDataModeEnabled\`,
+      \`searchLanguage\`,
+      \`fallbackEnabled\`,
+      \`productLimitOverride\`,
+      \`searchLimitOverride\`,
+      \`vectorUpdateLimitOverride\`,
+      \`resultLimit\`
+    FROM \`AiSearchShopSettings\`
+    WHERE \`shop\` = ${shop}
     LIMIT 1
   `;
 
@@ -444,15 +446,15 @@ export async function updateShopSettings({
   const safeLimit = Math.max(1, Math.min(Math.trunc(resultLimit), 20));
 
   await db.$executeRaw`
-    UPDATE "AiSearchShopSettings"
+    UPDATE \`AiSearchShopSettings\`
     SET
-      "aiSearchEnabled" = ${aiSearchEnabled},
-      "customDataModeEnabled" = COALESCE(${customDataModeEnabled ?? null}, "customDataModeEnabled"),
-      "fallbackEnabled" = true,
-      "resultLimit" = ${safeLimit},
-      "searchLanguage" = COALESCE(${searchLanguage ?? null}, "searchLanguage"),
-      "updatedAt" = CURRENT_TIMESTAMP
-    WHERE "shop" = ${shop}
+      \`aiSearchEnabled\` = ${aiSearchEnabled},
+      \`customDataModeEnabled\` = COALESCE(${customDataModeEnabled ?? null}, \`customDataModeEnabled\`),
+      \`fallbackEnabled\` = true,
+      \`resultLimit\` = ${safeLimit},
+      \`searchLanguage\` = COALESCE(${searchLanguage ?? null}, \`searchLanguage\`),
+      \`updatedAt\` = UTC_TIMESTAMP(3)
+    WHERE \`shop\` = ${shop}
   `;
 }
 
@@ -461,37 +463,37 @@ export async function markShopUninstalled(shop: string) {
   // webhook after shop/redact must not recreate data that was already erased.
   await db.$transaction([
     db.$executeRaw`
-      UPDATE "AiSearchShop"
+      UPDATE \`AiSearchShop\`
       SET
-        "status" = 'UNINSTALLED',
-        "uninstalledAt" = CURRENT_TIMESTAMP,
-        "updatedAt" = CURRENT_TIMESTAMP
-      WHERE "shop" = ${shop}
+        \`status\` = 'UNINSTALLED',
+        \`uninstalledAt\` = UTC_TIMESTAMP(3),
+        \`updatedAt\` = UTC_TIMESTAMP(3)
+      WHERE \`shop\` = ${shop}
     `,
     db.$executeRaw`
-      UPDATE "AiSearchSubscription"
+      UPDATE \`AiSearchSubscription\`
       SET
-        "status" = 'INACTIVE',
-        "updatedAt" = CURRENT_TIMESTAMP
-      WHERE "shop" = ${shop}
+        \`status\` = 'INACTIVE',
+        \`updatedAt\` = UTC_TIMESTAMP(3)
+      WHERE \`shop\` = ${shop}
     `,
     db.$executeRaw`
-      UPDATE "AiSearchSyncJob"
+      UPDATE \`AiSearchSyncJob\`
       SET
-        "status" = 'CANCELLED',
-        "lastError" = 'SHOP_UNINSTALLED',
-        "processedAt" = CURRENT_TIMESTAMP,
-        "updatedAt" = CURRENT_TIMESTAMP
-      WHERE "shop" = ${shop} AND "status" IN ('PENDING', 'PROCESSING', 'FAILED')
+        \`status\` = 'CANCELLED',
+        \`lastError\` = 'SHOP_UNINSTALLED',
+        \`processedAt\` = UTC_TIMESTAMP(3),
+        \`updatedAt\` = UTC_TIMESTAMP(3)
+      WHERE \`shop\` = ${shop} AND \`status\` IN ('PENDING', 'PROCESSING', 'FAILED')
     `,
     db.$executeRaw`
-      UPDATE "AiSearchCatalogSyncJob"
+      UPDATE \`AiSearchCatalogSyncJob\`
       SET
-        "status" = 'CANCELLED',
-        "lastError" = 'SHOP_UNINSTALLED',
-        "processedAt" = CURRENT_TIMESTAMP,
-        "updatedAt" = CURRENT_TIMESTAMP
-      WHERE "shop" = ${shop} AND "status" IN ('PENDING', 'PROCESSING', 'FAILED')
+        \`status\` = 'CANCELLED',
+        \`lastError\` = 'SHOP_UNINSTALLED',
+        \`processedAt\` = UTC_TIMESTAMP(3),
+        \`updatedAt\` = UTC_TIMESTAMP(3)
+      WHERE \`shop\` = ${shop} AND \`status\` IN ('PENDING', 'PROCESSING', 'FAILED')
     `,
   ]);
 }
@@ -503,12 +505,12 @@ export async function deleteShopCommercialData(shop: string) {
 
   await db.$transaction([
     db.$executeRaw`
-      DELETE FROM "AiSearchSyncJob"
-      WHERE "shop" = ${shop}
+      DELETE FROM \`AiSearchSyncJob\`
+      WHERE \`shop\` = ${shop}
     `,
     db.$executeRaw`
-      DELETE FROM "AiSearchShop"
-      WHERE "shop" = ${shop}
+      DELETE FROM \`AiSearchShop\`
+      WHERE \`shop\` = ${shop}
     `,
   ]);
 }
@@ -540,12 +542,12 @@ export async function updateShopQuotaOverrides({
   const vectorLimit = normalizeQuotaOverride(vectorUpdateLimitOverride);
 
   await db.$executeRaw`
-    UPDATE "AiSearchShopSettings"
+    UPDATE \`AiSearchShopSettings\`
     SET
-      "productLimitOverride" = ${productLimit},
-      "searchLimitOverride" = ${searchLimit},
-      "vectorUpdateLimitOverride" = ${vectorLimit},
-      "updatedAt" = CURRENT_TIMESTAMP
-    WHERE "shop" = ${shop}
+      \`productLimitOverride\` = ${productLimit},
+      \`searchLimitOverride\` = ${searchLimit},
+      \`vectorUpdateLimitOverride\` = ${vectorLimit},
+      \`updatedAt\` = UTC_TIMESTAMP(3)
+    WHERE \`shop\` = ${shop}
   `;
 }

@@ -1,45 +1,45 @@
 // AI Search Bridge - Prisma schema
-// Development database: SQLite.
-// Production can move to PostgreSQL/MySQL after replacing the datasource.
+// Production database: MySQL.
+// DATABASE_URL is supplied through the environment.
 
 generator client {
   provider = "prisma-client-js"
 }
 
 datasource db {
-  provider = "sqlite"
-  url      = "file:dev.sqlite"
+  provider = "mysql"
+  url      = env("DATABASE_URL")
 }
 
 model Session {
-  id                  String    @id
-  shop                String
-  state               String
+  id                  String    @id @db.VarChar(191)
+  shop                String    @db.VarChar(191)
+  state               String    @db.VarChar(255)
   isOnline            Boolean   @default(false)
-  scope               String?
+  scope               String?   @db.Text
   expires             DateTime?
-  accessToken         String
+  accessToken         String    @db.Text
   userId              BigInt?
-  firstName           String?
-  lastName            String?
-  email               String?
+  firstName           String?   @db.VarChar(255)
+  lastName            String?   @db.VarChar(255)
+  email               String?   @db.VarChar(320)
   accountOwner        Boolean   @default(false)
-  locale              String?
+  locale              String?   @db.VarChar(32)
   collaborator        Boolean?  @default(false)
   emailVerified       Boolean?  @default(false)
-  refreshToken        String?
+  refreshToken        String?   @db.Text
   refreshTokenExpires DateTime?
 }
 
 model AiSearchSyncJob {
   id          Int       @id @default(autoincrement())
-  shop        String
-  webhookId   String    @unique
-  topic       String
-  productId   String
-  status      String    @default("PENDING")
+  shop        String    @db.VarChar(191)
+  webhookId   String    @unique @db.VarChar(191)
+  topic       String    @db.VarChar(191)
+  productId   String    @db.VarChar(64)
+  status      String    @default("PENDING") @db.VarChar(64)
   attempts    Int       @default(0)
-  lastError   String?
+  lastError   String?   @db.Text
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
   startedAt   DateTime?
@@ -50,9 +50,9 @@ model AiSearchSyncJob {
 }
 
 model AiSearchLeaseLock {
-  shop       String
-  resource   String
-  ownerToken String
+  shop       String   @db.VarChar(191)
+  resource   String   @db.VarChar(191)
+  ownerToken String   @db.VarChar(191)
   leaseUntil DateTime
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
@@ -66,9 +66,9 @@ model AiSearchLeaseLock {
 // =====================================================
 
 model AiSearchShop {
-  shop          String    @id
-  shopifyShopId String?
-  status        String    @default("ACTIVE")
+  shop          String    @id @db.VarChar(191)
+  shopifyShopId String?   @db.VarChar(191)
+  status        String    @default("ACTIVE") @db.VarChar(64)
   installedAt   DateTime  @default(now())
   uninstalledAt DateTime?
   createdAt     DateTime  @default(now())
@@ -86,14 +86,14 @@ model AiSearchShop {
 
 model AiSearchSubscription {
   id                    Int       @id @default(autoincrement())
-  shop                  String    @unique
-  plan                  String    @default("NONE")
-  status                String    @default("INACTIVE")
-  planHandle            String?
-  shopifySubscriptionId String?
+  shop                  String    @unique @db.VarChar(191)
+  plan                  String    @default("NONE") @db.VarChar(64)
+  status                String    @default("INACTIVE") @db.VarChar(64)
+  planHandle            String?   @db.VarChar(191)
+  shopifySubscriptionId String?   @db.VarChar(191)
   billingPeriodStart    DateTime?
   billingPeriodEnd      DateTime?
-  source                String    @default("LOCAL")
+  source                String    @default("LOCAL") @db.VarChar(64)
   lastSyncedAt          DateTime?
   createdAt             DateTime  @default(now())
   updatedAt             DateTime  @updatedAt
@@ -104,8 +104,8 @@ model AiSearchSubscription {
 }
 
 model AiSearchShopSettings {
-  searchLanguage            String?
-  shop                      String   @id
+  searchLanguage            String?  @db.VarChar(32)
+  shop                      String   @id @db.VarChar(191)
   aiSearchEnabled           Boolean  @default(true)
   customDataModeEnabled     Boolean  @default(false)
   fallbackEnabled           Boolean  @default(true)
@@ -121,8 +121,8 @@ model AiSearchShopSettings {
 
 model AiSearchUsagePeriod {
   id                    Int      @id @default(autoincrement())
-  shop                  String
-  periodKey             String
+  shop                  String   @db.VarChar(191)
+  periodKey             String   @db.VarChar(64)
   periodStart           DateTime
   periodEnd             DateTime
   searchCount           Int      @default(0)
@@ -147,15 +147,15 @@ model AiSearchUsagePeriod {
 
 model AiSearchUsageEvent {
   id           Int      @id @default(autoincrement())
-  shop         String
+  shop         String   @db.VarChar(191)
   periodId     Int?
-  type         String
+  type         String   @db.VarChar(64)
   quantity     Int      @default(1)
   success      Boolean  @default(true)
-  productId    String?
-  queryHash    String?
+  productId    String?  @db.VarChar(64)
+  queryHash    String?  @db.VarChar(64)
   jobId        Int?
-  metadataJson String?
+  metadataJson String?  @db.LongText
   createdAt    DateTime @default(now())
 
   shopRecord AiSearchShop         @relation(fields: [shop], references: [shop], onDelete: Cascade)
@@ -166,24 +166,24 @@ model AiSearchUsageEvent {
 }
 
 model AiSearchQueryLog {
-  id                  String   @id @default(cuid())
-  shop                String
-  query               String
-  normalizedQuery     String
-  queryHash           String
-  queryVectorJson     String?
-  analyzedQuery       String?
-  llmAnalysisJson     String?
-  selectedContextJson String?
-  rankedProductsJson  String
+  id                  String   @id @default(cuid()) @db.VarChar(191)
+  shop                String   @db.VarChar(191)
+  query               String   @db.Text
+  normalizedQuery     String   @db.VarChar(500)
+  queryHash           String   @db.VarChar(64)
+  queryVectorJson     String?  @db.LongText
+  analyzedQuery       String?  @db.Text
+  llmAnalysisJson     String?  @db.LongText
+  selectedContextJson String?  @db.LongText
+  rankedProductsJson  String   @db.LongText
   resultCount         Int      @default(0)
   candidateCount      Int      @default(0)
   topScore            Float?
   topCandidateScore   Float?
   vectorThreshold     Float
   embeddingCacheHit   Boolean  @default(false)
-  llmStatus           String
-  llmFallbackReason   String?
+  llmStatus           String   @db.VarChar(64)
+  llmFallbackReason   String?  @db.Text
   totalDurationMs     Int
   createdAt           DateTime @default(now())
 
@@ -197,9 +197,9 @@ model AiSearchQueryLog {
 
 model AiSearchQueryClick {
   id          Int      @id @default(autoincrement())
-  searchLogId String
-  shop        String
-  productId   String
+  searchLogId String   @db.VarChar(191)
+  shop        String   @db.VarChar(191)
+  productId   String   @db.VarChar(64)
   rank        Int
   score       Float?
   createdAt   DateTime @default(now())
@@ -212,14 +212,14 @@ model AiSearchQueryClick {
 }
 
 model AiSearchUsageReservation {
-  id                  String    @id
-  shop                String
+  id                  String    @id @db.VarChar(191)
+  shop                String    @db.VarChar(191)
   periodId            Int
-  kind                String
-  status              String    @default("PENDING")
+  kind                String    @db.VarChar(64)
+  status              String    @default("PENDING") @db.VarChar(64)
   countsVectorUpdate  Boolean   @default(false)
-  productId           String?
-  queryHash           String?
+  productId           String?   @db.VarChar(64)
+  queryHash           String?   @db.VarChar(64)
   embeddingConsumedAt DateTime?
   effectAppliedAt     DateTime?
   resolvedAt          DateTime?
@@ -239,13 +239,13 @@ model AiSearchUsageReservation {
 
 model AiSearchIndexedProduct {
   id                Int       @id @default(autoincrement())
-  shop              String
-  productId         String
-  handle            String
-  title             String
-  status            String    @default("INDEXED")
+  shop              String    @db.VarChar(191)
+  productId         String    @db.VarChar(64)
+  handle            String    @db.VarChar(255)
+  title             String    @db.VarChar(255)
+  status            String    @default("INDEXED") @db.VarChar(64)
   hasVector         Boolean   @default(false)
-  documentHash      String?
+  documentHash      String?   @db.VarChar(64)
   lastIndexedAt     DateTime?
   lastSeenAt        DateTime  @default(now())
   lastCatalogSeenAt DateTime?
@@ -265,11 +265,11 @@ model AiSearchIndexedProduct {
 // PENDING/PROCESSING job is created by the service at a time.
 model AiSearchCatalogSyncJob {
   id                Int       @id @default(autoincrement())
-  shop              String
-  reason            String    @default("INITIAL")
-  planAtStart       String?
-  status            String    @default("PENDING")
-  cursor            String?
+  shop              String    @db.VarChar(191)
+  reason            String    @default("INITIAL") @db.VarChar(64)
+  planAtStart       String?   @db.VarChar(64)
+  status            String    @default("PENDING") @db.VarChar(64)
+  cursor            String?   @db.Text
   pagesProcessed    Int       @default(0)
   productsProcessed Int       @default(0)
   productsIndexed   Int       @default(0)
@@ -277,7 +277,7 @@ model AiSearchCatalogSyncJob {
   productsBlocked   Int       @default(0)
   productsFailed    Int       @default(0)
   attempts          Int       @default(0)
-  lastError         String?
+  lastError         String?   @db.Text
   createdAt         DateTime  @default(now())
   updatedAt         DateTime  @updatedAt
   // Stable timestamp for one logical full-catalog scan. Unlike startedAt,
@@ -294,11 +294,11 @@ model AiSearchCatalogSyncJob {
 }
 
 model ShopThemeConfig {
-  shop            String   @id
-  themeId         String
+  shop            String   @id @db.VarChar(191)
+  themeId         String   @db.VarChar(64)
   appEmbedEnabled Boolean  @default(true)
-  activeThemeJson String
-  themeMapJson    String
+  activeThemeJson String   @db.LongText
+  themeMapJson    String   @db.LongText
   updatedAt       DateTime @updatedAt
 }
 
@@ -312,23 +312,23 @@ model ShopThemeConfig {
 // it is retained only for recovery/debug/rollback tooling.
 model AiSearchThemeMapV4 {
   id               Int     @id @default(autoincrement())
-  shop             String
-  themeId          String
-  themeGid         String
-  themeName        String?
+  shop             String  @db.VarChar(191)
+  themeId          String  @db.VarChar(64)
+  themeGid         String  @db.VarChar(191)
+  themeName        String? @db.VarChar(255)
   schemaVersion    Int     @default(4)
-  mapStatus        String
-  sourceMode       String  @default("COMPILER")
-  themeVersionKey  String
-  fingerprint      String
-  mapJson          String
-  dependenciesJson String
-  failureReason    String?
+  mapStatus        String  @db.VarChar(64)
+  sourceMode       String  @default("COMPILER") @db.VarChar(64)
+  themeVersionKey  String  @db.VarChar(255)
+  fingerprint      String  @db.VarChar(64)
+  mapJson          String  @db.LongText
+  dependenciesJson String  @db.LongText
+  failureReason    String? @db.Text
 
-  verifiedThemeVersionKey  String?
-  verifiedFingerprint      String?
-  verifiedMapJson          String?
-  verifiedDependenciesJson String?
+  verifiedThemeVersionKey  String? @db.VarChar(255)
+  verifiedFingerprint      String? @db.VarChar(64)
+  verifiedMapJson          String? @db.LongText
+  verifiedDependenciesJson String? @db.LongText
 
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
@@ -341,11 +341,11 @@ model AiSearchThemeMapV4 {
 }
 
 model AiSearchResultReceipt {
-  receiptId          String   @id
-  shop               String
-  query              String
-  searchLogId        String?
-  rankedProductsJson String
+  receiptId          String   @id @db.VarChar(191)
+  shop               String   @db.VarChar(191)
+  query              String   @db.Text
+  searchLogId        String?  @db.VarChar(191)
+  rankedProductsJson String   @db.LongText
   total              Int
   createdAt          DateTime @default(now())
   expiresAt          DateTime
@@ -358,11 +358,11 @@ model AiSearchResultReceipt {
 // code reads this compact index instead of sending catalog data to the query LLM.
 model AiSearchShopContextTerm {
   id              Int      @id @default(autoincrement())
-  shop            String
-  productId       String
-  kind            String
-  value           String
-  normalizedValue String
+  shop            String   @db.VarChar(191)
+  productId       String   @db.VarChar(64)
+  kind            String   @db.VarChar(64)
+  value           String   @db.VarChar(255)
+  normalizedValue String   @db.VarChar(255)
   createdAt       DateTime @default(now())
 
   productRecord AiSearchIndexedProduct @relation(fields: [shop, productId], references: [shop, productId], onDelete: Cascade)
@@ -371,15 +371,15 @@ model AiSearchShopContextTerm {
   @@index([shop, kind])
   @@index([shop, normalizedValue])
 }
-model AiSearchRenderTransportKey {
-  id              Int      @id @default(autoincrement())
 
-  shop            String
-  productId       String
+model AiSearchRenderTransportKey {
+  id Int @id @default(autoincrement())
+
+  shop      String @db.VarChar(191)
+  productId String @db.VarChar(64)
 
   /**
    * Loại signature.
-   *
    * VARIANT_SKU
    * VARIANT_BARCODE
    * TITLE_ONLY
@@ -388,42 +388,34 @@ model AiSearchRenderTransportKey {
    * TITLE_VENDOR_PRODUCT_TYPE
    * TITLE_VENDOR_PRODUCT_TYPE_TAG
    */
-  kind            String
+  kind String @db.VarChar(64)
 
   /**
    * Giá trị canonical dùng để so unique giữa các product.
-   *
    * Ví dụ:
-   *
    * selling plans ski wax\u001fadd-get-d-test\u001faccessories
    */
-  signature       String
+  signature String @db.VarChar(400)
 
   /**
    * Shopify Storefront Search clause đã compile sẵn.
-   *
    * Ví dụ:
-   *
    * (title:"Selling Plans Ski Wax"
-   *  AND vendor:"add-get-d-test"
-   *  AND product_type:"accessories")
+   * AND vendor:"add-get-d-test"
+   * AND product_type:"accessories")
    */
-  clause          String
+  clause String @db.Text
 
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@unique([shop, productId, kind, signature])
-
   /**
    * Runtime dùng index này để hỏi:
-   *
    * signature X thuộc bao nhiêu product?
-   *
    * Nếu đúng 1 owner => safe transport key.
    */
   @@index([shop, kind, signature])
-
   /**
    * Lấy toàn bộ candidate key của một AI product.
    */

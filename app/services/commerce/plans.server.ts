@@ -38,7 +38,7 @@ export const PLAN_DEFINITIONS: Record<AiSearchPlan, PlanDefinition> = {
     limits: {
       productLimit: 500,
       searchLimit: 3_000,
-      vectorUpdateLimit: 50,
+      vectorUpdateLimit: 500,
     },
   },
   PRO: {

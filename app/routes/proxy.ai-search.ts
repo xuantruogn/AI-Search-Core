@@ -7,7 +7,8 @@ import {
 } from "../services/search/semantic-search.server";
 import { recordSearchQueryLog } from "../services/search/search-analytics.server";
 import { parsePriceConstraint } from "../services/search/query-constraints.server";
-import { rewriteSearchQuery } from "../services/search/query-rewriter.server";
+import { prepareQueryRewrite } from "../services/search/conditional-query-llm.server";
+import { retrieveStructuredCandidates } from "../services/search/structured-candidate-retrieval.server";
 import {
   applyShopContextToQuery,
   filterResultsByExplicitGender,
@@ -18,6 +19,7 @@ import {
   type SearchPriceFilterDiagnostics,
 } from "../services/search/search-price-filter.server";
 import { classifySearchRequest } from "../services/search/search-request-router.server";
+import { buildQueryPlan } from "../services/search/query-planner.server";
 import {
   getSearchResultPage,
   saveSearchResult,
@@ -623,6 +625,37 @@ const resultCacheStatus = "MISS" as const;
             .customDataModeEnabled,
         );
 
+      let themeMapBootstrap:
+        | {
+            theme_id: string;
+            map_fingerprint: string;
+            mount: ThemeRendererCandidate["mount"];
+          }
+        | null = null;
+
+      if (!isCustomDataMode) {
+        const syncedMap =
+          await loadSyncedThemeMapForStorefront({
+            shop: session.shop,
+            themeId:
+              requestUrl.searchParams.get("theme_id"),
+          });
+
+        if (syncedMap.ok) {
+          const bootstrapCandidate =
+            getThemeResultRendererCandidates(syncedMap.map)[0] ??
+            getThemeContextTransportCandidate(syncedMap.map);
+
+          if (bootstrapCandidate?.mount) {
+            themeMapBootstrap = {
+              theme_id: syncedMap.map.theme.id,
+              map_fingerprint: syncedMap.map.fingerprint,
+              mount: bootstrapCandidate.mount,
+            };
+          }
+        }
+      }
+
       return Response.json(
         {
           status: "success",
@@ -632,6 +665,7 @@ const resultCacheStatus = "MISS" as const;
               : "v4",
           customDataModeEnabled:
             isCustomDataMode,
+          themeMapBootstrap,
         },
         {
           headers: {
@@ -2035,16 +2069,41 @@ const resultCacheStatus = "MISS" as const;
       const rewriteStartedAt =
         Date.now();
 
+      const queryRouterEnabled = !["0", "false", "off", "no"].includes(
+        process.env.AI_SEARCH_QUERY_ROUTER_ENABLED?.trim().toLowerCase() ?? "",
+      );
+      const queryPlanStartedAt = Date.now();
+      const queryPlan = queryRouterEnabled
+        ? await buildQueryPlan(session.shop, query)
+        : null;
+
       executionPhase =
         "rewrite";
 
-      const interpretedQuery =
-        await rewriteSearchQuery({
-          shop:
-            session.shop,
+      const interpretedQuery = queryPlan
+        ? await prepareQueryRewrite({ shop: session.shop, query, plan: queryPlan })
+        : await import("../services/search/query-rewriter.server").then(({ rewriteSearchQuery }) =>
+            rewriteSearchQuery({ shop: session.shop, query }),
+          );
 
+      if (queryPlan) {
+        console.log("[AI Search][QUERY PLAN]", {
+          shop: session.shop,
           query,
+          route: queryPlan.route,
+          resolvedSegments: queryPlan.resolvedSegments,
+          unresolvedSegments: queryPlan.unresolvedSegments,
+          semanticQuery: queryPlan.semanticQuery,
+          semanticResolution: interpretedQuery.planning?.semanticResolution,
+          semanticResolutionConfidence:
+            interpretedQuery.planning?.semanticResolutionConfidence,
+          routerReason: queryPlan.routerReason,
+          llmCalled: interpretedQuery.timing?.llmCallCount === 1,
+          embeddingExpected: queryPlan.route !== "STRUCTURED_ONLY",
+          planAndLlmMs: Date.now() - queryPlanStartedAt,
+          versions: queryPlan.versions,
         });
+      }
 
       const preparedRewrite =
         await applyShopContextToQuery(
@@ -2096,8 +2155,35 @@ const resultCacheStatus = "MISS" as const;
       executionPhase =
         "semanticSearch";
 
-      const rawSearchResults =
-        await semanticSearch({
+      let rawSearchResults;
+      if (queryPlan?.route === "STRUCTURED_ONLY") {
+        const structuredStartedAt = Date.now();
+        rawSearchResults = await retrieveStructuredCandidates({
+          shop: session.shop,
+          plan: queryPlan,
+          limit: SEARCH_LIMIT,
+        });
+        console.log("[AI Search][STRUCTURED RETRIEVAL]", {
+          shop: session.shop,
+          route: queryPlan.route,
+          resultCount: rawSearchResults.length,
+          durationMs: Date.now() - structuredStartedAt,
+          llmCalled: false,
+          embeddingCalled: false,
+          qdrantCalled: false,
+        });
+      }
+
+      if (!rawSearchResults || rawSearchResults.length === 0) {
+        if (queryPlan?.route === "STRUCTURED_ONLY") {
+          console.log("[AI Search][ROUTE FALLBACK]", {
+            shop: session.shop,
+            from: "STRUCTURED_ONLY",
+            to: "VECTOR_SEMANTIC",
+            reason: "NO_STRUCTURED_CANDIDATES",
+          });
+        }
+        rawSearchResults = await semanticSearch({
           preparedRewrite,
 
           shop:
@@ -2151,6 +2237,7 @@ const resultCacheStatus = "MISS" as const;
                 diagnostics;
             },
         });
+      }
 
       console.timeEnd(
         "[PERF-PROXY] 2. Semantic Search (OpenAI/Vector Cache + Qdrant)",

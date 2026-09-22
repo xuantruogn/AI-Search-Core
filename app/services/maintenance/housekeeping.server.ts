@@ -30,23 +30,23 @@ async function enqueueDueStorefrontCatalogReconciliations() {
   const cutoff = new Date(Date.now() - intervalHours * 60 * 60 * 1000);
 
   const shops = await db.$queryRaw<Array<{ shop: string }>>`
-    SELECT s."shop"
-    FROM "AiSearchShop" s
-    JOIN "AiSearchSubscription" sub ON sub."shop" = s."shop"
+    SELECT s.\`shop\`
+    FROM \`AiSearchShop\` s
+    JOIN \`AiSearchSubscription\` sub ON sub.\`shop\` = s.\`shop\`
     WHERE
-      s."status" = 'ACTIVE'
-      AND sub."status" = 'ACTIVE'
+      s.\`status\` = 'ACTIVE'
+      AND sub.\`status\` = 'ACTIVE'
       AND NOT EXISTS (
-        SELECT 1 FROM "AiSearchCatalogSyncJob" activeJob
-        WHERE activeJob."shop" = s."shop"
-          AND activeJob."status" IN ('PENDING', 'PROCESSING')
+        SELECT 1 FROM \`AiSearchCatalogSyncJob\` activeJob
+        WHERE activeJob.\`shop\` = s.\`shop\`
+          AND activeJob.\`status\` IN ('PENDING', 'PROCESSING')
       )
-      AND julianday(COALESCE((
-        SELECT MAX(doneJob."processedAt")
-        FROM "AiSearchCatalogSyncJob" doneJob
-        WHERE doneJob."shop" = s."shop" AND doneJob."status" = 'DONE'
-      ), '1970-01-01 00:00:00')) < julianday(${cutoff.toISOString()})
-    ORDER BY s."updatedAt" ASC
+      AND COALESCE((
+        SELECT MAX(doneJob.\`processedAt\`)
+        FROM \`AiSearchCatalogSyncJob\` doneJob
+        WHERE doneJob.\`shop\` = s.\`shop\` AND doneJob.\`status\` = 'DONE'
+      ), '1970-01-01 00:00:00') < ${cutoff}
+    ORDER BY s.\`updatedAt\` ASC
     LIMIT ${batchSize}
   `;
 
@@ -112,44 +112,44 @@ export async function runAiSearchHousekeeping() {
     failedCatalogJobsDeleted,
   ] = await db.$transaction([
     db.$executeRaw`
-        DELETE FROM "AiSearchUsageEvent"
-        WHERE "createdAt" < ${usageCutoff}
+        DELETE FROM \`AiSearchUsageEvent\`
+        WHERE \`createdAt\` < ${usageCutoff}
       `,
     db.$executeRaw`
-        DELETE FROM "AiSearchQueryLog"
-        WHERE "createdAt" < ${queryLogCutoff}
+        DELETE FROM \`AiSearchQueryLog\`
+        WHERE \`createdAt\` < ${queryLogCutoff}
       `,
     db.$executeRaw`
-        DELETE FROM "AiSearchSyncJob"
+        DELETE FROM \`AiSearchSyncJob\`
         WHERE
-          "status" IN ('DONE', 'CANCELLED')
-          AND "processedAt" IS NOT NULL
-          AND "processedAt" < ${productJobCutoff}
+          \`status\` IN ('DONE', 'CANCELLED')
+          AND \`processedAt\` IS NOT NULL
+          AND \`processedAt\` < ${productJobCutoff}
       `,
     db.$executeRaw`
-        DELETE FROM "AiSearchCatalogSyncJob"
+        DELETE FROM \`AiSearchCatalogSyncJob\`
         WHERE
-          "status" IN ('DONE', 'CANCELLED')
-          AND "processedAt" IS NOT NULL
-          AND "processedAt" < ${catalogJobCutoff}
+          \`status\` IN ('DONE', 'CANCELLED')
+          AND \`processedAt\` IS NOT NULL
+          AND \`processedAt\` < ${catalogJobCutoff}
       `,
     // Exhausted/manual-review failures are intentionally retained much
     // longer than successful jobs, but not forever. This prevents an old
-    // store with repeated downstream failures from growing SQLite without
+    // store with repeated downstream failures from growing the database without
     // bound while preserving a useful troubleshooting window.
     db.$executeRaw`
-        DELETE FROM "AiSearchSyncJob"
+        DELETE FROM \`AiSearchSyncJob\`
         WHERE
-          "status" = 'FAILED'
-          AND "processedAt" IS NOT NULL
-          AND "processedAt" < ${failedProductJobCutoff}
+          \`status\` = 'FAILED'
+          AND \`processedAt\` IS NOT NULL
+          AND \`processedAt\` < ${failedProductJobCutoff}
       `,
     db.$executeRaw`
-        DELETE FROM "AiSearchCatalogSyncJob"
+        DELETE FROM \`AiSearchCatalogSyncJob\`
         WHERE
-          "status" = 'FAILED'
-          AND "processedAt" IS NOT NULL
-          AND "processedAt" < ${failedCatalogJobCutoff}
+          \`status\` = 'FAILED'
+          AND \`processedAt\` IS NOT NULL
+          AND \`processedAt\` < ${failedCatalogJobCutoff}
       `,
   ]);
 

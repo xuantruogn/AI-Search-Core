@@ -34,26 +34,24 @@ async function tryAcquire({
   const now = new Date();
   const leaseUntil = new Date(now.getTime() + leaseMs);
 
-  // UPSERT only steals an existing lock after its lease has expired. This is
-  // atomic in SQLite and also maps cleanly to PostgreSQL's ON CONFLICT model
-  // when production storage is migrated later.
+  // MySQL evaluates assignments left-to-right. Test the old lease for every
+  // assignment and update leaseUntil last, so a live owner is never replaced.
   await db.$executeRaw`
-    INSERT INTO "AiSearchLeaseLock" (
-      "shop", "resource", "ownerToken", "leaseUntil", "createdAt", "updatedAt"
+    INSERT INTO \`AiSearchLeaseLock\` (
+      \`shop\`, \`resource\`, \`ownerToken\`, \`leaseUntil\`, \`createdAt\`, \`updatedAt\`
     ) VALUES (
-      ${shop}, ${resource}, ${ownerToken}, ${leaseUntil}, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+      ${shop}, ${resource}, ${ownerToken}, ${leaseUntil}, UTC_TIMESTAMP(3), UTC_TIMESTAMP(3)
     )
-    ON CONFLICT("shop", "resource") DO UPDATE SET
-      "ownerToken" = excluded."ownerToken",
-      "leaseUntil" = excluded."leaseUntil",
-      "updatedAt" = CURRENT_TIMESTAMP
-    WHERE "AiSearchLeaseLock"."leaseUntil" <= ${now}
+    ON DUPLICATE KEY UPDATE
+      \`ownerToken\` = IF(\`leaseUntil\` <= ${now}, ${ownerToken}, \`ownerToken\`),
+      \`updatedAt\` = IF(\`leaseUntil\` <= ${now}, UTC_TIMESTAMP(3), \`updatedAt\`),
+      \`leaseUntil\` = IF(\`leaseUntil\` <= ${now}, ${leaseUntil}, \`leaseUntil\`)
   `;
 
   const rows = await db.$queryRaw<Array<{ ownerToken: string }>>`
-    SELECT "ownerToken"
-    FROM "AiSearchLeaseLock"
-    WHERE "shop" = ${shop} AND "resource" = ${resource}
+    SELECT \`ownerToken\`
+    FROM \`AiSearchLeaseLock\`
+    WHERE \`shop\` = ${shop} AND \`resource\` = ${resource}
     LIMIT 1
   `;
 
@@ -74,12 +72,12 @@ async function renewLease({
   const leaseUntil = new Date(Date.now() + leaseMs);
 
   return db.$executeRaw`
-    UPDATE "AiSearchLeaseLock"
-    SET "leaseUntil" = ${leaseUntil}, "updatedAt" = CURRENT_TIMESTAMP
+    UPDATE \`AiSearchLeaseLock\`
+    SET \`leaseUntil\` = ${leaseUntil}, \`updatedAt\` = UTC_TIMESTAMP(3)
     WHERE
-      "shop" = ${shop}
-      AND "resource" = ${resource}
-      AND "ownerToken" = ${ownerToken}
+      \`shop\` = ${shop}
+      AND \`resource\` = ${resource}
+      AND \`ownerToken\` = ${ownerToken}
   `;
 }
 
@@ -93,11 +91,11 @@ async function releaseLease({
   ownerToken: string;
 }) {
   await db.$executeRaw`
-    DELETE FROM "AiSearchLeaseLock"
+    DELETE FROM \`AiSearchLeaseLock\`
     WHERE
-      "shop" = ${shop}
-      AND "resource" = ${resource}
-      AND "ownerToken" = ${ownerToken}
+      \`shop\` = ${shop}
+      AND \`resource\` = ${resource}
+      AND \`ownerToken\` = ${ownerToken}
   `;
 }
 
@@ -113,9 +111,9 @@ async function stillOwnsLease({
   const rows = await db.$queryRaw<
     Array<{ ownerToken: string; leaseUntil: Date }>
   >`
-    SELECT "ownerToken", "leaseUntil"
-    FROM "AiSearchLeaseLock"
-    WHERE "shop" = ${shop} AND "resource" = ${resource}
+    SELECT \`ownerToken\`, \`leaseUntil\`
+    FROM \`AiSearchLeaseLock\`
+    WHERE \`shop\` = ${shop} AND \`resource\` = ${resource}
     LIMIT 1
   `;
   const row = rows[0];
@@ -222,15 +220,15 @@ export async function withDistributedLease<T>({
 
 export async function deleteShopLeaseLocks(shop: string) {
   await db.$executeRaw`
-    DELETE FROM "AiSearchLeaseLock"
-    WHERE "shop" = ${shop}
+    DELETE FROM \`AiSearchLeaseLock\`
+    WHERE \`shop\` = ${shop}
   `;
 }
 
 export async function deleteExpiredLeaseLocks(now = new Date()) {
   return db.$executeRaw`
-    DELETE FROM "AiSearchLeaseLock"
-    WHERE "leaseUntil" <= ${now}
+    DELETE FROM \`AiSearchLeaseLock\`
+    WHERE \`leaseUntil\` <= ${now}
   `;
 }
 

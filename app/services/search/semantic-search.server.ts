@@ -116,6 +116,7 @@ export async function semanticSearch({
   let qdrantResponseMappingCodeMs = 0;
   let thresholdFilterCodeMs = 0;
   let resultMappingCodeMs = 0;
+  let effectiveRewrite = preparedRewrite;
 
   // Start Qdrant lazily.
   // Query ngoài catalog không cần chạm Qdrant.
@@ -217,6 +218,7 @@ export async function semanticSearch({
             rewrite:
               interpreted,
           });
+    effectiveRewrite = rewrite;
 
     llmStatus =
       rewrite.fallbackReason
@@ -229,13 +231,8 @@ export async function semanticSearch({
     if (
       shouldLogEmbeddingInput()
     ) {
-      const traceMessage =
-        rewrite.fallbackReason
-          ? "[AI Search][QUERY TRACE] LLM analysis unavailable; fallback used"
-          : "[AI Search][QUERY TRACE] LLM analysis completed";
-
       console.log(
-        traceMessage,
+        "[AI Search][QUERY TRACE] Query analysis prepared",
         {
           shop,
 
@@ -264,6 +261,19 @@ export async function semanticSearch({
 
           rewriteFallbackReason:
             rewrite.fallbackReason,
+
+          route: rewrite.planning?.route ?? "LEGACY",
+
+          analysisSource: rewrite.timing?.llmCallCount
+            ? "LLM"
+            : "CODE",
+
+          semanticQuery: rewrite.planning?.semanticQuery ?? rewrite.query,
+
+          semanticResolution: rewrite.planning?.semanticResolution ?? "LEGACY",
+
+          semanticResolutionConfidence:
+            rewrite.planning?.semanticResolutionConfidence ?? rewrite.analysis.confidence,
 
           embeddingModel:
             getEmbeddingModel(),
@@ -502,6 +512,12 @@ export async function semanticSearch({
           embeddingDetails
             ?.responseEncoding ??
           "base64",
+
+        clientAgeMs:
+          embeddingDetails?.clientAgeMs ?? null,
+
+        clientRequestOrdinal:
+          embeddingDetails?.clientRequestOrdinal ?? null,
       },
     );
 
@@ -521,6 +537,18 @@ export async function semanticSearch({
 
         embeddingInputLength:
           rewrite.query.length,
+
+        embeddingInput:
+          rewrite.query,
+
+        route:
+          rewrite.planning?.route ?? "LEGACY",
+
+        semanticResolution:
+          rewrite.planning?.semanticResolution ?? "LEGACY",
+
+        semanticResolutionConfidence:
+          rewrite.planning?.semanticResolutionConfidence ?? rewrite.analysis.confidence,
       },
     );
 
@@ -650,8 +678,38 @@ export async function semanticSearch({
     throw retrieval.reason;
   }
 
-  const results =
-    retrieval.value;
+  let results = retrieval.value;
+
+  const identityIds = effectiveRewrite?.context?.identityCandidateProductIds ?? [];
+  const vectorCandidateCount = results.length;
+  if (identityIds.length > 0) {
+    const existing = new Set(results.map((result) => result.productId));
+    const identityRows = await db.aiSearchIndexedProduct.findMany({
+      where: {
+        shop,
+        productId: { in: identityIds.filter((id) => !existing.has(id)).slice(0, limit) },
+        status: "INDEXED",
+        hasVector: true,
+      },
+      select: { productId: true, handle: true, title: true },
+    });
+    const identitySet = new Set(identityIds);
+    results = [
+      ...results.map((result) => identitySet.has(result.productId)
+        ? { ...result, score: Math.min(1, result.score + 0.2) }
+        : result),
+      ...identityRows.map((row) => ({ ...row, score: 0.5 })),
+    ].sort((left, right) => right.score - left.score).slice(0, limit);
+  }
+  console.log("[AI Search][CANDIDATE GENERATION]", {
+    shop,
+    route: effectiveRewrite?.planning?.route ?? "LEGACY",
+    identityCandidateCount: identityIds.length,
+    vectorCandidateCount,
+    unionCandidateCount: results.length,
+    canonicalTypeCoverageComplete:
+      effectiveRewrite?.context?.canonicalTypeCoverageComplete ?? false,
+  });
 
   // ============================================================
   // 3. REGISTRY GUARD
@@ -793,6 +851,9 @@ export async function semanticSearch({
       shop,
 
       ensureMs,
+
+      qdrantEnsureMs:
+        ensureMs,
 
       embeddingMs,
 

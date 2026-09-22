@@ -1,7 +1,20 @@
 import OpenAI from "openai";
+import { Agent, fetch as undiciFetch } from "undici";
 
 let openaiClient: OpenAI | null = null;
 let openaiApiKey: string | null = null;
+let openaiClientCreatedAt = 0;
+let openaiRequestCount = 0;
+const openaiDispatcher = new Agent({
+  connections: 8,
+  pipelining: 1,
+  keepAliveTimeout: 60_000,
+  keepAliveMaxTimeout: 10 * 60_000,
+  connect: {
+    autoSelectFamily: true,
+    autoSelectFamilyAttemptTimeout: 250,
+  },
+});
 
 export function isOpenAiConfigured() {
   return Boolean(process.env.OPENAI_API_KEY?.trim());
@@ -17,8 +30,15 @@ export function getOpenAiClient() {
   // Shopify CLI can reload .env during development. Recreate the client when
   // the key changes instead of freezing the value at module-import time.
   if (!openaiClient || openaiApiKey !== apiKey) {
-    openaiClient = new OpenAI({ apiKey });
+    openaiClient = new OpenAI({
+      apiKey,
+      fetch: undiciFetch as unknown as typeof globalThis.fetch,
+      fetchOptions: { dispatcher: openaiDispatcher },
+      maxRetries: 0,
+    });
     openaiApiKey = apiKey;
+    openaiClientCreatedAt = Date.now();
+    openaiRequestCount = 0;
   }
 
   return openaiClient;
@@ -41,6 +61,8 @@ export type EmbeddingRequestDiagnostics = {
   resetRequests: string | null;
   resetTokens: string | null;
   responseEncoding: "base64";
+  clientAgeMs: number;
+  clientRequestOrdinal: number;
 };
 
 type CreateEmbeddingOptions = {
@@ -70,6 +92,7 @@ export async function createEmbedding(
   );
   const maxRetries = options.maxRetries ?? 2;
   const clientRequestId = crypto.randomUUID();
+  const clientRequestOrdinal = ++openaiRequestCount;
   const startedAt = Date.now();
   const embeddingRequest = getOpenAiClient().embeddings.create(
     {
@@ -139,6 +162,8 @@ export async function createEmbedding(
     resetRequests: rawResponse.headers.get("x-ratelimit-reset-requests"),
     resetTokens: rawResponse.headers.get("x-ratelimit-reset-tokens"),
     responseEncoding: "base64",
+    clientAgeMs: Math.max(0, Date.now() - openaiClientCreatedAt),
+    clientRequestOrdinal,
   });
 
   const encodedEmbedding = response.data[0]?.embedding as unknown;

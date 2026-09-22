@@ -1,351 +1,313 @@
-{% comment %}
-  AI Search Bridge
+  {% comment %}
+    AI Search Bridge
 
-  Engine selection:
-  - Dashboard customDataModeEnabled = ON  -> load V3 App Self Render.
-  - Dashboard customDataModeEnabled = OFF -> load V4 Theme Map flow.
-  - This file does not run Search/Qdrant. It only asks the App Proxy which
-    storefront engine is enabled, then loads exactly one client engine.
+    Engine selection:
+    - Dashboard customDataModeEnabled = ON  -> load V3 App Self Render.
+    - Dashboard customDataModeEnabled = OFF -> load V4 Theme Map flow.
+    - This file does not run Search/Qdrant. It only asks the App Proxy which
+      storefront engine is enabled, then loads exactly one client engine.
 
-  IMPORTANT:
-  - V4 early-boot behaviour is preserved for the V4 branch.
-  - V3 does not use Theme Map V4.
-  - When V3 is selected on an existing /search?q=... page,
-    this bridge redirects immediately to the Dedicated Page after
-    the V3 client has been loaded.
-{% endcomment %}
+    IMPORTANT:
+    - V3 does not use Theme Map V4.
+    - When V3 is selected on an existing /search?q=... page,
+      this bridge redirects immediately to the Dedicated Page after
+      the V3 client has been loaded.
+  {% endcomment %}
 
-<style>
-  /*
-   * Early boot is enabled only for the V4 branch.
-   * V3 releases these attributes before its client script starts.
-   */
-  html[data-ai-search-v4-early-boot="pending"] body {
-    visibility: hidden;
-  }
+  <script>
+    window.AI_SEARCH_CONFIG = {
+      version: 4,
+      theme_map_version: 4,
+      theme_id: {{ theme.id | json }},
+      search_url: {{ routes.search_url | json }},
+      search_endpoint: {{ block.settings.proxy_path | default: "/apps/ai-search" | json }},
+      unscopedSearchMode: {{ block.settings.unscoped_search_mode | json }}
+    };
+  </script>
 
-  /*
-   * search-interceptor.v4.js creates this loading layer.
-   * It must remain visible while the body is hidden.
-   */
-  html[data-ai-search-v4-early-boot="pending"]
-    [data-ai-search-v4-loading] {
-    visibility: visible;
-  }
-</style>
+  <script>
+    (function () {
+      "use strict";
 
-<script>
-  window.AI_SEARCH_CONFIG = {
-    version: 4,
-    theme_map_version: 4,
-    theme_id: {{ theme.id | json }},
-    search_url: {{ routes.search_url | json }},
-    search_endpoint: {{ block.settings.proxy_path | default: "/apps/ai-search" | json }},
-    unscopedSearchMode: {{ block.settings.unscoped_search_mode | json }}
-  };
-</script>
+      var config = window.AI_SEARCH_CONFIG || {};
+      var pathname = window.location.pathname || "";
+      var isSearchPage = /\/search\/?$/.test(pathname);
+      var currentParams = new URLSearchParams(window.location.search);
+      var isBypassSearch =
+        isSearchPage && currentParams.get("_ai_search_bypass") === "1";
+      var endpoint = config.search_endpoint || "/apps/ai-search";
 
-<script>
-  (function () {
-    "use strict";
+      /*
+      * V3 phải được bootstrap trên storefront pages vì ô Search của Theme
+      * có thể xuất hiện ở Homepage, Collection, Product, v.v.
+      *
+      * V4 vẫn giữ nguyên nguyên tắc cũ: chỉ boot trên native /search page.
+      */
 
-    var config = window.AI_SEARCH_CONFIG || {};
-    var pathname = window.location.pathname || "";
-    var isSearchPage = /\/search\/?$/.test(pathname);
-    var currentParams = new URLSearchParams(window.location.search);
-    var isBypassSearch =
-      isSearchPage && currentParams.get("_ai_search_bypass") === "1";
-    var endpoint = config.search_endpoint || "/apps/ai-search";
+      var root = document.documentElement;
 
-    /*
-     * V3 phải được bootstrap trên storefront pages vì ô Search của Theme
-     * có thể xuất hiện ở Homepage, Collection, Product, v.v.
-     *
-     * V4 vẫn giữ nguyên nguyên tắc cũ: chỉ boot trên native /search page.
-     */
+      function releaseEarlyBoot() {
+        root.removeAttribute("data-ai-search-v4-early-boot");
+        root.removeAttribute("aria-busy");
+      }
 
-    var root = document.documentElement;
+      function loadScript(src, label) {
+        return new Promise(function (resolve, reject) {
+          var selector =
+            'script[data-ai-search-engine="' + label + '"]';
 
-    function setV4EarlyBoot() {
-      root.setAttribute("data-ai-search-v4-early-boot", "pending");
-      root.setAttribute("aria-busy", "true");
-    }
+          var existing = document.querySelector(selector);
 
-    function releaseEarlyBoot() {
-      root.removeAttribute("data-ai-search-v4-early-boot");
-      root.removeAttribute("aria-busy");
-    }
+          if (existing) {
+            if (existing.dataset.aiSearchLoaded === "true") {
+              resolve();
+              return;
+            }
 
-    function loadScript(src, label) {
-      return new Promise(function (resolve, reject) {
-        var selector =
-          'script[data-ai-search-engine="' + label + '"]';
+            existing.addEventListener("load", function () {
+              resolve();
+            }, { once: true });
 
-        var existing = document.querySelector(selector);
+            existing.addEventListener("error", function (error) {
+              reject(error);
+            }, { once: true });
 
-        if (existing) {
-          if (existing.dataset.aiSearchLoaded === "true") {
-            resolve();
             return;
           }
 
-          existing.addEventListener("load", function () {
+          var script = document.createElement("script");
+          script.src = src;
+          script.async = false;
+          script.dataset.aiSearchEngine = label;
+
+          script.onload = function () {
+            script.dataset.aiSearchLoaded = "true";
             resolve();
-          }, { once: true });
+          };
 
-          existing.addEventListener("error", function (error) {
+          script.onerror = function (error) {
             reject(error);
-          }, { once: true });
+          };
 
-          return;
-        }
-
-        var script = document.createElement("script");
-        script.src = src;
-        script.async = false;
-        script.dataset.aiSearchEngine = label;
-
-        script.onload = function () {
-          script.dataset.aiSearchLoaded = "true";
-          resolve();
-        };
-
-        script.onerror = function (error) {
-          reject(error);
-        };
-
-        document.head.appendChild(script);
-      });
-    }
-
-    function verifyV3Loaded() {
-      if (window.__aiSearchV3Installed === true) {
-        return true;
+          document.head.appendChild(script);
+        });
       }
 
-      console.warn(
-        "[AI SEARCH BRIDGE] V3 script đã load nhưng " +
-        "window.__aiSearchV3Installed chưa được thiết lập."
-      );
-
-      return false;
-    }
-
-    function redirectCurrentSearchToDedicatedPage() {
-      if (!isSearchPage) return;
-
-      var currentParams = new URLSearchParams(
-        window.location.search
-      );
-
-      var currentQuery =
-        (currentParams.get("q") || "").trim();
-
-      if (!currentQuery) return;
-
-      var currentPathname =
-        window.location.pathname || "";
-
-      if (currentPathname === endpoint) return;
-
-      var targetUrl =
-        endpoint +
-        "?q=" +
-        encodeURIComponent(currentQuery);
-
-      console.log(
-        "[AI SEARCH BRIDGE] V3 Dedicated Page redirect:",
-        targetUrl
-      );
-
-      window.location.assign(targetUrl);
-    }
-
-    async function boot() {
-      var runtimeConfigUrl;
-
-      try {
-        runtimeConfigUrl = new URL(
-          endpoint,
-          window.location.origin
-        );
-
-        runtimeConfigUrl.searchParams.set(
-          "mode",
-          "runtime-config"
-        );
-      } catch (error) {
-        runtimeConfigUrl = new URL(
-          "/apps/ai-search?mode=runtime-config",
-          window.location.origin
-        );
-      }
-
-      try {
-        /*
-         * Runtime config chỉ đọc Dashboard engine flag.
-         * Không chạy Search Pipeline / Qdrant / Embedding / Theme Map.
-         */
-        var response = await fetch(
-          runtimeConfigUrl.toString(),
-          {
-            method: "GET",
-            credentials: "same-origin",
-            headers: {
-              Accept: "application/json"
-            },
-            cache: "no-store"
-          }
-        );
-
-        if (!response.ok) {
-          throw new Error(
-            "Runtime config HTTP " + response.status
-          );
+      function verifyV3Loaded() {
+        if (window.__aiSearchV3Installed === true) {
+          return true;
         }
 
-        var runtimeConfig = await response.json();
-        var engine = runtimeConfig && runtimeConfig.engine;
+        console.warn(
+          "[AI SEARCH BRIDGE] V3 script đã load nhưng " +
+          "window.__aiSearchV3Installed chưa được thiết lập."
+        );
+
+        return false;
+      }
+
+      function redirectCurrentSearchToDedicatedPage() {
+        if (!isSearchPage) return;
+
+        var currentParams = new URLSearchParams(
+          window.location.search
+        );
+
+        var currentQuery =
+          (currentParams.get("q") || "").trim();
+
+        if (!currentQuery) return;
+
+        var currentPathname =
+          window.location.pathname || "";
+
+        if (currentPathname === endpoint) return;
+
+        var targetUrl =
+          endpoint +
+          "?q=" +
+          encodeURIComponent(currentQuery);
 
         console.log(
-          "[AI SEARCH BRIDGE] Runtime engine:",
-          engine,
-          runtimeConfig
+          "[AI SEARCH BRIDGE] V3 Dedicated Page redirect:",
+          targetUrl
         );
 
-        /*
-         * =====================================================
-         * V3 — APP SELF RENDER / DEDICATED PAGE
-         * =====================================================
-         *
-         * V3 cần tồn tại trên storefront pages để chặn submit
-         * Search ngay tại nguồn, thay vì để Theme điều hướng qua
-         * /search trước.
-         *
-         * Đồng thời V3 cần được load trên /apps/ai-search để
-         * initPagination() gắn click handler cho các nút pagination.
-         */
-        if (engine === "v3") {
+        window.location.assign(targetUrl);
+      }
+
+      async function boot() {
+        var runtimeConfigUrl;
+
+        try {
+          runtimeConfigUrl = new URL(
+            endpoint,
+            window.location.origin
+          );
+
+          runtimeConfigUrl.searchParams.set(
+            "mode",
+            "runtime-config"
+          );
+
+          if (config.theme_id) {
+            runtimeConfigUrl.searchParams.set(
+              "theme_id",
+              String(config.theme_id)
+            );
+          }
+        } catch (error) {
+          runtimeConfigUrl = new URL(
+            "/apps/ai-search?mode=runtime-config",
+            window.location.origin
+          );
+        }
+
+        try {
           /*
-           * Giữ nguyên bypass của native Search.
-           * Khi fallback của V4 đã đưa user về /search?...&_ai_search_bypass=1,
-           * V3 tuyệt đối không được bắt lại submit hoặc redirect vòng.
-           */
-          if (isBypassSearch) {
+          * Runtime config chỉ đọc Dashboard engine flag.
+          * Không chạy Search Pipeline / Qdrant / Embedding / Theme Map.
+          */
+          var response = await fetch(
+            runtimeConfigUrl.toString(),
+            {
+              method: "GET",
+              credentials: "same-origin",
+              headers: {
+                Accept: "application/json"
+              },
+              cache: "no-store"
+            }
+          );
+
+          if (!response.ok) {
+            throw new Error(
+              "Runtime config HTTP " + response.status
+            );
+          }
+
+          var runtimeConfig = await response.json();
+          var engine = runtimeConfig && runtimeConfig.engine;
+
+          if (engine !== "v3" && engine !== "v4") {
+            throw new Error("Runtime config returned an invalid engine");
+          }
+
+          window.AI_SEARCH_ENGINE = engine;
+          window.AI_SEARCH_CONFIG.theme_map_bootstrap =
+            runtimeConfig.themeMapBootstrap || null;
+
+          console.log(
+            "[AI SEARCH BRIDGE] Runtime engine:",
+            engine,
+            runtimeConfig
+          );
+
+          /*
+          * =====================================================
+          * V3 — APP SELF RENDER / DEDICATED PAGE
+          * =====================================================
+          *
+          * V3 cần tồn tại trên storefront pages để chặn submit
+          * Search ngay tại nguồn, thay vì để Theme điều hướng qua
+          * /search trước.
+          *
+          * Đồng thời V3 cần được load trên /apps/ai-search để
+          * initPagination() gắn click handler cho các nút pagination.
+          */
+          if (engine === "v3") {
             releaseEarlyBoot();
+
+            var v3Src =
+              {{ 'search-interceptor.v3.js' | asset_url | json }};
+
+            await loadScript(v3Src, "v3");
+            verifyV3Loaded();
+
+            /*
+            * Nếu đang ở native /search?q=...
+            * thì đây là navigation đã xảy ra trước khi V3 được boot.
+            * Sau khi V3 xác định engine, chuyển sang Dedicated Page.
+            *
+            * Nếu đang ở Homepage / Collection / Product / Dedicated Page,
+            * KHÔNG redirect. V3 client chỉ tiếp tục hoạt động bình thường.
+            */
+            if (!isBypassSearch) {
+              redirectCurrentSearchToDedicatedPage();
+            }
+
+            return;
+          }
+
+          /*
+          * =====================================================
+          * V4 — EXISTING THEME MAP FLOW
+          * =====================================================
+          *
+          * Giữ nguyên behaviour V4:
+          * chỉ load V4 trên native Shopify /search page.
+          * Các trang khác không bị V4 can thiệp.
+          */
+          if (!isSearchPage) {
             return;
           }
 
           releaseEarlyBoot();
 
-          var v3Src =
-            {{ 'search-interceptor.v3.js' | asset_url | json }};
-
-          await loadScript(v3Src, "v3");
-          verifyV3Loaded();
-
-          /*
-           * Nếu đang ở native /search?q=...
-           * thì đây là navigation đã xảy ra trước khi V3 được boot.
-           * Sau khi V3 xác định engine, chuyển sang Dedicated Page.
-           *
-           * Nếu đang ở Homepage / Collection / Product / Dedicated Page,
-           * KHÔNG redirect. V3 client chỉ tiếp tục hoạt động bình thường.
-           */
-          redirectCurrentSearchToDedicatedPage();
-
-          return;
-        }
-
-        /*
-         * =====================================================
-         * V4 — EXISTING THEME MAP FLOW
-         * =====================================================
-         *
-         * Giữ nguyên behaviour V4:
-         * chỉ load V4 trên native Shopify /search page.
-         * Các trang khác không bị V4 can thiệp.
-         */
-        if (!isSearchPage) {
-          return;
-        }
-
-        setV4EarlyBoot();
-
-        var v4Src =
-          {{ 'search-interceptor.v4.js' | asset_url | json }};
-
-        await loadScript(v4Src, "v4");
-      } catch (error) {
-        /*
-         * =====================================================
-         * FAIL-OPEN
-         * =====================================================
-         *
-         * Nếu runtime-config lỗi:
-         * - native /search vẫn được bảo vệ bằng V4 như trước;
-         * - các trang khác không bị can thiệp.
-         */
-        console.warn(
-          "[AI SEARCH BRIDGE] Runtime config unavailable; " +
-          "falling back to V4 on native Search page.",
-          error
-        );
-
-        if (!isSearchPage) {
-          releaseEarlyBoot();
-          return;
-        }
-
-        setV4EarlyBoot();
-
-        try {
-          var fallbackV4Src =
+          var v4Src =
             {{ 'search-interceptor.v4.js' | asset_url | json }};
 
-          await loadScript(fallbackV4Src, "v4");
-        } catch (v4Error) {
-          console.error(
-            "[AI SEARCH BRIDGE] Failed to load V4 engine.",
-            v4Error
+          await loadScript(v4Src, "v4");
+        } catch (error) {
+          /*
+          * =====================================================
+          * FAIL-OPEN
+          * =====================================================
+          *
+          * Nếu runtime-config lỗi thì không thể biết merchant chọn engine nào.
+          * Không load renderer nào; Shopify native search tiếp tục bình thường.
+          */
+          console.warn(
+            "[AI SEARCH BRIDGE] Runtime config unavailable; " +
+            "using Shopify native search without an AI renderer.",
+            error
           );
-
+          window.AI_SEARCH_ENGINE = null;
           releaseEarlyBoot();
         }
       }
-    }
 
-    boot();
-  })();
-</script>
+      boot();
+    })();
+  </script>
 
-{% schema %}
-{
-  "name": "AI Search Bridge",
-  "target": "head",
-  "settings": [
-    {
-      "type": "select",
-      "id": "unscoped_search_mode",
-      "label": "Searches without an explicit resource type",
-      "default": "product_only",
-      "options": [
-        {
-          "value": "product_only",
-          "label": "Use AI as product-only search (recommended)"
-        },
-        {
-          "value": "respect_store",
-          "label": "Respect store search types"
-        }
-      ]
-    },
-    {
-      "type": "text",
-      "id": "proxy_path",
-      "label": "App proxy path",
-      "default": "/apps/ai-search"
-    }
-  ]
-}
-{% endschema %}
+  {% schema %}
+  {
+    "name": "AI Search Bridge",
+    "target": "head",
+    "settings": [
+      {
+        "type": "select",
+        "id": "unscoped_search_mode",
+        "label": "Searches without an explicit resource type",
+        "default": "product_only",
+        "options": [
+          {
+            "value": "product_only",
+            "label": "Use AI as product-only search (recommended)"
+          },
+          {
+            "value": "respect_store",
+            "label": "Respect store search types"
+          }
+        ]
+      },
+      {
+        "type": "text",
+        "id": "proxy_path",
+        "label": "App proxy path",
+        "default": "/apps/ai-search"
+      }
+    ]
+  }
+  {% endschema %}
