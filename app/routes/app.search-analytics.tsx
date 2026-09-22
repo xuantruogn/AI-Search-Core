@@ -302,7 +302,7 @@ export default function SearchAnalyticsPage() {
               {/* Đường Tím: Tổng lượt search */}
               {(chartFilter === "all" || chartFilter === "healthy") && (
                 <>
-                  <polyline fill="none" stroke="#4f46e5" strokeWidth="2.5" points={totalPolyline} strokeLinecap="round" strokeLinejoin="round" />
+                  <polyline fill="none" stroke="#4f46e5" strokeWidth="1" points={totalPolyline} strokeLinecap="round" strokeLinejoin="round" />
                   {points.map((p) => (
                     <g key={`total-${p.day}`}>
                       <circle cx={p.x} cy={p.yTotal} r="4" fill="#ffffff" stroke="#4f46e5" strokeWidth="2" />
@@ -317,7 +317,7 @@ export default function SearchAnalyticsPage() {
               {/* Đường Xanh lá: Search kèm click */}
               {(chartFilter === "all" || chartFilter === "abnormal") && (
                 <>
-                  <polyline fill="none" stroke="#008060" strokeWidth="2.5" points={clickPolyline} strokeLinecap="round" strokeLinejoin="round" />
+                  <polyline fill="none" stroke="#008060" strokeWidth="1" points={clickPolyline} strokeLinecap="round" strokeLinejoin="round" />
                   {points.map((p) => {
                     const closeToTotal = Math.abs(p.yClick - p.yTotal) < 16;
                     const textY = closeToTotal ? p.yClick + 16 : p.yClick - 8;
@@ -337,7 +337,7 @@ export default function SearchAnalyticsPage() {
               {/* Đường Đỏ: Search bất thường */}
               {(chartFilter === "all" || chartFilter === "zero") && (
                 <>
-                  <polyline fill="none" stroke="#d32f2f" strokeWidth="2.5" points={abnormalPolyline} strokeLinecap="round" strokeLinejoin="round" />
+                  <polyline fill="none" stroke="#d32f2f" strokeWidth="1" points={abnormalPolyline} strokeLinecap="round" strokeLinejoin="round" />
                   {points.map((p) => {
                     const closeToClick = Math.abs(p.yAbnormal - p.yClick) < 18;
                     const textY = closeToClick ? p.yAbnormal + 18 : p.yAbnormal + 14;
