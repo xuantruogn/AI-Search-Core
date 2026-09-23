@@ -1,4 +1,3 @@
-
 import type { LoaderFunctionArgs } from "react-router";
 import { Link, useFetcher, useLoaderData } from "react-router";
 
@@ -150,11 +149,11 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 };
 
 function formatLimit(value: number | null) {
-  return value === null ? "Unlimited" : value.toLocaleString("vi-VN");
+  return value === null ? "Unlimited" : value.toLocaleString("en-US");
 }
 
 function formatUsage(used: number, limit: number | null) {
-  return `${used.toLocaleString("vi-VN")} / ${formatLimit(limit)}`;
+  return `${used.toLocaleString("en-US")} / ${formatLimit(limit)}`;
 }
 
 function remaining(limit: number | null, used: number) {
@@ -340,17 +339,16 @@ function QuickLink({
   );
 }
 
-
 function fmtPct(value: number | null) {
   return value == null
     ? "—"
-    : `${value.toLocaleString("vi-VN", { maximumFractionDigits: 1 })}%`;
+    : `${value.toLocaleString("en-US", { maximumFractionDigits: 1 })}%`;
 }
 
 function signedPct(value: number | null, suffix = "%") {
   if (value == null) return "—";
   const sign = value > 0 ? "+" : "";
-  return `${sign}${value.toLocaleString("vi-VN", {
+  return `${sign}${value.toLocaleString("en-US", {
     maximumFractionDigits: 1,
   })}${suffix}`;
 }
@@ -371,7 +369,7 @@ function SearchPerformanceChart({
   if (totalSearches === 0) {
     return (
       <div className="vip-chart-empty">
-        Chưa có lượt AI search nào trong 7 ngày gần đây.
+        No AI search activity recorded in the last 7 days.
       </div>
     );
   }
@@ -415,19 +413,19 @@ function SearchPerformanceChart({
   const lines = [
     {
       key: "searches",
-      label: "Tổng search",
+      label: "Total searches",
       stroke: "#6f5cf5",
       valueOf: (item: (typeof visible)[number]) => item.searches,
     },
     {
       key: "clickedSearches",
-      label: "Search có click",
+      label: "Searches with click",
       stroke: "#21a366",
       valueOf: (item: (typeof visible)[number]) => item.clickedSearches,
     },
     {
       key: "abnormalSearches",
-      label: "Search bất thường",
+      label: "Search anomalies",
       stroke: "#d89a17",
       valueOf: (item: (typeof visible)[number]) => item.abnormalSearches,
     },
@@ -435,7 +433,7 @@ function SearchPerformanceChart({
 
   return (
     <div className="vip-chart-shell">
-      <div className="vip-chart-legend" aria-label="Chú thích biểu đồ">
+      <div className="vip-chart-legend" aria-label="Chart Legend">
         {lines.map((line) => (
           <span key={line.key}>
             <i style={{ background: line.stroke }} />
@@ -447,7 +445,7 @@ function SearchPerformanceChart({
       <svg
         viewBox={`0 0 ${width} ${height}`}
         role="img"
-        aria-label="Tổng AI search, search có click và search bất thường trong 7 ngày gần nhất"
+        aria-label="Total AI searches, searches with clicks, and search anomalies over the last 7 days"
         className="vip-chart"
       >
         {[0, 0.25, 0.5, 0.75, 1].map((ratio) => {
@@ -510,46 +508,49 @@ function SearchPerformanceChart({
 }
 
 function AlertTypeLabel(type: string) {
-  if (type === "NO_RESULTS") return "Không có kết quả";
-  if (type === "LOW_SIMILARITY") return "Độ tương đồng thấp";
-  if (type === "HIGH_SIMILARITY_NO_CLICK") return "Điểm cao nhưng không click";
-  if (type === "CTR_DROP") return "CTR giảm";
+  if (type === "NO_RESULTS") return "No Results";
+  if (type === "LOW_SIMILARITY") return "Low Similarity";
+  if (type === "HIGH_SIMILARITY_NO_CLICK") return "High Similarity (No Click)";
+  if (type === "CTR_DROP") return "CTR Drop";
   return type;
 }
 
 const dashboardCss = `
   .vip-shell {
-    --vip-text: #15161a;
-    --vip-muted: #666b76;
-    --vip-border: #e8e8ee;
-    --vip-panel: rgba(255,255,255,.92);
-    --vip-shadow: 0 16px 48px rgba(30, 24, 60, .08);
+    --vip-text: #1a1c23;
+    --vip-muted: #5c6270;
+    --vip-border: #e2e4ed;
+    --vip-panel: #ffffff;
+    --vip-shadow: 0 12px 36px rgba(26, 22, 60, .06);
     display: grid;
-    gap: 20px;
+    gap: 24px;
     color: var(--vip-text);
-    padding-bottom: 24px;
+    padding-bottom: 32px;
+    width: 100%;
+    box-sizing: border-box;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   }
 
   .vip-hero {
     position: relative;
     overflow: hidden;
     min-height: 240px;
-    border-radius: 26px;
-    padding: 30px;
+    border-radius: 24px;
+    padding: 32px;
     color: white;
     background:
-      radial-gradient(circle at 82% 15%, rgba(117, 235, 255, .28), transparent 28%),
-      radial-gradient(circle at 70% 92%, rgba(173, 121, 255, .28), transparent 36%),
+      radial-gradient(circle at 82% 15%, rgba(117, 235, 255, .3), transparent 30%),
+      radial-gradient(circle at 70% 92%, rgba(173, 121, 255, .3), transparent 38%),
       linear-gradient(135deg, #16132e 0%, #31266f 52%, #155e75 118%);
-    box-shadow: 0 24px 70px rgba(47, 38, 110, .22);
+    box-shadow: 0 20px 60px rgba(47, 38, 110, .25);
   }
 
   .vip-hero:after {
     content: "";
     position: absolute;
     inset: 0;
-    background-image: linear-gradient(rgba(255,255,255,.035) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.035) 1px, transparent 1px);
-    background-size: 34px 34px;
+    background-image: linear-gradient(rgba(255,255,255,.04) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.04) 1px, transparent 1px);
+    background-size: 36px 36px;
     mask-image: linear-gradient(to bottom left, #000, transparent 70%);
     pointer-events: none;
   }
@@ -558,60 +559,62 @@ const dashboardCss = `
     position: relative;
     z-index: 2;
     display: grid;
-    grid-template-columns: minmax(0, 1.6fr) minmax(260px, .7fr);
-    gap: 30px;
+    grid-template-columns: minmax(0, 1.6fr) minmax(280px, .7fr);
+    gap: 32px;
     align-items: stretch;
   }
 
   .vip-kicker {
     display: inline-flex;
     align-items: center;
-    gap: 8px;
-    margin-bottom: 18px;
-    color: rgba(255,255,255,.76);
-    font-size: 12px;
-    font-weight: 750;
+    gap: 10px;
+    margin-bottom: 16px;
+    color: rgba(255,255,255,.85);
+    font-size: 13px;
+    font-weight: 800;
     letter-spacing: .12em;
     text-transform: uppercase;
   }
 
   .vip-kicker:before {
     content: "";
-    width: 24px;
-    height: 1px;
-    background: rgba(255,255,255,.5);
+    width: 28px;
+    height: 2px;
+    background: rgba(255,255,255,.6);
   }
 
   .vip-hero h2 {
     margin: 0;
-    max-width: 780px;
-    font-size: clamp(30px, 4vw, 48px);
-    line-height: 1.02;
-    letter-spacing: -.04em;
+    max-width: 820px;
+    font-size: clamp(32px, 4.2vw, 50px);
+    line-height: 1.08;
+    letter-spacing: -.03em;
+    font-weight: 800;
   }
 
   .vip-hero__subtitle {
-    max-width: 720px;
-    margin: 15px 0 22px;
-    color: rgba(255,255,255,.78);
-    font-size: 15px;
-    line-height: 1.65;
+    max-width: 760px;
+    margin: 16px 0 24px;
+    color: rgba(255,255,255,.88);
+    font-size: 16px;
+    line-height: 1.6;
   }
 
   .vip-hero__meta {
     display: flex;
     flex-wrap: wrap;
-    gap: 8px;
+    gap: 10px;
   }
 
   .vip-hero__meta span {
-    border: 1px solid rgba(255,255,255,.14);
-    background: rgba(255,255,255,.08);
+    border: 1px solid rgba(255,255,255,.18);
+    background: rgba(255,255,255,.1);
     border-radius: 999px;
-    padding: 7px 10px;
-    color: rgba(255,255,255,.82);
-    font-size: 12px;
-    backdrop-filter: blur(8px);
+    padding: 8px 14px;
+    color: rgba(255,255,255,.92);
+    font-size: 13px;
+    font-weight: 600;
+    backdrop-filter: blur(10px);
   }
 
   .vip-readiness-card {
@@ -620,12 +623,12 @@ const dashboardCss = `
     display: flex;
     flex-direction: column;
     justify-content: space-between;
-    min-height: 178px;
-    border: 1px solid rgba(255,255,255,.16);
+    min-height: 190px;
+    border: 1px solid rgba(255,255,255,.2);
     border-radius: 22px;
-    padding: 20px;
-    background: rgba(255,255,255,.09);
-    backdrop-filter: blur(14px);
+    padding: 24px;
+    background: rgba(255,255,255,.12);
+    backdrop-filter: blur(16px);
   }
 
   .vip-readiness-card__top {
@@ -636,36 +639,37 @@ const dashboardCss = `
   }
 
   .vip-readiness-card__label {
-    color: rgba(255,255,255,.7);
-    font-size: 12px;
+    color: rgba(255,255,255,.8);
+    font-size: 13px;
+    font-weight: 700;
     text-transform: uppercase;
     letter-spacing: .08em;
   }
 
   .vip-readiness-card__score {
-    margin-top: 7px;
-    font-size: 36px;
+    margin-top: 8px;
+    font-size: 42px;
     font-weight: 800;
     letter-spacing: -.04em;
   }
 
   .vip-ring {
     --value: 100;
-    width: 72px;
-    height: 72px;
+    width: 76px;
+    height: 76px;
     border-radius: 50%;
     display: grid;
     place-items: center;
-    background: conic-gradient(#79f2c0 calc(var(--value) * 1%), rgba(255,255,255,.12) 0);
+    background: conic-gradient(#79f2c0 calc(var(--value) * 1%), rgba(255,255,255,.15) 0);
   }
 
   .vip-ring:after {
     content: "";
-    width: 56px;
-    height: 56px;
+    width: 60px;
+    height: 60px;
     border-radius: 50%;
     background: #282255;
-    box-shadow: inset 0 0 0 1px rgba(255,255,255,.08);
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,.1);
   }
 
   .vip-readiness-card__footer {
@@ -673,83 +677,85 @@ const dashboardCss = `
     justify-content: space-between;
     gap: 12px;
     align-items: flex-end;
-    color: rgba(255,255,255,.72);
-    font-size: 12px;
+    color: rgba(255,255,255,.82);
+    font-size: 13px;
+    line-height: 1.5;
   }
 
   .vip-readiness-card__footer strong {
     color: white;
-    font-size: 13px;
+    font-size: 14px;
   }
 
   .vip-pill {
     display: inline-flex;
     align-items: center;
-    gap: 7px;
+    gap: 8px;
     width: fit-content;
     border-radius: 999px;
-    padding: 6px 9px;
-    font-size: 11px;
-    font-weight: 750;
+    padding: 7px 12px;
+    font-size: 12px;
+    font-weight: 700;
     white-space: nowrap;
   }
 
-  .vip-pill__dot { width: 7px; height: 7px; border-radius: 50%; }
-  .vip-pill--success { background: #e9f8f0; color: #087443; }
-  .vip-pill--success .vip-pill__dot { background: #21a366; box-shadow: 0 0 0 4px rgba(33,163,102,.12); }
+  .vip-pill__dot { width: 8px; height: 8px; border-radius: 50%; }
+  .vip-pill--success { background: #e4f8f0; color: #008060; }
+  .vip-pill--success .vip-pill__dot { background: #008060; box-shadow: 0 0 0 4px rgba(0,128,96,.15); }
   .vip-pill--warning { background: #fff6df; color: #8a5b00; }
-  .vip-pill--warning .vip-pill__dot { background: #d89a17; box-shadow: 0 0 0 4px rgba(216,154,23,.12); }
-  .vip-pill--critical { background: #fff0f0; color: #a32f2f; }
-  .vip-pill--critical .vip-pill__dot { background: #d64b4b; box-shadow: 0 0 0 4px rgba(214,75,75,.12); }
-  .vip-pill--neutral { background: #f0f1f3; color: #5f636d; }
-  .vip-pill--neutral .vip-pill__dot { background: #8b909b; }
+  .vip-pill--warning .vip-pill__dot { background: #d89a17; box-shadow: 0 0 0 4px rgba(216,154,23,.15); }
+  .vip-pill--critical { background: #ffebe9; color: #d32f2f; }
+  .vip-pill--critical .vip-pill__dot { background: #d32f2f; box-shadow: 0 0 0 4px rgba(211,47,47,.15); }
+  .vip-pill--neutral { background: #f1f2f3; color: #5c6270; }
+  .vip-pill--neutral .vip-pill__dot { background: #8c9196; }
 
   .vip-actions {
     display: flex;
     flex-wrap: wrap;
-    gap: 10px;
+    gap: 12px;
   }
 
   .vip-action {
     display: inline-flex;
     align-items: center;
     gap: 8px;
-    min-height: 38px;
-    border-radius: 11px;
-    padding: 0 14px;
+    min-height: 42px;
+    border-radius: 12px;
+    padding: 0 18px;
+    font-size: 14px;
     font-weight: 700;
     text-decoration: none;
     transition: transform .18s ease, box-shadow .18s ease, background .18s ease;
   }
 
   .vip-action:hover { transform: translateY(-1px); }
-  .vip-action--primary { background: white; color: #27214f; box-shadow: 0 10px 24px rgba(0,0,0,.14); }
-  .vip-action--ghost { border: 1px solid rgba(255,255,255,.18); color: white; background: rgba(255,255,255,.08); }
+  .vip-action--primary { background: white; color: #1e1b4b; box-shadow: 0 10px 24px rgba(0,0,0,.15); }
+  .vip-action--ghost { border: 1px solid rgba(255,255,255,.24); color: white; background: rgba(255,255,255,.12); backdrop-filter: blur(8px); }
 
   .vip-metrics {
     display: grid;
     grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: 14px;
+    gap: 16px;
   }
 
   .vip-metric {
     position: relative;
     overflow: hidden;
-    min-height: 148px;
+    min-height: 160px;
     border: 1px solid var(--vip-border);
     border-radius: 20px;
-    padding: 18px;
+    padding: 22px;
     background: var(--vip-panel);
-    box-shadow: 0 12px 38px rgba(30, 24, 60, .045);
+    box-shadow: var(--vip-shadow);
   }
 
   .vip-metric:after {
     content: "";
     position: absolute;
-    right: -34px;
-    bottom: -46px;
-    width: 120px;
-    height: 120px;
+    right: -30px;
+    bottom: -40px;
+    width: 130px;
+    height: 130px;
     border-radius: 50%;
     opacity: .12;
   }
@@ -760,18 +766,18 @@ const dashboardCss = `
   .vip-metric--amber:after { background: #e6a631; }
 
   .vip-metric__top { display: flex; justify-content: space-between; gap: 12px; align-items: center; }
-  .vip-metric__eyebrow { color: #777b86; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; }
-  .vip-metric__spark { width: 8px; height: 8px; border-radius: 50%; background: currentColor; opacity: .55; box-shadow: 0 0 0 5px rgba(120,110,190,.08); }
-  .vip-metric__value { margin-top: 18px; font-size: 27px; font-weight: 800; letter-spacing: -.035em; }
-  .vip-metric__detail { margin-top: 7px; max-width: 250px; color: #737783; font-size: 12px; line-height: 1.5; }
+  .vip-metric__eyebrow { color: #5c6270; font-size: 12px; font-weight: 800; text-transform: uppercase; letter-spacing: .08em; }
+  .vip-metric__spark { width: 8px; height: 8px; border-radius: 50%; background: currentColor; opacity: .65; box-shadow: 0 0 0 5px rgba(120,110,190,.12); }
+  .vip-metric__value { margin-top: 16px; font-size: 32px; font-weight: 800; letter-spacing: -.03em; color: var(--vip-text); }
+  .vip-metric__detail { margin-top: 8px; color: var(--vip-muted); font-size: 13px; line-height: 1.5; }
 
-  .vip-progress { height: 5px; margin-top: 14px; border-radius: 999px; background: #eef0f4; overflow: hidden; }
-  .vip-progress span { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #6b5cff, #3bb7d0); }
+  .vip-progress { height: 6px; margin-top: 16px; border-radius: 999px; background: #eef0f4; overflow: hidden; }
+  .vip-progress span { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #6f5cf5, #28b8d5); }
 
   .vip-grid {
     display: grid;
-    grid-template-columns: minmax(0, 1.6fr) minmax(300px, .8fr);
-    gap: 16px;
+    grid-template-columns: minmax(0, 1.6fr) minmax(320px, .8fr);
+    gap: 20px;
     align-items: start;
   }
 
@@ -788,181 +794,184 @@ const dashboardCss = `
     justify-content: space-between;
     align-items: flex-start;
     gap: 20px;
-    padding: 20px 22px 16px;
+    padding: 24px 26px 18px;
     border-bottom: 1px solid #f0f0f4;
   }
 
-  .vip-panel__head h3 { margin: 0; font-size: 17px; letter-spacing: -.02em; }
-  .vip-panel__head p { margin: 6px 0 0; color: var(--vip-muted); font-size: 12px; line-height: 1.5; }
-  .vip-panel__body { padding: 4px 22px 10px; }
+  .vip-panel__head h3 { margin: 0; font-size: 19px; font-weight: 800; letter-spacing: -.02em; }
+  .vip-panel__head p { margin: 6px 0 0; color: var(--vip-muted); font-size: 13px; line-height: 1.5; }
+  .vip-panel__body { padding: 6px 26px 12px; }
 
   .vip-check-row {
     display: grid;
-    grid-template-columns: 36px minmax(0,1fr) auto;
-    gap: 14px;
+    grid-template-columns: 40px minmax(0,1fr) auto;
+    gap: 16px;
     align-items: center;
-    padding: 15px 0;
+    padding: 18px 0;
     border-bottom: 1px solid #f0f0f4;
   }
 
   .vip-check-row:last-child { border-bottom: 0; }
-  .vip-check-index { width: 30px; height: 30px; border-radius: 10px; display: grid; place-items: center; font-size: 12px; font-weight: 800; }
-  .vip-check-index--success { color: #087443; background: #e9f8f0; }
+  .vip-check-index { width: 34px; height: 34px; border-radius: 12px; display: grid; place-items: center; font-size: 14px; font-weight: 800; }
+  .vip-check-index--success { color: #008060; background: #e4f8f0; }
   .vip-check-index--warning { color: #8a5b00; background: #fff6df; }
-  .vip-check-index--critical { color: #a32f2f; background: #fff0f0; }
-  .vip-check-index--neutral { color: #616672; background: #f1f2f4; }
-  .vip-check-title-row { display: flex; align-items: center; flex-wrap: wrap; gap: 9px; }
-  .vip-check-title-row strong { font-size: 13px; }
-  .vip-check-detail { margin-top: 5px; color: var(--vip-muted); font-size: 12px; line-height: 1.45; }
-  .vip-check-action { font-size: 12px; white-space: nowrap; }
+  .vip-check-index--critical { color: #d32f2f; background: #ffebe9; }
+  .vip-check-index--neutral { color: #5c6270; background: #f1f2f3; }
+  .vip-check-title-row { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+  .vip-check-title-row strong { font-size: 15px; font-weight: 700; color: var(--vip-text); }
+  .vip-check-detail { margin-top: 6px; color: var(--vip-muted); font-size: 13px; line-height: 1.5; }
+  .vip-check-action { font-size: 13px; font-weight: 700; white-space: nowrap; }
+  .vip-check-action a { color: #4f46e5; text-decoration: none; }
+  .vip-check-action a:hover { text-decoration: underline; }
   .vip-check-button {
     appearance: none;
     border: 0;
     padding: 0;
     background: transparent;
-    color: #4f46c8;
+    color: #4f46e5;
     font: inherit;
-    font-weight: 650;
+    font-weight: 700;
+    font-size: 13px;
     text-decoration: underline;
-    text-underline-offset: 2px;
+    text-underline-offset: 3px;
     cursor: pointer;
   }
-  .vip-check-button:hover { color: #3328a7; }
-  .vip-check-button:disabled {
-    color: #9a9daa;
-    cursor: wait;
-    text-decoration: none;
-  }
+  .vip-check-button:hover { color: #3730a3; }
+  .vip-check-button:disabled { color: #8c9196; cursor: wait; text-decoration: none; }
 
-  .vip-side-stack { display: grid; gap: 16px; }
-  .vip-health { padding: 20px; }
-  .vip-health h3 { margin: 0 0 4px; font-size: 17px; }
-  .vip-health > p { margin: 0 0 16px; color: var(--vip-muted); font-size: 12px; }
-  .vip-health-row { display: flex; justify-content: space-between; gap: 16px; align-items: center; padding: 11px 0; border-bottom: 1px solid #f0f0f4; font-size: 12px; }
+  .vip-side-stack { display: grid; gap: 20px; }
+  .vip-health { padding: 24px; }
+  .vip-health h3 { margin: 0 0 4px; font-size: 19px; font-weight: 800; }
+  .vip-health > p { margin: 0 0 18px; color: var(--vip-muted); font-size: 13px; }
+  .vip-health-row { display: flex; justify-content: space-between; gap: 16px; align-items: center; padding: 13px 0; border-bottom: 1px solid #f0f0f4; font-size: 13px; }
   .vip-health-row:last-child { border-bottom: 0; }
-  .vip-health-label { display: flex; gap: 9px; align-items: center; color: #646975; }
-  .vip-health-dot { width: 8px; height: 8px; border-radius: 50%; }
-  .vip-health-dot--success { background: #21a366; }
+  .vip-health-row strong { font-size: 14px; font-weight: 700; color: var(--vip-text); }
+  .vip-health-label { display: flex; gap: 10px; align-items: center; color: var(--vip-muted); font-size: 13px; }
+  .vip-health-dot { width: 9px; height: 9px; border-radius: 50%; }
+  .vip-health-dot--success { background: #008060; }
   .vip-health-dot--warning { background: #d89a17; }
-  .vip-health-dot--critical { background: #d64b4b; }
-  .vip-health-dot--neutral { background: #9297a1; }
+  .vip-health-dot--critical { background: #d32f2f; }
+  .vip-health-dot--neutral { background: #8c9196; }
 
   .vip-intel {
     position: relative;
     overflow: hidden;
-    padding: 22px;
+    padding: 24px;
     background: linear-gradient(145deg, #f8f7ff, #f3fbff);
   }
-  .vip-intel:after { content: ""; position: absolute; width: 150px; height: 150px; border-radius: 50%; right: -48px; top: -70px; background: linear-gradient(135deg,#7c62ff,#49c2d7); opacity: .14; }
-  .vip-intel__icon { width: 38px; height: 38px; border-radius: 13px; display: grid; place-items: center; background: #241d4f; color: white; font-weight: 800; box-shadow: 0 10px 24px rgba(36,29,79,.18); }
-  .vip-intel h3 { margin: 16px 0 6px; font-size: 17px; }
-  .vip-intel p { margin: 0 0 15px; color: var(--vip-muted); font-size: 12px; line-height: 1.55; }
+  .vip-intel:after { content: ""; position: absolute; width: 160px; height: 160px; border-radius: 50%; right: -40px; top: -60px; background: linear-gradient(135deg,#7c62ff,#49c2d7); opacity: .15; }
+  .vip-intel__icon { width: 42px; height: 42px; border-radius: 14px; display: grid; place-items: center; background: #241d4f; color: white; font-weight: 800; font-size: 15px; box-shadow: 0 10px 24px rgba(36,29,79,.2); }
+  .vip-intel h3 { margin: 18px 0 6px; font-size: 19px; font-weight: 800; }
+  .vip-intel p { margin: 0 0 16px; color: var(--vip-muted); font-size: 13px; line-height: 1.6; }
+  .vip-intel a { color: #4f46e5; font-size: 13px; font-weight: 700; text-decoration: none; }
 
-  .vip-quick-grid { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 12px; }
-  .vip-quick-link { display: flex; justify-content: space-between; align-items: center; gap: 14px; border: 1px solid var(--vip-border); border-radius: 18px; padding: 16px 18px; text-decoration: none; color: inherit; background: white; transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease; }
-  .vip-quick-link:hover { transform: translateY(-2px); box-shadow: 0 12px 30px rgba(38,32,72,.08); border-color: #d9d6ea; }
-  .vip-quick-link strong { display: block; font-size: 13px; }
-  .vip-quick-link span:not(.vip-quick-arrow) { display: block; margin-top: 5px; color: var(--vip-muted); font-size: 11px; line-height: 1.4; }
-  .vip-quick-arrow { font-size: 18px; color: #6c61bb; }
+  .vip-quick-grid { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 16px; }
+  .vip-quick-link { display: flex; justify-content: space-between; align-items: center; gap: 16px; border: 1px solid var(--vip-border); border-radius: 20px; padding: 20px 22px; text-decoration: none; color: inherit; background: white; box-shadow: var(--vip-shadow); transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease; }
+  .vip-quick-link:hover { transform: translateY(-2px); box-shadow: 0 16px 40px rgba(38,32,72,.1); border-color: #c7c3e0; }
+  .vip-quick-link strong { display: block; font-size: 15px; font-weight: 800; color: var(--vip-text); }
+  .vip-quick-link span:not(.vip-quick-arrow) { display: block; margin-top: 6px; color: var(--vip-muted); font-size: 12px; line-height: 1.45; }
+  .vip-quick-arrow { font-size: 20px; color: #4f46e5; font-weight: 800; }
 
-  .vip-notice { display: grid; grid-template-columns: 34px 1fr; gap: 12px; align-items: start; border-radius: 16px; padding: 14px 16px; font-size: 12px; line-height: 1.5; }
-  .vip-notice__icon { width: 28px; height: 28px; border-radius: 9px; display: grid; place-items: center; font-weight: 800; }
-  .vip-notice strong { display: block; margin-bottom: 3px; font-size: 13px; }
-  .vip-notice--critical { background: #fff2f2; color: #8b2828; border: 1px solid #f1cece; }
-  .vip-notice--critical .vip-notice__icon { background: #f9dada; }
-  .vip-notice--warning { background: #fff8e8; color: #815800; border: 1px solid #efdfb5; }
-  .vip-notice--warning .vip-notice__icon { background: #f6e5b7; }
-  .vip-notice--success { background: #edf9f2; color: #116c44; border: 1px solid #c9e8d5; }
-  .vip-notice--success .vip-notice__icon { background: #d7f1e1; }
-  .vip-notice--neutral { background: #f5f5f7; color: #5f636d; border: 1px solid #e4e5e8; }
-
+  .vip-notice { display: grid; grid-template-columns: 36px 1fr; gap: 14px; align-items: start; border-radius: 18px; padding: 16px 20px; font-size: 13px; line-height: 1.55; }
+  .vip-notice__icon { width: 30px; height: 30px; border-radius: 999px; display: grid; place-items: center; font-weight: 800; font-size: 14px; }
+  .vip-notice strong { display: block; margin-bottom: 4px; font-size: 14px; }
+  .vip-notice--critical { background: #ffebe9; color: #d32f2f; border: 1px solid #f8b4b4; }
+  .vip-notice--critical .vip-notice__icon { background: #f8b4b4; }
+  .vip-notice--warning { background: #fff6df; color: #8a5b00; border: 1px solid #f3d489; }
+  .vip-notice--warning .vip-notice__icon { background: #f3d489; }
+  .vip-notice--success { background: #e4f8f0; color: #008060; border: 1px solid #a3e0c9; }
+  .vip-notice--success .vip-notice__icon { background: #a3e0c9; }
+  .vip-notice--neutral { background: #f1f2f3; color: #5c6270; border: 1px solid #e1e3e5; }
 
   .vip-analytics-grid {
     display: grid;
-    grid-template-columns: minmax(0, 1.55fr) minmax(310px, .75fr);
-    gap: 16px;
+    grid-template-columns: minmax(0, 1.55fr) minmax(330px, .75fr);
+    gap: 20px;
     align-items: stretch;
   }
 
-  .vip-impact, .vip-alerts { padding: 22px; }
+  .vip-impact, .vip-alerts { padding: 24px; }
 
   .vip-impact-head {
     display: flex;
     justify-content: space-between;
     gap: 18px;
     align-items: flex-start;
-    margin-bottom: 18px;
+    margin-bottom: 20px;
   }
 
   .vip-impact-head h3, .vip-alerts h3 {
     margin: 0;
-    font-size: 17px;
+    font-size: 19px;
+    font-weight: 800;
     letter-spacing: -.02em;
   }
 
   .vip-impact-head p, .vip-alerts__intro {
     margin: 6px 0 0;
     color: var(--vip-muted);
-    font-size: 12px;
+    font-size: 13px;
     line-height: 1.5;
   }
 
   .vip-impact-kpis {
     display: grid;
     grid-template-columns: repeat(4, minmax(0,1fr));
-    gap: 10px;
-    margin-bottom: 16px;
+    gap: 12px;
+    margin-bottom: 18px;
   }
 
   .vip-impact-kpi {
-    border: 1px solid #ecebf3;
-    border-radius: 15px;
-    padding: 13px 14px;
-    background: linear-gradient(180deg,#fff,#fbfbfe);
+    border: 1px solid #e5e3f0;
+    border-radius: 16px;
+    padding: 15px 16px;
+    background: linear-gradient(180deg,#fff,#fcfcfe);
   }
 
   .vip-impact-kpi span {
     display: block;
-    color: #7a7e89;
-    font-size: 10px;
+    color: #5c6270;
+    font-size: 11px;
     font-weight: 800;
     text-transform: uppercase;
-    letter-spacing: .07em;
+    letter-spacing: .08em;
   }
 
   .vip-impact-kpi strong {
     display: block;
-    margin-top: 7px;
-    font-size: 21px;
-    letter-spacing: -.035em;
+    margin-top: 8px;
+    font-size: 24px;
+    font-weight: 800;
+    letter-spacing: -.03em;
+    color: var(--vip-text);
   }
 
   .vip-impact-kpi small {
     display: block;
-    margin-top: 4px;
-    color: #9296a1;
-    font-size: 10px;
-    line-height: 1.4;
+    margin-top: 5px;
+    color: var(--vip-muted);
+    font-size: 11px;
+    line-height: 1.45;
   }
 
   .vip-chart-shell {
     border: 1px solid #efedf6;
-    border-radius: 18px;
-    padding: 12px 10px 8px;
+    border-radius: 20px;
+    padding: 16px 14px 10px;
     background:
       radial-gradient(circle at 80% 0%, rgba(112,92,245,.08), transparent 30%),
       #fdfdff;
   }
 
   .vip-chart { display: block; width: 100%; height: 230px; }
-  .vip-chart-label { font-size: 10px; fill: #9a9eaa; }
-  .vip-chart-value { font-size: 10px; font-weight: 800; fill: #6258a8; }
+  .vip-chart-label { font-size: 11px; fill: #8c9196; }
   .vip-chart-axis {
     display: flex;
     justify-content: space-between;
     padding: 0 9px 4px;
-    color: #9a9eaa;
-    font-size: 10px;
+    color: #8c9196;
+    font-size: 11px;
+    font-weight: 600;
   }
   .vip-chart-axis--7 {
     display: grid;
@@ -974,22 +983,22 @@ const dashboardCss = `
   .vip-chart-legend {
     display: flex;
     flex-wrap: wrap;
-    gap: 14px;
-    padding: 2px 8px 8px;
-    color: #6f7380;
-    font-size: 10px;
+    gap: 16px;
+    padding: 2px 8px 10px;
+    color: var(--vip-muted);
+    font-size: 12px;
     font-weight: 700;
   }
 
   .vip-chart-legend span {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
   }
 
   .vip-chart-legend i {
-    width: 9px;
-    height: 9px;
+    width: 10px;
+    height: 10px;
     border-radius: 999px;
     display: inline-block;
   }
@@ -1000,104 +1009,104 @@ const dashboardCss = `
     place-items: center;
     border: 1px dashed #dcd9e8;
     border-radius: 18px;
-    color: #9296a1;
-    font-size: 12px;
+    color: #8c9196;
+    font-size: 13px;
     background: #fcfcfe;
   }
 
   .vip-baseline-note {
     display: flex;
-    gap: 10px;
+    gap: 12px;
     align-items: flex-start;
-    margin-top: 12px;
-    padding: 11px 12px;
-    border-radius: 13px;
-    border: 1px solid #e9e5d3;
-    background: #fffaf0;
-    color: #72591f;
-    font-size: 11px;
-    line-height: 1.5;
+    margin-top: 14px;
+    padding: 13px 15px;
+    border-radius: 14px;
+    border: 1px solid #eef0f4;
+    background: #fafafa;
+    color: var(--vip-muted);
+    font-size: 12px;
+    line-height: 1.55;
   }
 
   .vip-alert-list {
     display: grid;
-    gap: 10px;
-    margin-top: 16px;
+    gap: 12px;
+    margin-top: 18px;
   }
 
   .vip-alert {
     display: grid;
-    grid-template-columns: 9px minmax(0,1fr) auto;
-    gap: 10px;
+    grid-template-columns: 10px minmax(0,1fr) auto;
+    gap: 12px;
     align-items: start;
-    padding: 13px 0;
+    padding: 14px 0;
     border-bottom: 1px solid #f0f0f4;
   }
 
   .vip-alert:last-child { border-bottom: 0; }
 
   .vip-alert__dot {
-    width: 8px;
-    height: 8px;
+    width: 9px;
+    height: 9px;
     border-radius: 50%;
-    margin-top: 5px;
+    margin-top: 6px;
   }
 
   .vip-alert--high .vip-alert__dot {
-    background: #e14d4d;
-    box-shadow: 0 0 0 5px rgba(225,77,77,.10);
+    background: #d32f2f;
+    box-shadow: 0 0 0 5px rgba(211,47,47,.12);
   }
 
   .vip-alert--medium .vip-alert__dot {
-    background: #dfa52c;
-    box-shadow: 0 0 0 5px rgba(223,165,44,.10);
+    background: #d89a17;
+    box-shadow: 0 0 0 5px rgba(216,154,23,.12);
   }
 
   .vip-alert__title {
     display: flex;
     flex-wrap: wrap;
-    gap: 7px;
+    gap: 8px;
     align-items: center;
-    font-size: 12px;
+    font-size: 13px;
     font-weight: 800;
   }
 
   .vip-alert__query {
-    margin-top: 5px;
-    color: #393b44;
-    font-size: 12px;
-    font-weight: 650;
+    margin-top: 6px;
+    color: var(--vip-text);
+    font-size: 13px;
+    font-weight: 700;
   }
 
   .vip-alert__detail {
-    margin-top: 4px;
-    color: #858995;
-    font-size: 10px;
-    line-height: 1.45;
+    margin-top: 5px;
+    color: var(--vip-muted);
+    font-size: 12px;
+    line-height: 1.5;
   }
 
   .vip-alert__count {
-    min-width: 32px;
+    min-width: 34px;
     border-radius: 999px;
-    padding: 4px 7px;
-    background: #f3f1fb;
-    color: #6258a8;
-    font-size: 10px;
+    padding: 5px 9px;
+    background: #f1f0fb;
+    color: #4f46e5;
+    font-size: 12px;
     font-weight: 800;
     text-align: center;
   }
 
   .vip-alert-empty {
-    margin-top: 16px;
-    padding: 18px;
+    margin-top: 18px;
+    padding: 20px;
     border-radius: 16px;
-    background: #f4fbf7;
-    border: 1px solid #d7eee0;
-    color: #327052;
-    font-size: 12px;
-    line-height: 1.5;
+    background: #e4f8f0;
+    border: 1px solid #a3e0c9;
+    color: #008060;
+    font-size: 13px;
+    line-height: 1.55;
+    font-weight: 600;
   }
-
 
   @media (max-width: 980px) {
     .vip-hero__content, .vip-grid, .vip-analytics-grid { grid-template-columns: 1fr; }
@@ -1107,9 +1116,9 @@ const dashboardCss = `
   }
 
   @media (max-width: 640px) {
-    .vip-hero { padding: 22px; border-radius: 20px; }
+    .vip-hero { padding: 24px; border-radius: 20px; }
     .vip-metrics, .vip-impact-kpis { grid-template-columns: 1fr; }
-    .vip-check-row { grid-template-columns: 34px minmax(0,1fr); }
+    .vip-check-row { grid-template-columns: 36px minmax(0,1fr); }
     .vip-check-action { grid-column: 2; }
   }
 `;
@@ -1134,52 +1143,52 @@ export default function Dashboard() {
   if (!entitlement.active) {
     overall = {
       state: "warning",
-      title: "Kích hoạt gói để bắt đầu",
-      detail: "Subscription chưa active nên storefront hiện vẫn dùng Shopify Search.",
+      title: "Activate Plan to Launch AI Search",
+      detail: "Subscription is currently inactive. Storefront searches are safely handled by Shopify Native Search.",
     };
   } else if (catalogFailed || queueHasFailures) {
     overall = {
       state: "critical",
-      title: "Có vấn đề cần xử lý trước khi launch",
-      detail: "Catalog sync hoặc product queue đang có lỗi. AI Search vẫn giữ fallback an toàn.",
+      title: "Action Required Before Launch",
+      detail: "Catalog sync or product processing queue encountered errors. Safe fallback remains active.",
     };
   } else if (!catalogReady) {
     overall = {
       state: "warning",
-      title: catalogBusy ? "Đang chuẩn bị catalog" : "Catalog chưa sẵn sàng",
-      detail: "Hệ thống đang chuẩn bị dữ liệu sản phẩm và vector search cho storefront.",
+      title: catalogBusy ? "Preparing Catalog Index" : "Catalog Index Not Ready",
+      detail: "Preparing product catalog and vector embeddings for storefront search.",
     };
   } else if (!searchSettingReady) {
     overall = {
       state: "neutral",
-      title: "AI Search đang tạm tắt",
-      detail: "Storefront đang để Shopify Search tiếp quản. Có thể bật lại bất cứ lúc nào trong Settings.",
+      title: "AI Search Engine is Paused",
+      detail: "Storefront is using default Shopify Search. You can re-enable AI Search in Settings anytime.",
     };
   } else if (!embedReady) {
     overall = {
       state: "warning",
-      title: "Còn một bước: bật App Embed",
-      detail: "Backend đã sẵn sàng. Bật App Embed trên theme hiện tại để AI Search xuất hiện ngoài storefront.",
+      title: "One More Step: Enable App Embed",
+      detail: "Backend is ready. Enable App Embed in Theme Editor to display AI search on storefront.",
     };
   } else if (!themeReady) {
     overall = {
       state: "warning",
-      title: "Đang chờ xác nhận theme integration",
-      detail: "Theme hiện tại chưa có render path được xác nhận. Shopify Search vẫn là fallback an toàn.",
+      title: "Pending Theme Integration Check",
+      detail: "Active theme render path is awaiting confirmation. Safe fallback is active.",
     };
   } else if (!entitlement.searchAllowed) {
     overall = {
       state: "warning",
-      title: "Shopify Search đang tiếp quản",
+      title: "Shopify Native Search is Active",
       detail: entitlement.disabledReason
-        ? `AI Search tạm chưa chạy: ${entitlement.disabledReason}.`
-        : "AI Search tạm chưa được phép chạy theo entitlement hiện tại.",
+        ? `AI Search is temporarily paused: ${entitlement.disabledReason}.`
+        : "AI Search is currently paused by entitlement limits.",
     };
   } else {
     overall = {
       state: "success",
-      title: "AI Search đang vận hành",
-      detail: "Catalog, subscription và theme integration đều đã sẵn sàng cho production traffic.",
+      title: "AI Search is Operational",
+      detail: "Catalog, subscription, and theme integration are 100% ready for production traffic.",
     };
   }
 
@@ -1244,7 +1253,7 @@ export default function Dashboard() {
       : "success";
 
   return (
-    <s-page heading="AI Search">
+    <div style={{ width: "100%", padding: "0 24px 60px 24px", boxSizing: "border-box" }}>
       <style>{dashboardCss}</style>
 
       <div className="vip-shell">
@@ -1305,22 +1314,22 @@ export default function Dashboard() {
         </section>
 
         {(catalogFailed || queueHasFailures) ? (
-          <Notice state="critical" title="Đồng bộ cần xử lý">
-            Product queue có {data.queue.failed.toLocaleString("vi-VN")} job FAILED.
+          <Notice state="critical" title="Catalog Sync Attention Required">
+            Product queue has {data.queue.failed.toLocaleString("en-US")} FAILED jobs.
             {data.catalogJob?.lastError
-              ? ` Catalog error gần nhất: ${data.catalogJob.lastError}`
-              : " Kiểm tra worker/log trước khi mở production traffic."}
+              ? ` Latest catalog error: ${data.catalogJob.lastError}`
+              : " Check background queue and logs before opening live traffic."}
           </Notice>
         ) : null}
 
         {entitlement.productLimitBlockedProducts > 0 ||
         entitlement.vectorQuotaBlockedProducts > 0 ? (
-          <Notice state="warning" title="Một phần catalog chưa có vector">
+          <Notice state="warning" title="Partial Catalog Vector Indexing">
             {entitlement.productLimitBlockedProducts > 0
-              ? `${entitlement.productLimitBlockedProducts.toLocaleString("vi-VN")} sản phẩm đang bị chặn bởi product limit. `
+              ? `${entitlement.productLimitBlockedProducts.toLocaleString("en-US")} products are currently restricted by product limit. `
               : ""}
             {entitlement.vectorQuotaBlockedProducts > 0
-              ? `${entitlement.vectorQuotaBlockedProducts.toLocaleString("vi-VN")} sản phẩm đang chờ vector quota.`
+              ? `${entitlement.vectorQuotaBlockedProducts.toLocaleString("en-US")} products are pending vector quota.`
               : ""}
           </Notice>
         ) : null}
@@ -1329,7 +1338,7 @@ export default function Dashboard() {
           <MetricCard
             eyebrow="Indexed products"
             value={formatUsage(entitlement.indexedProducts, entitlement.limits.productLimit)}
-            detail="Sản phẩm hiện có vector và sẵn sàng tham gia AI ranking."
+            detail="Products indexed with vectors for AI ranking."
             progress={productProgress}
             accent="violet"
           />
@@ -1338,8 +1347,8 @@ export default function Dashboard() {
             value={formatUsage(entitlement.usage.searchCount, entitlement.limits.searchLimit)}
             detail={
               searchRemaining === null
-                ? "Unlimited plan · usage vẫn được ghi nhận."
-                : `Còn ${searchRemaining.toLocaleString("vi-VN")} lượt trong kỳ.`
+                ? "Unlimited plan · executions logged."
+                : `${searchRemaining.toLocaleString("en-US")} remaining in cycle.`
             }
             progress={searchProgress}
             accent="cyan"
@@ -1347,17 +1356,16 @@ export default function Dashboard() {
           <MetricCard
             eyebrow="AI coverage"
             value={`${aiCoverage}%`}
-            detail={`${entitlement.usage.searchCount.toLocaleString("vi-VN")} / ${storefrontSearches.toLocaleString("vi-VN")} storefront searches chạy qua AI.`}
+            detail={`${entitlement.usage.searchCount.toLocaleString("en-US")} / ${storefrontSearches.toLocaleString("en-US")} storefront searches processed by AI.`}
             accent="green"
           />
           <MetricCard
             eyebrow="Safe fallback"
             value={`${fallbackRate}%`}
-            detail={`${fallbackCount.toLocaleString("vi-VN")} lượt được Shopify Search tiếp quản an toàn.`}
+            detail={`${fallbackCount.toLocaleString("en-US")} searches routed to safe Shopify Search fallback.`}
             accent="amber"
           />
         </section>
-
 
         <section className="vip-analytics-grid">
           <div className="vip-panel vip-impact">
@@ -1365,46 +1373,45 @@ export default function Dashboard() {
               <div>
                 <h3>Search performance</h3>
                 <p>
-                  So sánh tổng search, search có click và search bất thường theo
-                  từng ngày trong 7 ngày gần nhất.
+                  Compare total searches, clicked searches, and anomalies over the last 7 days.
                 </p>
               </div>
               <StatusPill state={current7dSearches > 0 ? "success" : "neutral"}>
-                {`${current7dSearches.toLocaleString("vi-VN")} searches · 7 days`}
+                {`${current7dSearches.toLocaleString("en-US")} searches · 7 days`}
               </StatusPill>
             </div>
 
             <div className="vip-impact-kpis">
               <div className="vip-impact-kpi">
                 <span>AI searches · 7 days</span>
-                <strong>{current7dSearches.toLocaleString("vi-VN")}</strong>
+                <strong>{current7dSearches.toLocaleString("en-US")}</strong>
                 <small>
                   {previous7dSearches > 0
-                    ? `${signedPct(searchVolumeDeltaPercent)} so với 7 ngày trước`
-                    : `7 ngày trước: ${previous7dSearches.toLocaleString("vi-VN")}`}
+                    ? `${signedPct(searchVolumeDeltaPercent)} vs previous 7 days`
+                    : `7 days prior: ${previous7dSearches.toLocaleString("en-US")}`}
                 </small>
               </div>
 
               <div className="vip-impact-kpi">
                 <span>Searches with click</span>
-                <strong>{current7dClickedSearches.toLocaleString("vi-VN")}</strong>
+                <strong>{current7dClickedSearches.toLocaleString("en-US")}</strong>
                 <small>
                   {current7dSearches > 0
-                    ? `${Math.max(0, current7dSearches - current7dClickedSearches).toLocaleString("vi-VN")} search chưa có click`
-                    : "Chưa có search trong 7 ngày"}
+                    ? `${Math.max(0, current7dSearches - current7dClickedSearches).toLocaleString("en-US")} searches without clicks`
+                    : "No searches recorded in last 7 days"}
                 </small>
               </div>
 
               <div className="vip-impact-kpi">
                 <span>CTR · 7 days</span>
                 <strong>{fmtPct(current7dCtr)}</strong>
-                <small>7 ngày trước: {fmtPct(previous7dCtr)}</small>
+                <small>7 days prior: {fmtPct(previous7dCtr)}</small>
               </div>
 
               <div className="vip-impact-kpi">
-                <span>Search bất thường · 7 days</span>
-                <strong>{current7dAbnormalSearches.toLocaleString("vi-VN")}</strong>
-                <small>NO_RESULTS, LOW_SIMILARITY hoặc HIGH_SIMILARITY_NO_CLICK</small>
+                <span>Search anomalies · 7 days</span>
+                <strong>{current7dAbnormalSearches.toLocaleString("en-US")}</strong>
+                <small>NO_RESULTS, LOW_SIMILARITY, or HIGH_SIMILARITY_NO_CLICK</small>
               </div>
             </div>
 
@@ -1413,10 +1420,9 @@ export default function Dashboard() {
             <div className="vip-baseline-note">
               <strong>7-day view:</strong>
               <span>
-                Ba đường dùng cùng một SearchLog theo ngày. “Search bất thường”
-                là lượt có tín hiệu NO_RESULTS, LOW_SIMILARITY hoặc
-                HIGH_SIMILARITY_NO_CLICK; Search Alerts bên cạnh vẫn chỉ nổi các
-                cụm bất thường lặp lại trong cửa sổ {impact.windowDays} ngày.
+                All three trend lines use the same daily SearchLog. "Search anomalies"
+                represent queries flagged with NO_RESULTS, LOW_SIMILARITY, or
+                HIGH_SIMILARITY_NO_CLICK. Search Alerts highlight recurring issues over a {impact.windowDays}-day window.
               </span>
             </div>
           </div>
@@ -1424,8 +1430,7 @@ export default function Dashboard() {
           <aside className="vip-panel vip-alerts">
             <h3>Search alerts</h3>
             <div className="vip-alerts__intro">
-              Chỉ nổi các bất thường lặp lại; query đơn lẻ không làm merchant bị
-              spam cảnh báo.
+              Highlights recurring search anomalies; isolated query spikes are filtered to avoid alert fatigue.
             </div>
 
             {impact.alerts.length ? (
@@ -1453,20 +1458,19 @@ export default function Dashboard() {
                       <div className="vip-alert__detail">{alert.detail}</div>
                     </div>
                     <div className="vip-alert__count">
-                      {alert.count.toLocaleString("vi-VN")}
+                      {alert.count.toLocaleString("en-US")}
                     </div>
                   </div>
                 ))}
               </div>
             ) : (
               <div className="vip-alert-empty">
-                Chưa có cụm search bất thường đủ tần suất trong cửa sổ{" "}
-                {impact.windowDays} ngày.
+                No recurring search anomalies detected within the {impact.windowDays}-day window.
               </div>
             )}
 
             <div style={{ marginTop: 16 }}>
-              <Link to="/app/search-analytics">Mở Search Analytics →</Link>
+              <Link to="/app/search-analytics">Open Search Analytics →</Link>
             </div>
           </aside>
         </section>
@@ -1476,7 +1480,7 @@ export default function Dashboard() {
             <div className="vip-panel__head">
               <div>
                 <h3>Production readiness</h3>
-                <p>5 lớp cần ổn định trước khi đưa traffic thật vào AI Search.</p>
+                <p>5 essential layers required before accepting live traffic.</p>
               </div>
               <StatusPill state={readinessPercent === 100 ? "success" : "warning"}>
                 {readinessPercent === 100 ? "Ready to launch" : `${readinessDone}/5 complete`}
@@ -1518,8 +1522,8 @@ export default function Dashboard() {
                 }
                 detail={
                   data.catalogJob
-                    ? `Processed ${data.catalogJob.productsProcessed.toLocaleString("vi-VN")} · Indexed ${data.catalogJob.productsIndexed.toLocaleString("vi-VN")} · Skipped ${data.catalogJob.productsSkipped.toLocaleString("vi-VN")} · Failed ${data.catalogJob.productsFailed.toLocaleString("vi-VN")}`
-                    : "Chưa có catalog sync job."
+                    ? `Processed ${data.catalogJob.productsProcessed.toLocaleString("en-US")} · Indexed ${data.catalogJob.productsIndexed.toLocaleString("en-US")} · Skipped ${data.catalogJob.productsSkipped.toLocaleString("en-US")} · Failed ${data.catalogJob.productsFailed.toLocaleString("en-US")}`
+                    : "No catalog sync job recorded."
                 }
                 action={{ label: "Open settings", href: "/app/settings" }}
               />
@@ -1545,7 +1549,7 @@ export default function Dashboard() {
                 detail={
                   data.theme.themeName
                     ? `Published theme: ${data.theme.themeName}`
-                    : "App Embed phải được bật trên theme đang publish."
+                    : "App Embed must be enabled on your active theme."
                 }
                 action={
                   data.appEmbedUrl
@@ -1602,7 +1606,7 @@ export default function Dashboard() {
           <div className="vip-side-stack">
             <div className="vip-panel vip-health">
               <h3>System health</h3>
-              <p>Live status của các lớp ảnh hưởng trực tiếp tới storefront.</p>
+              <p>Live status of critical layers affecting storefront search.</p>
               <HealthRow
                 label="AI Search"
                 value={entitlement.searchAllowed && searchSettingReady ? "Online" : "Standby"}
@@ -1634,7 +1638,7 @@ export default function Dashboard() {
               <div className="vip-intel__icon">AI</div>
               <h3>Search Analytics</h3>
               <p>
-                Theo dõi NO_RESULTS, LOW_SIMILARITY và HIGH_SIMILARITY_NO_CLICK để biết khách đang tìm gì nhưng chưa nhận được kết quả đủ tốt.
+                Track NO_RESULTS, LOW_SIMILARITY, and HIGH_SIMILARITY_NO_CLICK anomalies to understand what shoppers are searching for and optimize product discovery.
               </p>
               <Link to="/app/search-analytics">Open analytics →</Link>
             </div>
@@ -1644,27 +1648,27 @@ export default function Dashboard() {
         <section className="vip-quick-grid">
           <QuickLink
             title="Catalog"
-            detail="Theo dõi đồng bộ sản phẩm, vector index và trạng thái catalog."
+            detail="Monitor product catalog sync jobs, vector indexes, and status."
             href="/app/catalog-sync"
           />
           <QuickLink
             title="Search Analytics"
-            detail="Xem CTR, click, truy vấn bất thường và chất lượng kết quả."
+            detail="Track CTR, clicks, abnormal queries, and result quality."
             href="/app/search-analytics"
           />
           <QuickLink
             title="Usage"
-            detail="Theo dõi search quota, embeddings, fallback và mức sử dụng."
+            detail="Monitor search quotas, embeddings, fallbacks, and usage logs."
             href="/app/usage"
           />
           <QuickLink
             title="Plans & Billing"
-            detail="Quản lý gói AI Search và giới hạn thương mại."
+            detail="Manage AI Search subscription plans and commercial quotas."
             href="/app/billing"
           />
           <QuickLink
             title="Settings"
-            detail="Ngôn ngữ search, số kết quả, trạng thái AI và cấu hình storefront."
+            detail="Configure search language, result limits, AI status, and storefront options."
             href="/app/settings"
           />
           <QuickLink
@@ -1672,13 +1676,13 @@ export default function Dashboard() {
             detail={
               data.theme.themeName
                 ? `Current theme · ${data.theme.themeName}`
-                : "Kiểm tra App Embed và theme integration."
+                : "Check App Embed and theme integration status."
             }
             href={data.appEmbedUrl ?? "/app/settings"}
             targetTop={Boolean(data.appEmbedUrl)}
           />
         </section>
       </div>
-    </s-page>
+    </div>
   );
 }

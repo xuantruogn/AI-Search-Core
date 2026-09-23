@@ -39,6 +39,7 @@
     "@shopify/shopify-app-react-router": "^1.2.1",
     "@shopify/shopify-app-session-storage-prisma": "^9.0.0",
     "isbot": "^5.1.31",
+    "mysql2": "^3.24.4",
     "openai": "^7.8.0",
     "prisma": "^6.16.3",
     "react": "^18.3.1",
