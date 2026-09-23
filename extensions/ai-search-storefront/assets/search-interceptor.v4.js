@@ -17,6 +17,16 @@
   )}`;
   let concealedMount = null;
   let loadingSkeleton = null;
+  let activeMount = null;
+  const UI_STATE = Object.freeze({
+    IDLE: "IDLE",
+    INITIAL_SEARCH_LOADING: "INITIAL_SEARCH_LOADING",
+    IN_PLACE_SEARCH_LOADING: "IN_PLACE_SEARCH_LOADING",
+    PAGINATION_LOADING: "PAGINATION_LOADING",
+    AI_READY: "AI_READY",
+    NATIVE_FALLBACK: "NATIVE_FALLBACK",
+  });
+  let uiState = UI_STATE.IDLE;
 
   function validateLoadingMount(recipe) {
     if (!recipe?.selector) return null;
@@ -135,20 +145,17 @@
       style.textContent = `
         [data-ai-search-v4-loading] {
           position: fixed;
-          top: 50%;
-          left: 50%;
+          inset: 0;
           z-index: 2147483000;
           display: none;
           align-items: center;
           justify-content: center;
-          width: 3rem;
-          height: 3rem;
-          border-radius: 999px;
-          background: color-mix(in srgb, Canvas 92%, transparent);
+          min-height: 100dvh;
+          padding: 2rem;
+          background: Canvas;
           color: CanvasText;
-          box-shadow: 0 2px 12px rgb(0 0 0 / 16%);
-          pointer-events: none;
-          transform: translate(-50%, -50%);
+          pointer-events: auto;
+          text-align: center;
         }
 
         [data-ai-search-v4-concealed="true"] {
@@ -195,6 +202,17 @@
 
         [data-ai-search-v4-reveal="true"] {
           animation: ai-search-v4-reveal 160ms ease-out both;
+        }
+
+        [data-ai-search-v4-busy="in-place"],
+        [data-ai-search-v4-busy="pagination"] {
+          opacity: 0.42;
+          pointer-events: none !important;
+          transition: opacity 140ms ease;
+        }
+
+        [data-ai-search-v4-busy="in-place"] {
+          filter: grayscale(0.2);
         }
 
         @keyframes ai-search-v4-shimmer {
@@ -245,7 +263,8 @@
       loading.setAttribute("aria-live", "polite");
       loading.setAttribute("aria-label", "Loading search results");
       loading.innerHTML =
-        '<span data-ai-search-v4-spinner aria-hidden="true"></span>';
+        '<span data-ai-search-v4-spinner aria-hidden="true"></span>' +
+        '<strong style="display:block;margin-inline-start:1rem">Finding the best matches…</strong>';
 
       (document.body || document.documentElement).appendChild(loading);
     }
@@ -258,6 +277,47 @@
     concealCachedNativeResults();
     loading.dataset.active = concealedMount ? "false" : "true";
     document.documentElement.setAttribute("aria-busy", "true");
+  }
+
+  function setMountBusy(mount, kind) {
+    if (!(mount instanceof Element)) return;
+    activeMount = mount;
+    mount.setAttribute("aria-busy", "true");
+    mount.setAttribute("data-ai-search-v4-busy", kind);
+    mount.inert = true;
+  }
+
+  function clearMountBusy() {
+    if (!(activeMount instanceof Element)) return;
+    activeMount.removeAttribute("aria-busy");
+    activeMount.removeAttribute("data-ai-search-v4-busy");
+    activeMount.inert = false;
+  }
+
+  function transitionUi(nextState, options) {
+    const mount = options?.mount || activeMount;
+    uiState = nextState;
+    if (nextState === UI_STATE.INITIAL_SEARCH_LOADING) {
+      clearMountBusy();
+      showLoading();
+      return;
+    }
+    if (nextState === UI_STATE.IN_PLACE_SEARCH_LOADING) {
+      const loading = ensureLoadingUi();
+      loading.dataset.active = "false";
+      setMountBusy(mount, "in-place");
+      document.documentElement.setAttribute("aria-busy", "true");
+      return;
+    }
+    if (nextState === UI_STATE.PAGINATION_LOADING) {
+      const loading = ensureLoadingUi();
+      loading.dataset.active = "false";
+      setMountBusy(mount, "pagination");
+      document.documentElement.setAttribute("aria-busy", "true");
+      return;
+    }
+    clearMountBusy();
+    hideLoading();
   }
 
   function hideLoading() {
@@ -285,6 +345,7 @@
     document.documentElement.removeAttribute(
       "data-ai-search-v4-early-boot",
     );
+    document.querySelector("[data-ai-search-v4-early-shell]")?.remove();
   }
 
   function clonePlainValue(value) {
@@ -510,10 +571,25 @@
       searchLogId: searchLogId || null,
       fingerprint: fingerprint || null,
       themeId: themeId || null,
+      pending: false,
     };
 
     history[replace ? "replaceState" : "pushState"](
       state,
+      "",
+      url.pathname + url.search,
+    );
+  }
+
+  function writePendingUrl(query, replace) {
+    const url = searchUrl(query, 1);
+    history[replace ? "replaceState" : "pushState"](
+      {
+        [stateKey]: true,
+        query,
+        page: 1,
+        pending: true,
+      },
       "",
       url.pathname + url.search,
     );
@@ -2410,6 +2486,53 @@
       ?.remove();
   }
 
+  function ensurePaginationStyle() {
+    if (document.getElementById("ai-search-v4-pagination-style")) return;
+    const style = document.createElement("style");
+    style.id = "ai-search-v4-pagination-style";
+    style.textContent = `
+      [data-ai-search-v4-pagination] { display:grid; gap:1rem; justify-items:center; margin-block:2rem; font:inherit; color:currentColor; }
+      [data-ai-search-v4-pagination-controls] { display:flex; align-items:center; justify-content:center; gap:.4rem; flex-wrap:wrap; }
+      [data-ai-search-v4-pagination] button { min-width:42px; min-height:42px; padding:.55rem .8rem; border:1px solid color-mix(in srgb, currentColor 28%, transparent); border-radius:.45rem; background:Canvas; color:CanvasText; font:inherit; cursor:pointer; }
+      [data-ai-search-v4-pagination] button:hover:not(:disabled) { background:color-mix(in srgb, CanvasText 8%, Canvas); }
+      [data-ai-search-v4-pagination] button:focus-visible { outline:2px solid currentColor; outline-offset:2px; }
+      [data-ai-search-v4-pagination] button[aria-current="page"] { border-color:currentColor; font-weight:700; cursor:default; }
+      [data-ai-search-v4-pagination] button:disabled:not([aria-current]) { opacity:.42; cursor:not-allowed; }
+      [data-ai-search-v4-ellipsis] { min-width:1.5rem; text-align:center; }
+      [data-ai-search-v4-mobile-page] { display:none; }
+      @media (max-width: 749px) {
+        [data-ai-search-v4-desktop-page] { display:none; }
+        [data-ai-search-v4-mobile-page] { display:inline; padding-inline:.5rem; }
+        [data-ai-search-v4-pagination] button { min-width:40px; min-height:40px; }
+      }
+      @media (prefers-reduced-motion: reduce) { [data-ai-search-v4-pagination] * { scroll-behavior:auto !important; transition:none !important; } }
+    `;
+    (document.head || document.documentElement).appendChild(style);
+  }
+
+  function formatResultRange(metadata) {
+    const total = Math.max(0, Number(metadata.totalProducts) || 0);
+    const page = Math.max(1, Number(metadata.page) || 1);
+    const pageSize = Math.max(1, Number(metadata.pageSize) || 1);
+    const start = total === 0 ? 0 : (page - 1) * pageSize + 1;
+    const end = Math.min(page * pageSize, total);
+    return `Showing ${start}–${end} of ${total} results`;
+  }
+
+  function paginationModel(page, totalPages) {
+    const pages = new Set([1, totalPages, page - 1, page, page + 1]);
+    const sorted = [...pages]
+      .filter((value) => value >= 1 && value <= totalPages)
+      .sort((a, b) => a - b);
+    const model = [];
+    for (const value of sorted) {
+      const previous = model.at(-1);
+      if (typeof previous === "number" && value - previous > 1) model.push("ELLIPSIS");
+      model.push(value);
+    }
+    return model;
+  }
+
   function paginationButton(
     label,
     page,
@@ -2461,6 +2584,8 @@
       return;
     }
 
+    ensurePaginationStyle();
+
     const nav =
       document.createElement(
         "nav",
@@ -2474,60 +2599,51 @@
       "Search result pages",
     );
 
-    if (
-      metadata.page > 1
-    ) {
-      nav.appendChild(
-        paginationButton(
-          "←",
-          metadata.page - 1,
-          false,
-          onPage,
-        ),
-      );
+    const summary = document.createElement("div");
+    summary.textContent = formatResultRange(metadata);
+    nav.appendChild(summary);
+
+    const controls = document.createElement("div");
+    controls.dataset.aiSearchV4PaginationControls = "";
+    const previous = paginationButton("← Previous", metadata.page - 1, false, onPage);
+    previous.disabled = metadata.page <= 1;
+    previous.setAttribute("aria-label", "Previous search results page");
+    controls.appendChild(previous);
+
+    for (const item of paginationModel(metadata.page, metadata.totalPages)) {
+      if (item === "ELLIPSIS") {
+        const ellipsis = document.createElement("span");
+        ellipsis.dataset.aiSearchV4Ellipsis = "";
+        ellipsis.setAttribute("aria-hidden", "true");
+        ellipsis.textContent = "…";
+        controls.appendChild(ellipsis);
+      } else {
+        const button = paginationButton(String(item), item, item === metadata.page, onPage);
+        button.dataset.aiSearchV4DesktopPage = "";
+        button.setAttribute("aria-label", `Search results page ${item}`);
+        controls.appendChild(button);
+      }
     }
 
-    const first =
-      Math.max(
-        1,
-        metadata.page - 2,
-      );
+    const mobile = document.createElement("span");
+    mobile.dataset.aiSearchV4MobilePage = "";
+    mobile.textContent = `Page ${metadata.page} of ${metadata.totalPages}`;
+    controls.appendChild(mobile);
 
-    const last =
-      Math.min(
-        metadata.totalPages,
-        metadata.page + 2,
-      );
+    const next = paginationButton("Next →", metadata.page + 1, false, onPage);
+    next.disabled = metadata.page >= metadata.totalPages;
+    next.setAttribute("aria-label", "Next search results page");
+    controls.appendChild(next);
+    nav.appendChild(controls);
 
-    for (
-      let page = first;
-      page <= last;
-      page += 1
-    ) {
-      nav.appendChild(
-        paginationButton(
-          String(page),
-          page,
-          page ===
-            metadata.page,
-          onPage,
-        ),
-      );
-    }
-
-    if (
-      metadata.page <
-      metadata.totalPages
-    ) {
-      nav.appendChild(
-        paginationButton(
-          "→",
-          metadata.page + 1,
-          false,
-          onPage,
-        ),
-      );
-    }
+    const live = document.createElement("span");
+    live.setAttribute("aria-live", "polite");
+    live.style.position = "absolute";
+    live.style.inlineSize = "1px";
+    live.style.blockSize = "1px";
+    live.style.overflow = "hidden";
+    live.textContent = `Page ${metadata.page} of ${metadata.totalPages} loaded`;
+    nav.appendChild(live);
 
     mount.insertAdjacentElement(
       "afterend",
@@ -2684,6 +2800,7 @@
     page,
     receipt,
     replaceUrl,
+    requestedUiState,
   ) {
     controller?.abort();
 
@@ -2699,15 +2816,11 @@
     const hadExistingReceipt =
       Boolean(receipt);
 
-    if (hadExistingReceipt) {
-      /*
-       * Pagination/Back/Forward giữ grid hiện tại trên màn hình.
-       * Không phủ full-screen loader khi receipt đã tồn tại.
-       */
-      hideLoading();
-    } else {
-      showLoading();
-    }
+    const executionUiState = requestedUiState ||
+      (hadExistingReceipt
+        ? UI_STATE.PAGINATION_LOADING
+        : UI_STATE.INITIAL_SEARCH_LOADING);
+    transitionUi(executionUiState, { mount: activeMount });
 
     /*
      * FIX QUAN TRỌNG:
@@ -2841,6 +2954,8 @@
           .searchLogId ||
         activeSearchLogId;
 
+      activeMount = rendered.mount;
+
       writeUrl({
         query,
 
@@ -2865,6 +2980,8 @@
           rendered.metadata
             .themeId,
       });
+
+      transitionUi(UI_STATE.AI_READY, { mount: rendered.mount });
 
       updateResultCount(
         rendered.mount,
@@ -2900,6 +3017,7 @@
             nextPage,
             activeReceipt,
             true,
+            UI_STATE.PAGINATION_LOADING,
           );
         },
       );
@@ -2982,14 +3100,29 @@
           },
         );
 
-        fallback(query);
+        if (executionUiState === UI_STATE.PAGINATION_LOADING) {
+          transitionUi(UI_STATE.AI_READY, { mount: activeMount });
+        } else if (
+          executionUiState === UI_STATE.INITIAL_SEARCH_LOADING &&
+          publicState().query === query
+        ) {
+          transitionUi(UI_STATE.NATIVE_FALLBACK, { mount: activeMount });
+        } else {
+          transitionUi(UI_STATE.NATIVE_FALLBACK, { mount: activeMount });
+          fallback(query);
+        }
       }
     } finally {
       if (
         requestId ===
         requestNumber
       ) {
-        hideLoading();
+        if (
+          uiState !== UI_STATE.AI_READY &&
+          uiState !== UI_STATE.NATIVE_FALLBACK
+        ) {
+          transitionUi(UI_STATE.IDLE, { mount: activeMount });
+        }
       }
     }
   }
@@ -3033,6 +3166,9 @@
       current.page,
       receipt,
       replaceUrl,
+      receipt
+        ? UI_STATE.PAGINATION_LOADING
+        : UI_STATE.INITIAL_SEARCH_LOADING,
     );
   }
   document.addEventListener(
@@ -3108,8 +3244,6 @@
 
       removePagination();
 
-      showLoading();
-
       if (
         isSearchPath(
           location.pathname,
@@ -3123,11 +3257,18 @@
           },
         );
 
+        controller?.abort();
+        writePendingUrl(query, false);
+        transitionUi(UI_STATE.IN_PLACE_SEARCH_LOADING, {
+          mount: activeMount,
+        });
+
         void execute(
           query,
           1,
           "",
-          false,
+          true,
+          UI_STATE.IN_PLACE_SEARCH_LOADING,
         );
 
         return;
@@ -3387,7 +3528,7 @@
     !initial.bypass &&
     initial.query
   ) {
-    showLoading();
+    transitionUi(UI_STATE.INITIAL_SEARCH_LOADING);
 
     runCurrentSearchEntry(
       true,

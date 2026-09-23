@@ -25,6 +25,42 @@
     };
   </script>
 
+  <style id="ai-search-v4-early-style">
+    html[data-ai-search-v4-early-boot="pending"] [data-ai-search-v4-early-shell] {
+      position: fixed;
+      inset: 0;
+      z-index: 2147483000;
+      display: grid;
+      place-items: center;
+      min-height: 100dvh;
+      padding: 2rem;
+      background: Canvas;
+      color: CanvasText;
+      pointer-events: auto;
+    }
+    [data-ai-search-v4-early-shell] { display: none; }
+    [data-ai-search-v4-early-shell-content] {
+      display: grid;
+      justify-items: center;
+      gap: 1rem;
+      max-width: 32rem;
+      text-align: center;
+      font: inherit;
+    }
+    [data-ai-search-v4-early-spinner] {
+      width: 2.5rem;
+      height: 2.5rem;
+      border: 3px solid color-mix(in srgb, CanvasText 25%, Canvas);
+      border-top-color: CanvasText;
+      border-radius: 50%;
+      animation: ai-search-v4-early-spin 0.8s linear infinite;
+    }
+    @keyframes ai-search-v4-early-spin { to { transform: rotate(360deg); } }
+    @media (prefers-reduced-motion: reduce) {
+      [data-ai-search-v4-early-spinner] { animation: none; }
+    }
+  </style>
+
   <script>
     (function () {
       "use strict";
@@ -36,6 +72,9 @@
       var isBypassSearch =
         isSearchPage && currentParams.get("_ai_search_bypass") === "1";
       var endpoint = config.search_endpoint || "/apps/ai-search";
+      var currentQuery = (currentParams.get("q") || "").trim();
+      var shouldEarlyBoot =
+        isSearchPage && currentQuery && !isBypassSearch;
 
       /*
       * V3 phải được bootstrap trên storefront pages vì ô Search của Theme
@@ -46,9 +85,30 @@
 
       var root = document.documentElement;
 
+      function ensureEarlyShell() {
+        if (!shouldEarlyBoot) return;
+        root.setAttribute("data-ai-search-v4-early-boot", "pending");
+        root.setAttribute("aria-busy", "true");
+        var existing = document.querySelector("[data-ai-search-v4-early-shell]");
+        if (existing) return;
+        var shell = document.createElement("div");
+        shell.setAttribute("data-ai-search-v4-early-shell", "");
+        shell.setAttribute("role", "status");
+        shell.setAttribute("aria-live", "polite");
+        shell.innerHTML =
+          '<div data-ai-search-v4-early-shell-content>' +
+          '<span data-ai-search-v4-early-spinner aria-hidden="true"></span>' +
+          '<strong>Finding the best matches…</strong>' +
+          '</div>';
+        root.appendChild(shell);
+      }
+
+      ensureEarlyShell();
+
       function releaseEarlyBoot() {
         root.removeAttribute("data-ai-search-v4-early-boot");
         root.removeAttribute("aria-busy");
+        document.querySelector("[data-ai-search-v4-early-shell]")?.remove();
       }
 
       function loadScript(src, label) {
@@ -251,8 +311,6 @@
           if (!isSearchPage) {
             return;
           }
-
-          releaseEarlyBoot();
 
           var v4Src =
             {{ 'search-interceptor.v4.js' | asset_url | json }};

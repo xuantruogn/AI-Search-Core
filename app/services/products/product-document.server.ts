@@ -1,6 +1,7 @@
 export type ProductVariantForIndex = {
   title: string;
   sku?: string | null;
+  barcode?: string | null;
 };
 
 export type ProductForIndex = {
@@ -155,6 +156,15 @@ export function buildProductDocument(product: ProductForIndex): string {
 
     if (skus.length > 0) {
       parts.push(`SKUs: ${skus.join(", ")}.`);
+    }
+
+    const barcodes = uniqueSorted(
+      product.variants.map((variant) => cleanText(variant.barcode)),
+      MAX_VARIANTS,
+    );
+
+    if (barcodes.length > 0) {
+      parts.push(`Barcodes: ${barcodes.join(", ")}.`);
     }
   }
 

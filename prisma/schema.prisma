@@ -246,6 +246,13 @@ model AiSearchIndexedProduct {
   status            String    @default("INDEXED") @db.VarChar(64)
   hasVector         Boolean   @default(false)
   documentHash      String?   @db.VarChar(64)
+  sourceDocumentHash String?  @db.VarChar(64)
+  embeddingPipelineVersion String? @db.VarChar(64)
+  enrichmentVersion String?  @db.VarChar(64)
+  enrichmentStatus String    @default("PENDING") @db.VarChar(32)
+  enrichmentLastError String? @db.Text
+  enrichmentRetryAt DateTime?
+  enrichmentUpdatedAt DateTime?
   lastIndexedAt     DateTime?
   lastSeenAt        DateTime  @default(now())
   lastCatalogSeenAt DateTime?
@@ -259,6 +266,7 @@ model AiSearchIndexedProduct {
   @@index([shop, status])
   @@index([shop, handle])
   @@index([shop, lastCatalogSeenAt])
+  @@index([shop, enrichmentStatus, enrichmentRetryAt], map: "idx_enrich_retry")
 }
 
 // Background initial catalog sync. One shop can keep history, but only one

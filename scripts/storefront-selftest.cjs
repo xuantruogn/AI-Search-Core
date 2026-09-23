@@ -7,9 +7,14 @@ const runtime = fs.readFileSync(
   path.join(__dirname, "../extensions/ai-search-storefront/assets/search-interceptor.v4.js"),
   "utf8",
 );
+const bridge = fs.readFileSync(
+  path.join(__dirname, "../extensions/ai-search-storefront/blocks/ai_search_bridge.liquid"),
+  "utf8",
+);
 
 function pageHtml() {
   return `<!doctype html><html><head><script>
+    window.AI_SEARCH_ENGINE="v4";
     window.AI_SEARCH_CONFIG={version:4,theme_map_version:4,theme_id:"1",search_url:"/search",search_endpoint:"/apps/ai-search"};
   </script><script src="/runtime.js" defer></script></head><body>
     <form action="/search"><input name="q"></form>
@@ -48,6 +53,9 @@ async function scenario(browser, options = {}) {
   const calls = { search: 0, render: 0, nativeRender: 0, click: 0, fallback: 0 };
   const errors = [];
   page.on("pageerror", (error) => errors.push(error.message));
+  page.on("console", (message) => {
+    if (process.env.DEBUG_STOREFRONT_TEST === "1") console.log("[browser]", message.type(), message.text());
+  });
   await page.route("https://theme.test/**", async (route) => {
     const url = new URL(route.request().url());
     if (url.pathname === "/runtime.js") {
@@ -58,6 +66,13 @@ async function scenario(browser, options = {}) {
       return route.fulfill({ contentType: "application/json", body: '{"ok":true}' });
     }
     if (url.pathname === "/apps/ai-search") {
+      if (url.searchParams.get("mode") === "transport-v4") {
+        return route.fulfill({
+          status: 409,
+          contentType: "application/json",
+          body: JSON.stringify({ reason: "THEME_CONTEXT_TRANSPORT_CANDIDATE_NOT_FOUND" }),
+        });
+      }
       if (url.searchParams.get("mode") === "render-v4") {
         calls.render += 1;
         const pageNumber = Number(url.searchParams.get("page") || 1);
@@ -91,19 +106,27 @@ async function scenario(browser, options = {}) {
 
   await page.goto("https://theme.test/search?q=green&type=product&ai_search=1");
   if (options.backendError || options.changedTheme || options.missingMount) {
-    await page.waitForURL((url) => url.searchParams.has("_ai_search_bypass"));
-    assert.equal(calls.fallback, 1);
+    await page.waitForFunction(() =>
+      !document.documentElement.hasAttribute("aria-busy") &&
+      document.querySelector("#VerifiedMount")?.textContent === "native"
+    );
+    assert.equal(calls.fallback, 0);
   } else {
     await page.waitForFunction(() => document.querySelector("#VerifiedMount")?.textContent === "betaalpha");
     assert.deepEqual(
       await page.locator("#VerifiedMount > li").evaluateAll((nodes) => nodes.map((node) => node.dataset.handle)),
       ["beta", "alpha"],
     );
+    await page.locator("#VerifiedMount a").first().evaluate((anchor) => {
+      anchor.addEventListener("click", (event) => event.preventDefault(), { once: true });
+    });
     await page.locator("#VerifiedMount a").first().click({ noWaitAfter: true });
     await page.waitForTimeout(50);
-    await page.getByRole("button", { name: "→" }).click();
+    await page.getByRole("button", { name: "Next search results page" }).click();
     await page.waitForFunction(() => document.querySelector("#VerifiedMount")?.textContent === "gamma");
-    assert.equal(new URL(page.url()).searchParams.get("receipt"), "srch_fixture");
+    assert.equal(new URL(page.url()).searchParams.get("receipt"), null);
+    assert.equal(new URL(page.url()).searchParams.get("page"), "2");
+    assert.equal(await page.evaluate(() => history.state.receipt), "srch_fixture");
     assert.equal(calls.search, 1);
     assert.equal(calls.render, 2);
     assert.equal(calls.nativeRender, 0);
@@ -114,8 +137,15 @@ async function scenario(browser, options = {}) {
 }
 
 async function main() {
+  assert.ok(bridge.includes('data-ai-search-v4-early-boot", "pending"'));
+  assert.ok(bridge.includes("Finding the best matches…"));
+  assert.ok(bridge.indexOf("ensureEarlyShell();") < bridge.indexOf("async function boot()"));
   const { chromium } = require("playwright");
-  const browser = await chromium.launch({ headless: true });
+  const browser = await chromium.launch({
+    headless: true,
+    executablePath: process.env.PLAYWRIGHT_CHROME_PATH ||
+      "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+  });
   try {
     await scenario(browser);
     await scenario(browser, { backendError: true });

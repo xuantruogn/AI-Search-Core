@@ -6,10 +6,32 @@ export type CatalogTermMatch = {
   entry: DictionaryEntry;
   confidence: number;
   matchType: "EXACT" | "NORMALIZED" | "ALIAS" | "FUZZY";
+  start: number;
+  end: number;
 };
 
-function containsPhrase(query: string, phrase: string) {
-  return (` ${query} `).includes(` ${phrase} `);
+const FIELD_PRIORITY: Record<string, number> = {
+  IDENTIFIER: 100,
+  MODEL: 90,
+  BRAND: 85,
+  PRODUCT_TYPE: 80,
+  CATEGORY: 70,
+  AUDIENCE: 60,
+  ATTRIBUTE: 50,
+  COMPATIBILITY: 45,
+  CONTEXT: 30,
+  ALIAS: 20,
+};
+
+function phraseTokenSpan(queryTokens: string[], phrase: string) {
+  const phraseTokens = phrase.split(" ").filter(Boolean);
+  if (phraseTokens.length === 0) return null;
+  for (let start = 0; start <= queryTokens.length - phraseTokens.length; start += 1) {
+    if (phraseTokens.every((token, offset) => queryTokens[start + offset] === token)) {
+      return { start, end: start + phraseTokens.length };
+    }
+  }
+  return null;
 }
 
 function editDistanceAtMostOne(left: string, right: string) {
@@ -33,32 +55,30 @@ export function matchCatalogTerms(
   dictionary: ShopSearchDictionary,
 ): CatalogTermMatch[] {
   const normalizedQuery = normalizeQueryText(query);
+  const queryTokens = normalizedQuery.split(" ").filter(Boolean);
   const matches: CatalogTermMatch[] = [];
-  const occupied = new Set<string>();
+  const occupied = new Set<number>();
 
-  for (const entry of dictionary.entries.slice().sort((a, b) => b.normalized.length - a.normalized.length)) {
-    if (!containsPhrase(normalizedQuery, entry.normalized)) continue;
-    if (
-      matches.some(
-        (match) =>
-          match.entry.field === entry.field &&
-          containsPhrase(match.text, entry.normalized),
-      )
-    ) continue;
-    const key = `${entry.field}\u0000${entry.normalized}`;
-    if (occupied.has(key)) continue;
-    occupied.add(key);
+  for (const entry of dictionary.entries.slice().sort((a, b) => {
+    const tokenDelta = b.normalized.split(" ").length - a.normalized.split(" ").length;
+    return tokenDelta || (FIELD_PRIORITY[b.field] ?? 0) - (FIELD_PRIORITY[a.field] ?? 0);
+  })) {
+    const span = phraseTokenSpan(queryTokens, entry.normalized);
+    if (!span) continue;
+    if (Array.from({ length: span.end - span.start }, (_, index) => span.start + index)
+      .some((index) => occupied.has(index))) continue;
+    for (let index = span.start; index < span.end; index += 1) occupied.add(index);
     matches.push({
       text: entry.normalized,
       entry,
       confidence: entry.field === "ALIAS" ? 0.94 : 1,
       matchType: entry.field === "ALIAS" ? "ALIAS" : "NORMALIZED",
+      ...span,
     });
   }
 
-  const queryTokens = normalizedQuery.split(" ").filter(Boolean);
-  for (const token of queryTokens) {
-    if (token.length < 5 || matches.some((match) => match.text.split(" ").includes(token))) continue;
+  for (const [index, token] of queryTokens.entries()) {
+    if (token.length < 5 || occupied.has(index)) continue;
     const candidates = dictionary.entries.filter(
       (entry) =>
         ["BRAND", "MODEL"].includes(entry.field) &&
@@ -66,7 +86,7 @@ export function matchCatalogTerms(
         editDistanceAtMostOne(token, entry.normalized),
     );
     if (candidates.length !== 1) continue;
-    matches.push({ text: token, entry: candidates[0], confidence: 0.9, matchType: "FUZZY" });
+    matches.push({ text: token, entry: candidates[0], confidence: 0.9, matchType: "FUZZY", start: index, end: index + 1 });
   }
 
   return matches;

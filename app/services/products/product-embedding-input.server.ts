@@ -22,7 +22,11 @@ export type ProductEmbeddingInput = {
   enriched: boolean;
   model: string | null;
   analysis: ProductSemanticAnalysis | null;
+  enrichmentStatus: "ENRICHED" | "FALLBACK" | "PENDING" | "BASE_ONLY";
+  enrichmentError: string | null;
 };
+
+export const PRODUCT_ENRICHMENT_VERSION = "product-semantic-v1";
 
 function readPositiveInteger(name: string, fallback: number) {
   const value = Number.parseInt(process.env[name] || "", 10);
@@ -178,11 +182,14 @@ export async function prepareProductEmbeddingInput(
       enriched: false,
       model: null,
       analysis: null,
+      enrichmentStatus: "BASE_ONLY",
+      enrichmentError: null,
     };
   }
 
   const model = getModel();
-  const response = await getOpenAiClient().responses.create(
+  try {
+    const response = await getOpenAiClient().responses.create(
     {
       model,
       instructions: [
@@ -269,15 +276,32 @@ export async function prepareProductEmbeddingInput(
     },
   );
 
-  const analysis = parseAnalysis(response.output_text);
-  if (!analysis) {
-    throw new Error("Product semantic enrichment returned invalid output");
-  }
+    const analysis = parseAnalysis(response.output_text);
+    if (!analysis) {
+      throw new Error("Product semantic enrichment returned invalid output");
+    }
 
-  return {
-    document: composeDocument(sourceDocument, analysis, shopLanguage),
-    enriched: true,
-    model,
-    analysis,
-  };
+    return {
+      document: composeDocument(sourceDocument, analysis, shopLanguage),
+      enriched: true,
+      model,
+      analysis,
+      enrichmentStatus: "ENRICHED",
+      enrichmentError: null,
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn("[AI Search] Product enrichment failed; base document retained", {
+      model,
+      error: message,
+    });
+    return {
+      document: sourceDocument,
+      enriched: false,
+      model,
+      analysis: null,
+      enrichmentStatus: "FALLBACK",
+      enrichmentError: message.slice(0, 2_000),
+    };
+  }
 }

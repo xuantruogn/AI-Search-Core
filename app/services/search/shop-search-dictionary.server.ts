@@ -1,5 +1,6 @@
 import db from "../../db.server";
 import { normalizeQueryText } from "./deterministic-query-parser.server";
+import { createHash } from "node:crypto";
 
 export type DictionaryField =
   | "PRODUCT_TYPE"
@@ -19,6 +20,10 @@ export type DictionaryEntry = {
   aliases: string[];
   field: DictionaryField;
   productCount: number;
+  conceptId?: string;
+  aliasLanguage?: string | null;
+  source?: "SHOPIFY" | "ENRICHMENT";
+  confidence?: number;
 };
 
 export type ShopSearchDictionary = {
@@ -36,7 +41,7 @@ function mapKind(kind: string): DictionaryField | null {
   if (kind === "CATEGORY") return "CATEGORY";
   if (["VENDOR", "BRAND"].includes(kind)) return "BRAND";
   if (kind === "MODEL") return "MODEL";
-  if (["SKU", "IDENTIFIER"].includes(kind)) return "IDENTIFIER";
+  if (["SKU", "BARCODE", "IDENTIFIER"].includes(kind)) return "IDENTIFIER";
   if (["ATTRIBUTE", "TAG", "VARIANT"].includes(kind)) return "ATTRIBUTE";
   if (kind === "AUDIENCE") return "AUDIENCE";
   if (kind === "USE_CASE") return "CONTEXT";
@@ -62,23 +67,42 @@ export async function getShopSearchDictionary(shop: string): Promise<ShopSearchD
   });
 
   const grouped = new Map<string, DictionaryEntry & { productIds: Set<string> }>();
+  const merchantTypeByProduct = new Map<string, string>();
+  for (const row of rows) {
+    if (row.kind === "PRODUCT_TYPE" && row.value.trim()) {
+      merchantTypeByProduct.set(row.productId, row.value.trim());
+    }
+  }
   let newestTimestamp = 0;
   for (const row of rows) {
     const field = mapKind(row.kind);
     if (!field) continue;
     const normalized = normalizeQueryText(row.normalizedValue || row.value);
     if (!normalized) continue;
-    const key = `${field}\u0000${normalized}`;
+    const canonical = row.kind === "CANONICAL_PRODUCT_TYPE"
+      ? merchantTypeByProduct.get(row.productId) ?? row.value
+      : row.value;
+    const canonicalNormalized = normalizeQueryText(canonical);
+    const key = `${field}\u0000${normalized}\u0000${canonicalNormalized}`;
     const existing = grouped.get(key);
     if (existing) existing.productIds.add(row.productId);
     else {
       grouped.set(key, {
         normalized,
-        canonical: row.value,
+        canonical,
         aliases: [],
         field,
         productCount: 1,
         productIds: new Set([row.productId]),
+        conceptId: createHash("sha256")
+          .update(`${shop}\u0000${field}\u0000${canonicalNormalized}`, "utf8")
+          .digest("hex")
+          .slice(0, 24),
+        aliasLanguage: null,
+        source: ["PRODUCT_TYPE", "VENDOR", "SKU", "BARCODE"].includes(row.kind)
+          ? "SHOPIFY"
+          : "ENRICHMENT",
+        confidence: row.kind === "ALIAS" ? 0.9 : 1,
       });
     }
     newestTimestamp = Math.max(newestTimestamp, row.createdAt.getTime());

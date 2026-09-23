@@ -1,5 +1,9 @@
 import { matchCatalogTerms } from "./catalog-term-matcher.server";
-import { normalizeQueryText, parseDeterministicQuery } from "./deterministic-query-parser.server";
+import {
+  normalizeQueryText,
+  normalizeUnicodeQueryText,
+  parseDeterministicQuery,
+} from "./deterministic-query-parser.server";
 import {
   QUERY_PARSER_VERSION,
   QUERY_ROUTER_VERSION,
@@ -24,7 +28,7 @@ function constraint(value: string, confidence: number): QueryConstraint {
 }
 
 function buildSemanticQuery(query: string, deterministic: ReturnType<typeof parseDeterministicQuery>) {
-  let value = normalizeQueryText(query);
+  let value = normalizeUnicodeQueryText(query);
   value = value
     .replace(/\b(?:duoi|tren|khong qua|khong hon|toi da|toi thieu|it nhat|tu)\s+\d+(?:[.,]\d+)?\s*(?:k|tr|trieu|m|vnd|d|dong)?\b/g, " ")
     .replace(/\b(?:re nhat|dat nhat|gia tang dan|gia giam dan|thap den cao|cao den thap|moi nhat)\b/g, " ")
@@ -104,6 +108,8 @@ async function buildUncachedPlan(shop: string, query: string): Promise<QueryPlan
       }));
   const resolvedSegments = matches.map((match) => ({
     text: match.text,
+    start: match.start,
+    end: match.end,
     field: match.entry.field,
     canonicalValue: match.entry.canonical,
     confidence: match.confidence,
@@ -111,6 +117,9 @@ async function buildUncachedPlan(shop: string, query: string): Promise<QueryPlan
   }));
 
   return {
+    rawQuery: query,
+    normalizedQuery: normalizeUnicodeQueryText(query),
+    foldedQuery: normalizedQuery,
     route: routed.route,
     identities: byField("PRODUCT_TYPE").map((item) => ({ ...item, mode: "MUST" })),
     entities: {

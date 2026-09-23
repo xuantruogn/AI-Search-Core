@@ -17,7 +17,12 @@ function source(filename: string, content: string) {
   };
 }
 
-function compile(section: string, snippetName: string, argument: string) {
+function compile(
+  section: string,
+  snippetName: string,
+  argument: string,
+  sectionSettings: Record<string, string | number | boolean | null> = {},
+) {
   const sectionFile = source("sections/arbitrary.liquid", section);
   const snippet = source(`snippets/${snippetName}.liquid`, `
     <a href="{{ ${argument}.url }}">{{ ${argument}.title }} {{ ${argument}.price | money }}</a>
@@ -38,6 +43,12 @@ function compile(section: string, snippetName: string, argument: string) {
       sectionFile,
       snippet,
     ],
+    settingResolver: {
+      resolveSectionSetting(expression) {
+        const name = expression.match(/^section\.settings\.([A-Za-z_][A-Za-z0-9_-]*)$/)?.[1];
+        return name ? sectionSettings[name] : undefined;
+      },
+    },
   });
 }
 
@@ -60,6 +71,30 @@ async function main() {
     assert.equal(map.rendererCandidates[0].productBinding.argument, fixture.argument);
     assert.equal(map.rendererCandidates[0].mount?.selector, `#Results-${fixture.variable}`);
   }
+
+  const dawnStyle = compile(`
+    {% assign skip_styles = false %}
+    <ul id="ProductGrid" role="list">
+      {% for item in search.results %}
+        {% assign lazy_load = false %}
+        {% if forloop.index > 2 %}{% assign lazy_load = true %}{% endif %}
+        {% case item.object_type %}
+          {% when 'product' %}
+            <li>{% render 'tile', product: item,
+              show_vendor: section.settings.show_vendor,
+              lazy_load: lazy_load,
+              skip_styles: skip_styles %}</li>
+        {% endcase %}
+        {% assign skip_styles = true %}
+      {% endfor %}
+    </ul>
+  `, "tile", "product", { show_vendor: false });
+  assert.equal(dawnStyle.status, "VERIFIED");
+  assert.deepEqual(dawnStyle.rendererCandidates[0].arguments, {
+    show_vendor: false,
+    lazy_load: false,
+    skip_styles: false,
+  });
 
   const contextual = compile(`
     <ul data-results>{% for item in search.results %}
