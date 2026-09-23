@@ -6,6 +6,7 @@ import {
   getShopSettings,
   updateShopSettings,
 } from "../services/commerce/shop-registry.server";
+import { rebuildActiveThemeMapV4 } from "../services/theme/theme-map-v4-lifecycle.server";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
@@ -17,8 +18,64 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
+  const { admin, session } = await authenticate.admin(request);
   const form = await request.formData();
+
+  const intent = String(form.get("intent") ?? "settings");
+
+  if (intent === "sync_theme_map") {
+    try {
+      const map = await rebuildActiveThemeMapV4({
+        admin,
+        shop: session.shop,
+      });
+
+      const hasThemeContextRenderer = map.rendererCandidates.some(
+        (candidate) =>
+          candidate.renderStrategy === "THEME_CONTEXT_REQUIRED" &&
+          candidate.mount != null &&
+          candidate.usesAllProducts === false &&
+          candidate.rejectionReasons.every(
+            (reason) => reason === "THEME_CONTEXT_REQUIRED",
+          ),
+      );
+
+      if (map.status !== "VERIFIED" && !hasThemeContextRenderer) {
+        return {
+          success: false,
+          message: `Theme "${map.theme.name}" does not expose a verified safe renderer: ${
+            map.status === "UNSUPPORTED"
+              ? map.unsupportedReason ?? "UNKNOWN"
+              : "NO_SAFE_RENDERER"
+          }. The storefront will keep using Shopify native search.`,
+        };
+      }
+
+      return {
+        success: true,
+        message: `Theme Map V4 synced for "${map.theme.name}" · ${map.fingerprint.slice(0, 12)}.`,
+      };
+    } catch (error) {
+      console.error("[Settings] Theme Map V4 manual sync failed", {
+        shop: session.shop,
+        error:
+          error instanceof Error
+            ? {
+                name: error.name,
+                message: error.message,
+                stack: error.stack,
+              }
+            : String(error),
+      });
+
+      return {
+        success: false,
+        message: `Theme Map V4 sync failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      };
+    }
+  }
 
   const aiSearchEnabled = form.get("aiSearchEnabled") === "on";
   const customDataModeEnabled = form.get("customDataModeEnabled") === "on";
