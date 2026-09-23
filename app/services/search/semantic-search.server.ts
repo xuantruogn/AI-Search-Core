@@ -60,6 +60,8 @@ export type SemanticSearchDiagnostics = {
   embeddingPreparationCodeMs: number;
   qdrantRequestMs: number;
   qdrantResponseMappingCodeMs: number;
+  qdrantPassCount: number;
+  qdrantFinalCandidateWindow: number;
   thresholdFilterCodeMs: number;
   resultMappingCodeMs: number;
   otherCodeMs: number;
@@ -114,6 +116,8 @@ export async function semanticSearch({
   let embeddingPreparationCodeMs = 0;
   let qdrantRequestMs = 0;
   let qdrantResponseMappingCodeMs = 0;
+  let qdrantPassCount = 0;
+  let qdrantFinalCandidateWindow = 0;
   let thresholdFilterCodeMs = 0;
   let resultMappingCodeMs = 0;
   let effectiveRewrite = preparedRewrite;
@@ -362,6 +366,10 @@ export async function semanticSearch({
         qdrantRequestMs,
 
         qdrantResponseMappingCodeMs,
+
+        qdrantPassCount,
+
+        qdrantFinalCandidateWindow,
 
         thresholdFilterCodeMs,
 
@@ -628,6 +636,9 @@ export async function semanticSearch({
 
       limit,
 
+      scoreThreshold:
+        minimumScore,
+
       onDiagnostics:
         (
           diagnostics,
@@ -639,6 +650,9 @@ export async function semanticSearch({
           qdrantResponseMappingCodeMs =
             diagnostics
               .responseMappingCodeMs;
+
+          qdrantPassCount = diagnostics.passCount;
+          qdrantFinalCandidateWindow = diagnostics.finalCandidateWindow;
         },
     }).then(
       (value) => {
@@ -1105,6 +1119,10 @@ export async function semanticSearch({
     qdrantRequestMs,
 
     qdrantResponseMappingCodeMs,
+
+    qdrantPassCount,
+
+    qdrantFinalCandidateWindow,
 
     thresholdFilterCodeMs,
 

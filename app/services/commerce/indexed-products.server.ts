@@ -17,6 +17,13 @@ export type IndexedProductRow = {
   status: string;
   hasVector: boolean | number;
   documentHash: string | null;
+  sourceDocumentHash: string | null;
+  embeddingPipelineVersion: string | null;
+  enrichmentVersion: string | null;
+  enrichmentStatus: string;
+  enrichmentLastError: string | null;
+  enrichmentRetryAt: Date | string | null;
+  enrichmentUpdatedAt: Date | string | null;
   lastIndexedAt: Date | string | null;
   lastSeenAt: Date | string;
   lastCatalogSeenAt: Date | string | null;
@@ -119,13 +126,69 @@ export async function getIndexedProduct(shop: string, productId: string) {
   const rows = await db.$queryRaw<IndexedProductRow[]>`
     SELECT
       \`id\`, \`shop\`, \`productId\`, \`handle\`, \`title\`, \`status\`, \`hasVector\`,
-      \`documentHash\`, \`lastIndexedAt\`, \`lastSeenAt\`, \`lastCatalogSeenAt\`, \`updatedAt\`
+      \`documentHash\`, \`sourceDocumentHash\`, \`embeddingPipelineVersion\`,
+      \`enrichmentVersion\`, \`enrichmentStatus\`, \`enrichmentLastError\`,
+      \`enrichmentRetryAt\`, \`enrichmentUpdatedAt\`,
+      \`lastIndexedAt\`, \`lastSeenAt\`, \`lastCatalogSeenAt\`, \`updatedAt\`
     FROM \`AiSearchIndexedProduct\`
     WHERE \`shop\` = ${shop} AND \`productId\` = ${productId}
     LIMIT 1
   `;
 
   return rows[0] ?? null;
+}
+
+export async function updateIndexedProductEnrichmentState({
+  shop,
+  productId,
+  sourceDocumentHash,
+  embeddingPipelineVersion,
+  enrichmentVersion,
+  enrichmentStatus,
+  enrichmentLastError,
+  enrichmentRetryAt,
+}: {
+  shop: string;
+  productId: string;
+  sourceDocumentHash: string;
+  embeddingPipelineVersion: string;
+  enrichmentVersion: string;
+  enrichmentStatus: "ENRICHED" | "FALLBACK" | "PENDING" | "FAILED" | "BASE_ONLY";
+  enrichmentLastError: string | null;
+  enrichmentRetryAt: Date | null;
+}) {
+  return db.$executeRaw`
+    UPDATE \`AiSearchIndexedProduct\`
+    SET
+      \`sourceDocumentHash\` = ${sourceDocumentHash},
+      \`embeddingPipelineVersion\` = ${embeddingPipelineVersion},
+      \`enrichmentVersion\` = ${enrichmentVersion},
+      \`enrichmentStatus\` = ${enrichmentStatus},
+      \`enrichmentLastError\` = ${enrichmentLastError},
+      \`enrichmentRetryAt\` = ${enrichmentRetryAt},
+      \`enrichmentUpdatedAt\` = UTC_TIMESTAMP(3),
+      \`updatedAt\` = UTC_TIMESTAMP(3)
+    WHERE \`shop\` = ${shop} AND \`productId\` = ${productId}
+  `;
+}
+
+export async function getEnrichmentCoverageStats(shop: string) {
+  const rows = await db.$queryRaw<Array<{
+    fallbackProducts: bigint | number;
+    awaitingRetryProducts: bigint | number;
+  }>>`
+    SELECT
+      SUM(CASE WHEN \`enrichmentStatus\` = 'FALLBACK' THEN 1 ELSE 0 END) AS \`fallbackProducts\`,
+      SUM(CASE WHEN \`enrichmentStatus\` IN ('PENDING', 'FAILED', 'FALLBACK')
+        AND (\`enrichmentRetryAt\` IS NULL OR \`enrichmentRetryAt\` <= UTC_TIMESTAMP(3))
+        THEN 1 ELSE 0 END) AS \`awaitingRetryProducts\`
+    FROM \`AiSearchIndexedProduct\`
+    WHERE \`shop\` = ${shop} AND \`hasVector\` = true
+  `;
+  return {
+    fallbackProducts: Number(rows[0]?.fallbackProducts ?? 0),
+    awaitingRetryProducts: Number(rows[0]?.awaitingRetryProducts ?? 0),
+  };
 }
 
 export async function reserveProductSlot({

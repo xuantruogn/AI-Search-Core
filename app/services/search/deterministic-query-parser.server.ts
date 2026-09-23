@@ -16,6 +16,15 @@ export function normalizeQueryText(value: string) {
     .trim();
 }
 
+export function normalizeUnicodeQueryText(value: string) {
+  return value
+    .toLocaleLowerCase("vi-VN")
+    .normalize("NFC")
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function constraint(value: string, mode: QueryConstraint["mode"]): QueryConstraint {
   return {
     value,
@@ -82,7 +91,7 @@ export function parseDeterministicQuery(query: string): DeterministicQueryParse 
 
   const negatives: QueryConstraint[] = [];
   const negativePattern = /\b(?:khong phai|khong mau|khong|loai tru|ngoai tru|without|except|not)\s+([^,;]+?)(?=\s+(?:va|hoac|nhung|phai|cang|and|or|but)\b|[,;]|$)/giu;
-  for (const match of query.matchAll(negativePattern)) {
+  for (const match of normalizedQuery.matchAll(negativePattern)) {
     const value = match[1]?.trim();
     if (value) negatives.push(constraint(value, "MUST_NOT"));
   }

@@ -764,6 +764,7 @@ function resolveArgumentExpression(
 function resolveRendererArguments(
   call: DiscoveredRendererCall,
   resolver: ThemeSettingResolver,
+  document: ParsedLiquidDocument,
 ): ResolvedArguments {
   const values: Record<
     string,
@@ -808,11 +809,47 @@ function resolveRendererArguments(
       continue;
     }
 
-    const resolution =
+    let resolution =
       resolveArgumentExpression(
         argument.expression,
         resolver,
       );
+
+    /**
+     * Resolve a local variable only when its last assignment that is visible
+     * at the render call is a scalar literal. Assignments inside an if/case
+     * branch that has already closed are not visible on every execution path
+     * and are deliberately ignored.
+     *
+     * Dawn-family example:
+     *   assign lazy_load = false
+     *   if forloop.index > 2
+     *     assign lazy_load = true
+     *   endif
+     *   render 'card-product', lazy_load: lazy_load
+     *
+     * The unconditional false value is safe for replay. It changes loading
+     * eagerness only; it does not fake forloop or section context.
+     */
+    if (!resolution.resolved && /^[A-Za-z_][A-Za-z0-9_-]*$/.test(argument.expression.trim())) {
+      const variable = argument.expression.trim();
+      const callAncestors = new Set(call.liquidAncestors.map((frame) => frame.tokenIndex));
+      for (let index = call.tokenIndex - 1; index >= 0; index -= 1) {
+        const token = document.tokens[index];
+        if (!token || token.kind !== "LIQUID_TAG" || token.name !== "assign") continue;
+        const assignment = token.markup?.match(/^([A-Za-z_][A-Za-z0-9_-]*)\s*=\s*([\s\S]+)$/);
+        if (!assignment || assignment[1] !== variable) continue;
+        const visibleOnCallPath = token.liquidAncestors.every((frame) =>
+          callAncestors.has(frame.tokenIndex),
+        );
+        if (!visibleOnCallPath) continue;
+        const value = parseLiteral(assignment[2] ?? "");
+        if (value !== undefined) {
+          resolution = { resolved: true, value, usedResolver: false };
+        }
+        break;
+      }
+    }
 
     usedResolver =
       usedResolver ||
@@ -2485,6 +2522,8 @@ function compileSnippetCandidate(
 
       input.settingResolver ??
         {},
+
+      document,
     );
 
   for (

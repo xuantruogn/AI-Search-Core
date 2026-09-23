@@ -35,6 +35,7 @@ import {
 } from "../services/theme/theme-map-v4.types";
 import {
   planThemeSearchTransportFromStoredKeys,
+  resolveUniqueThemeSearchTransportKeys,
 } from "../services/theme/theme-search-transport-key.server";
 import { loadStoredThemeMapV4 } from "../services/theme/theme-map-v4-store.server";
 import { getShopEntitlement } from "../services/commerce/entitlement.server";
@@ -51,6 +52,7 @@ import {
 } from "../services/commerce/usage.server";
 
 import { getShopSettings } from "../services/commerce/shop-registry.server";
+import { getEmbeddingModel } from "../services/search/embeddings.server";
 import {
   fetchProductsByGids as fetchAppSelfRenderProductsByGids,
   renderAppSelfSearchPage,
@@ -67,7 +69,13 @@ const EMBEDDING_CACHE_TTL = 24 * 60 * 60 * 1000;
 const EMBEDDING_QUERY_PIPELINE_VERSION = "semantic-expansion-v6-general-commerce";
 
 function buildEmbeddingCacheKey(shop: string, query: string) {
-  return `${EMBEDDING_QUERY_PIPELINE_VERSION}:${shop}:${query.toLowerCase().trim()}`;
+  return [
+    shop,
+    getEmbeddingModel(),
+    "768",
+    EMBEDDING_QUERY_PIPELINE_VERSION,
+    query.trim(),
+  ].join("\u0000");
 }
 
 function getCachedQueryEmbedding(
@@ -869,11 +877,30 @@ const resultCacheStatus = "MISS" as const;
         );
       }
 
-      const targetProductIds =
-        cachedPage.products.map(
-          (product) =>
-            product.productId,
-        );
+      // Resolve transport keys against the already-cached ranked list, then
+      // paginate the renderable subset. This backfills an unrenderable rank
+      // from the next ranked product without re-running GPT, embedding or
+      // Qdrant, and keeps page boundaries stable across page navigation.
+      const fullTransportResolution =
+        await resolveUniqueThemeSearchTransportKeys({
+          shop: session.shop,
+          productIds: cachedPage.result.rankedProducts.map(
+            (product) => product.productId,
+          ),
+        });
+      const renderableIds = fullTransportResolution.resolved.map(
+        (item) => item.productId,
+      );
+      const renderableTotalPages = Math.max(
+        1,
+        Math.ceil(renderableIds.length / cachedPage.pageSize),
+      );
+      const renderablePage = Math.min(cachedPage.page, renderableTotalPages);
+      const renderableStart = (renderablePage - 1) * cachedPage.pageSize;
+      const targetProductIds = renderableIds.slice(
+        renderableStart,
+        renderableStart + cachedPage.pageSize,
+      );
 
       const transportPlannerOptions =
         themeTransportPlannerOptions(
@@ -916,6 +943,9 @@ const resultCacheStatus = "MISS" as const;
             unresolved:
               transportPlan
                 .unresolved,
+
+            render_unresolved_count:
+              fullTransportResolution.unresolved.length,
           },
         );
 
@@ -959,16 +989,16 @@ const resultCacheStatus = "MISS" as const;
 
             pagination: {
               current_page:
-                cachedPage.page,
+                renderablePage,
 
               page_size:
                 cachedPage.pageSize,
 
               total_products:
-                cachedPage.totalProducts,
+                renderableIds.length,
 
               total_pages:
-                cachedPage.totalPages,
+                renderableTotalPages,
             },
           },
           {
@@ -1102,22 +1132,25 @@ const resultCacheStatus = "MISS" as const;
             transportPlan
               .unresolved,
 
+          render_unresolved_count:
+            fullTransportResolution.unresolved.length,
+
           batches:
             transportPlan
               .batches,
 
           pagination: {
             current_page:
-              cachedPage.page,
+              renderablePage,
 
             page_size:
               cachedPage.pageSize,
 
             total_products:
-              cachedPage.totalProducts,
+              renderableIds.length,
 
             total_pages:
-              cachedPage.totalPages,
+              renderableTotalPages,
           },
         },
         {
@@ -2904,6 +2937,20 @@ const resultCacheStatus = "MISS" as const;
               | SemanticSearchDiagnostics
               | null)
               ?.qdrantResponseMappingCodeMs ??
+            0,
+
+          qdrantPassCount:
+            (searchDiagnostics as
+              | SemanticSearchDiagnostics
+              | null)
+              ?.qdrantPassCount ??
+            0,
+
+          qdrantFinalCandidateWindow:
+            (searchDiagnostics as
+              | SemanticSearchDiagnostics
+              | null)
+              ?.qdrantFinalCandidateWindow ??
             0,
 
           thresholdFilterCodeMs:

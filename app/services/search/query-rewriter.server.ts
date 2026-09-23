@@ -381,20 +381,25 @@ function resolveSortIntent(
 }
 
 function composeEmbeddingQuery(originalQuery: string, groups: string[][]) {
-  const seen = new Set<string>();
-  const terms: string[] = [];
+  const terms: Array<{ raw: string; normalized: string; tokens: Set<string> }> = [];
 
   for (const value of [originalQuery, ...groups.flat()]) {
     const cleaned = value.replace(/\s+/g, " ").trim();
-    const key = cleaned.toLocaleLowerCase("en-US");
-    if (!cleaned || seen.has(key)) continue;
-    seen.add(key);
-    terms.push(cleaned);
+    const normalized = normalizeCommerceText(cleaned);
+    if (!cleaned || !normalized) continue;
+    const tokens = new Set(normalized.split(" ").filter(Boolean));
+    const redundant = terms.some((existing) => {
+      if (existing.normalized === normalized) return true;
+      const contributesNewToken = [...tokens].some((token) => !existing.tokens.has(token));
+      return !contributesNewToken || existing.normalized.includes(normalized);
+    });
+    if (redundant) continue;
+    terms.push({ raw: cleaned, normalized, tokens });
   }
 
   // Preserve both language groups; the old 500-character cut could discard
   // the entire translation after the original query and expansions.
-  return terms.join(" | ").trim();
+  return terms.map((term) => term.raw).join(" | ").trim();
 }
 
 function parseRewrittenQuery(
@@ -729,6 +734,21 @@ async function performRewrite({ shop, cleanQuery, searchLanguage, merchantVertic
     );
 
     const llmDurationMs = Date.now() - llmStartedAt;
+    if (
+      ["1", "true", "yes", "on"].includes(
+        process.env.AI_SEARCH_LOG_LLM_CONTRACT?.trim().toLowerCase() ?? "",
+      )
+    ) {
+      console.log("[AI Search][LLM CONTRACT] Responses API result", {
+        shop,
+        model,
+        responseStatus: response.status,
+        outputItemTypes: response.output.map((item) => item.type),
+        outputTextLength: response.output_text.length,
+        outputText: response.output_text,
+        parseInput: response.output_text,
+      });
+    }
     if (response.status !== "completed") {
       const reason = response.incomplete_details?.reason === "max_output_tokens"
         ? "LLM_OUTPUT_TRUNCATED" : "LLM_INCOMPLETE";
