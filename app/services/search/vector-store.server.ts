@@ -31,10 +31,13 @@ export type SearchProductVectorsInput = {
   shop: string;
   vector: number[];
   limit?: number;
+  scoreThreshold?: number;
   onDiagnostics?: (diagnostics: {
     requestMs: number;
     responseMappingCodeMs: number;
     totalMs: number;
+    passCount: number;
+    finalCandidateWindow: number;
   }) => void;
 };
 
@@ -638,6 +641,7 @@ export async function searchProductVectors({
   shop,
   vector,
   limit = 20,
+  scoreThreshold,
   onDiagnostics,
 }: SearchProductVectorsInput): Promise<ProductVectorSearchResult[]> {
   const totalStartedAt = Date.now();
@@ -650,33 +654,46 @@ export async function searchProductVectors({
   // Ask Qdrant for a small amount of headroom and deduplicate by productId so
   // customers never see duplicate cards and the requested result count is
   // preserved as much as possible.
-  const candidateLimit = safeLimit * 3;
+  // Earlier expanding passes replaced, rather than unioned, each response.
+  // Query the identical final horizon once to remove redundant ANN RTTs.
+  const candidateLimit = Math.min(1000, Math.max(safeLimit, safeLimit * 3));
   const startedAt = Date.now();
+  const passCount = 1;
   const response = await qdrant.query(QDRANT_COLLECTION, {
-    query: vector,
-    filter: {
-      must: [
-        {
-          key: "shop",
-          match: {
-            value: shop,
+      query: vector,
+      filter: {
+        must: [
+          {
+            key: "shop",
+            match: {
+              value: shop,
+            },
           },
-        },
+        ],
+      },
+      score_threshold: scoreThreshold,
+      limit: candidateLimit,
+      with_payload: [
+        "shop", "productId", "handle", "title",
+        "minVariantPrice", "maxVariantPrice", "currencyCode",
       ],
-    },
-    limit: candidateLimit,
-    with_payload: [
-      "shop", "productId", "handle", "title",
-      "minVariantPrice", "maxVariantPrice", "currencyCode",
-    ],
-    with_vector: false,
-  });
+      with_vector: false,
+    });
   const requestMs = Date.now() - startedAt;
 
   console.log("[AI Search][PERF] Qdrant query", {
     shop, durationMs: requestMs,
     requestedLimit: safeLimit, fetchedPoints: response.points.length,
     candidateLimitReached: response.points.length >= candidateLimit,
+    passCount,
+    topScore: response.points[0]?.score ?? null,
+    lastScore: response.points.at(-1)?.score ?? null,
+    minimumScoreThresholdSent: scoreThreshold ?? null,
+    withVector: false,
+    payloadFieldCount: 7,
+    expansionReason: "FINAL_SEMANTIC_HORIZON_SINGLE_PASS",
+    qdrantServerTimeMs: null,
+    qdrantNetworkAndClientMs: null,
   });
 
   const seenProducts = new Set<string>();
@@ -727,6 +744,8 @@ export async function searchProductVectors({
     requestMs,
     responseMappingCodeMs: Date.now() - mappingStartedAt,
     totalMs: Date.now() - totalStartedAt,
+    passCount,
+    finalCandidateWindow: candidateLimit,
   });
 
   return results;

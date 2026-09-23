@@ -3,7 +3,10 @@ import { getShopSettings } from "../commerce/shop-registry.server";
 
 import type { ProductForIndex } from "./product-document.server";
 import { buildProductDocument } from "./product-document.server";
-import { prepareProductEmbeddingInput } from "./product-embedding-input.server";
+import {
+  prepareProductEmbeddingInput,
+  PRODUCT_ENRICHMENT_VERSION,
+} from "./product-embedding-input.server";
 import { createEmbedding } from "../search/embeddings.server";
 import {
   ensureProductShopContext,
@@ -27,6 +30,7 @@ import {
   releaseProductSlotReservation,
   reserveProductSlot,
   upsertIndexedProduct,
+  updateIndexedProductEnrichmentState,
 } from "../commerce/indexed-products.server";
 import {
   commitProductEmbeddingUsage,
@@ -71,8 +75,10 @@ export function getQdrantPointId(
   );
 }
 
-const PRODUCT_EMBEDDING_PIPELINE_VERSION =
+export const PRODUCT_EMBEDDING_PIPELINE_VERSION =
   "semantic-product-v5-canonical-shop-type";
+
+const ENRICHMENT_RETRY_DELAY_MS = 6 * 60 * 60 * 1_000;
 
 function createLegacyProductDocumentHash(
   document: string,
@@ -150,6 +156,9 @@ export async function indexProduct({
       document,
       searchLanguage,
     );
+  const sourceDocumentHash = createHash("sha256")
+    .update(document, "utf8")
+    .digest("hex");
 
   const pointId =
     getQdrantPointId(
@@ -222,6 +231,16 @@ export async function indexProduct({
     Boolean(
       registryProduct?.hasVector,
     );
+  const retryAt = registryProduct?.enrichmentRetryAt
+    ? new Date(registryProduct.enrichmentRetryAt).getTime()
+    : null;
+  const enrichmentRetryDue = Boolean(
+    registryProduct?.hasVector &&
+      ["PENDING", "FALLBACK", "FAILED"].includes(
+        registryProduct.enrichmentStatus,
+      ) &&
+      (retryAt === null || retryAt <= Date.now()),
+  );
 
   // Subscription state is authoritative even when the semantic document has
   // not changed. Keeping a stale registry row marked INDEXED after uninstall,
@@ -254,7 +273,8 @@ export async function indexProduct({
     existingVector &&
     existingVector.shop === shop &&
     existingVector.documentHash ===
-      documentHash
+      documentHash &&
+    !enrichmentRetryDue
   ) {
     // Phase-1 -> commercial migration can find Qdrant vectors before the DB
     // registry exists. Reserve a plan slot before adopting that vector so a
@@ -546,7 +566,8 @@ export async function indexProduct({
   const countAsVectorUpdate =
     reason !==
       "INITIAL_SYNC" &&
-    !isPipelineMigration;
+    !isPipelineMigration &&
+    !enrichmentRetryDue;
 
   const reservationResult =
     await reserveProductEmbeddingUsage({
@@ -810,6 +831,20 @@ export async function indexProduct({
       product,
       analysis:
         embeddingInput.analysis,
+    });
+
+    await updateIndexedProductEnrichmentState({
+      shop,
+      productId: product.id,
+      sourceDocumentHash,
+      embeddingPipelineVersion: PRODUCT_EMBEDDING_PIPELINE_VERSION,
+      enrichmentVersion: PRODUCT_ENRICHMENT_VERSION,
+      enrichmentStatus: embeddingInput.enrichmentStatus,
+      enrichmentLastError: embeddingInput.enrichmentError,
+      enrichmentRetryAt:
+        embeddingInput.enrichmentStatus === "FALLBACK"
+          ? new Date(Date.now() + ENRICHMENT_RETRY_DELAY_MS)
+          : null,
     });
 
     // Product đã được index thành công.

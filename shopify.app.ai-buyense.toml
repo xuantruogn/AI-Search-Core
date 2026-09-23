@@ -1,9 +1,15 @@
 # Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
 
-client_id = "55a761df3edbba15b8171242a3374d1a"
+client_id = "922fd6e00a765659ee8b56ac583cf542"
 name = "AI-Buyense"
 application_url = "https://example.com"
 embedded = true
+
+[build]
+automatically_update_urls_on_dev = true
+
+[webhooks]
+api_version = "2026-10"
 
 [access_scopes]
 # Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
@@ -12,13 +18,7 @@ scopes = "read_products,read_themes,write_app_proxy"
 [auth]
 redirect_urls = [ "https://example.com/api/auth" ]
 
-[webhooks]
-api_version = "2026-10"
-
 [app_proxy]
-url = "https://example.com/proxy/ai-search"
+url = "/proxy/ai-search"
 subpath = "ai-search"
 prefix = "apps"
-
-[build]
-automatically_update_urls_on_dev = true

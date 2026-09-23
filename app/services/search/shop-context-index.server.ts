@@ -11,6 +11,7 @@ type ContextKind =
   | "TAG"
   | "VARIANT"
   | "SKU"
+  | "BARCODE"
   | "ATTRIBUTE"
   | "USE_CASE"
   | "ALIAS"
@@ -111,11 +112,15 @@ function collectProductContextTerms(
 
   add("PRODUCT_TITLE", product.title);
   add("PRODUCT_TYPE", product.productType);
+  // Merchant productType is deterministic Shopify catalog data. It is a
+  // valid shop-local identity even when optional LLM enrichment fails.
+  add("CANONICAL_PRODUCT_TYPE", product.productType);
   add("VENDOR", product.vendor);
   for (const tag of product.tags ?? []) add("TAG", tag);
   for (const variant of product.variants ?? []) {
     if (variant.title !== "Default Title") add("VARIANT", variant.title);
     add("SKU", variant.sku);
+    add("BARCODE", variant.barcode);
   }
 
   if (analysis) {
@@ -174,11 +179,58 @@ export async function ensureProductShopContext({
   shop: string;
   product: ProductForIndex;
 }) {
-  const existing = await db.aiSearchShopContextTerm.count({
+  const deterministicTerms = collectProductContextTerms(product, null);
+  if (deterministicTerms.length > 0) {
+    // Repair missing base terms without deleting LLM-derived augmentation.
+    // The old count-only check allowed partially populated products to remain
+    // permanently incomplete.
+    await db.aiSearchShopContextTerm.createMany({
+      data: deterministicTerms.map((term) => ({
+        shop,
+        productId: product.id,
+        ...term,
+      })),
+      skipDuplicates: true,
+    });
+    contextCache.delete(shop);
+  }
+  return db.aiSearchShopContextTerm.count({
     where: { shop, productId: product.id },
   });
-  if (existing > 0) return existing;
-  return replaceProductShopContext({ shop, product, analysis: null });
+}
+
+export async function getShopContextCoverage(shop: string) {
+  const [contextProducts, canonicalTypeProducts, missingBaseRows] =
+    await Promise.all([
+      db.aiSearchShopContextTerm.groupBy({
+        by: ["productId"],
+        where: { shop },
+      }),
+      db.aiSearchShopContextTerm.groupBy({
+        by: ["productId"],
+        where: { shop, kind: "CANONICAL_PRODUCT_TYPE" },
+      }),
+      db.$queryRaw<Array<{ count: bigint | number }>>`
+        SELECT COUNT(*) AS \`count\`
+        FROM \`AiSearchIndexedProduct\` p
+        WHERE p.\`shop\` = ${shop}
+          AND p.\`hasVector\` = true
+          AND NOT EXISTS (
+            SELECT 1 FROM \`AiSearchShopContextTerm\` c
+            WHERE c.\`shop\` = p.\`shop\`
+              AND c.\`productId\` = p.\`productId\`
+              AND c.\`kind\` IN ('PRODUCT_TITLE', 'PRODUCT_TYPE', 'CANONICAL_PRODUCT_TYPE')
+          )
+      `,
+    ]);
+  const total = contextProducts.length;
+  const canonical = canonicalTypeProducts.length;
+  return {
+    contextProducts: total,
+    canonicalTypeProducts: canonical,
+    coverageRatio: total > 0 ? canonical / total : 0,
+    productsMissingDeterministicBaseContext: Number(missingBaseRows[0]?.count ?? 0),
+  };
 }
 
 async function loadShopContext(shop: string) {
@@ -346,11 +398,12 @@ function composeContextualEmbeddingInput(
   selectedTerms: SelectedShopContext[],
 ) {
   if (rewrite.planning) {
-    const base = normalizeContextTerm(clean(rewrite.planning.semanticQuery, 500));
+    const base = clean(rewrite.planning.semanticQuery, 500);
+    const foldedBase = normalizeContextTerm(base);
     const additions = selectedTerms
       .filter((term) => term.kind !== "PRODUCT_TITLE")
-      .map((term) => normalizeContextTerm(clean(term.value, 220)))
-      .filter((term) => term && !base.includes(term));
+      .map((term) => clean(term.value, 220))
+      .filter((term) => term && !foldedBase.includes(normalizeContextTerm(term)));
     return [base, ...new Set(additions)].filter(Boolean).join(" ; ");
   }
   const semanticAttributes = [

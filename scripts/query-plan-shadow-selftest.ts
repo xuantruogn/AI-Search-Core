@@ -19,6 +19,10 @@ const dictionary: ShopSearchDictionary = {
     ["tai nghe", "tai nghe", "PRODUCT_TYPE"],
     ["op", "ốp", "PRODUCT_TYPE"],
     ["quan", "quần", "PRODUCT_TYPE"],
+    ["quan ao", "quần áo", "PRODUCT_TYPE"],
+    ["quan ao tre em", "quần áo trẻ em", "PRODUCT_TYPE"],
+    ["quan the thao", "quần thể thao", "PRODUCT_TYPE"],
+    ["sports pants", "quần thể thao", "PRODUCT_TYPE"],
     ["nike", "Nike", "BRAND"],
     ["adidas", "Adidas", "BRAND"],
     ["air force 1", "Air Force 1", "MODEL"],
@@ -54,6 +58,7 @@ function planRoute(query: string) {
 }
 
 assert.equal(normalizeQueryText("ĐẦM ĐỎ"), "dam do");
+assert.equal(normalizeQueryText("quần thể thao"), normalizeQueryText("quan the thao"));
 assert.equal(parseDeterministicQuery("đồ gia dụng").price, undefined);
 assert.equal(parseDeterministicQuery("giá đỡ điện thoại").price, undefined);
 
@@ -87,5 +92,16 @@ assert.equal(alternatives.matches.filter((match) => match.entry.field === "BRAND
 const multiple = planRoute("áo và quần kaki");
 assert.equal(multiple.deterministic.relation, "ALL");
 assert.equal(multiple.matches.filter((match) => match.entry.field === "PRODUCT_TYPE").length, 2);
+
+const longest = planRoute("quần áo trẻ em màu trắng");
+assert.ok(longest.matches.some((match) => match.entry.canonical === "quần áo trẻ em"));
+assert.ok(!longest.matches.some((match) => match.entry.canonical === "quần áo"));
+
+const viIntent = planRoute("quần thể thao màu trắng");
+const enIntent = planRoute("sports pants in white");
+assert.equal(
+  viIntent.matches.find((match) => match.entry.field === "PRODUCT_TYPE")?.entry.canonical,
+  enIntent.matches.find((match) => match.entry.field === "PRODUCT_TYPE")?.entry.canonical,
+);
 
 console.log("Query plan shadow self-test: PASS");

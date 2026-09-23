@@ -28,6 +28,8 @@ export type AttributeConstraint = QueryConstraint & { name: string };
 
 export type ResolvedQuerySegment = {
   text: string;
+  start: number;
+  end: number;
   field: string;
   canonicalValue: string;
   confidence: number;
@@ -35,6 +37,9 @@ export type ResolvedQuerySegment = {
 };
 
 export type QueryPlan = {
+  rawQuery: string;
+  normalizedQuery: string;
+  foldedQuery: string;
   route: QueryRoute;
   identities: QueryConstraint[];
   entities: {
