@@ -18,6 +18,7 @@ export type EnqueueProductSyncJobInput = {
   webhookId: string;
   topic: string;
   productId: string | number;
+  policyVersion?: number | null;
 };
 
 export type EnqueueProductSyncJobResult =
@@ -120,6 +121,7 @@ export async function enqueueProductSyncJob({
   webhookId,
   topic,
   productId,
+  policyVersion = null,
 }: EnqueueProductSyncJobInput): Promise<EnqueueProductSyncJobResult> {
   const cleanShop = shop.trim();
   const cleanWebhookId = webhookId.trim();
@@ -139,6 +141,20 @@ export async function enqueueProductSyncJob({
 
   const gid = normalizeProductGid(productId);
 
+  if (cleanTopic === "REINDEX_PRODUCT") {
+    const existingWork = await db.aiSearchSyncJob.findFirst({
+      where: {
+        shop: cleanShop,
+        productId: gid,
+        status: { in: [PRODUCT_SYNC_JOB_STATUS.pending, PRODUCT_SYNC_JOB_STATUS.processing] },
+      },
+      select: { id: true },
+    });
+    if (existingWork) {
+      return { created: false, duplicate: true, jobId: existingWork.id };
+    }
+  }
+
   try {
     const job = await db.aiSearchSyncJob.create({
       data: {
@@ -149,6 +165,12 @@ export async function enqueueProductSyncJob({
         status: PRODUCT_SYNC_JOB_STATUS.pending,
       },
     });
+    if (policyVersion !== null) {
+      await db.$executeRaw`
+        UPDATE \`AiSearchSyncJob\` SET \`policyVersion\` = ${policyVersion}
+        WHERE \`id\` = ${job.id}
+      `;
+    }
 
     console.log("[AI Search] Sync job queued:", {
       jobId: job.id,

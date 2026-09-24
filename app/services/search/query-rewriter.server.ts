@@ -1,5 +1,6 @@
 import { getShopSettings } from "../commerce/shop-registry.server";
 import { getOpenAiClient } from "./embeddings.server";
+import { recordOpenAiUsageSafe } from "../ai/provider-usage.server";
 
 type CacheEntry<T> = {
   expiresAt: number;
@@ -114,7 +115,7 @@ type FastQueryAnalysis = {
   semanticQuery: string;
 };
 
-const QUERY_REWRITE_CACHE_VERSION = "fast-semantic-parser-v13";
+const QUERY_REWRITE_CACHE_VERSION = "fast-semantic-parser-v14-luna-low";
 const rewrittenQueryCache = new Map<string, CacheEntry<QueryRewriteResult>>();
 const pendingRewrites = new Map<string, Promise<QueryRewriteResult>>();
 
@@ -130,7 +131,7 @@ function isEnabled() {
 }
 
 function getRewriteModel() {
-  return process.env.OPENAI_QUERY_REWRITE_MODEL?.trim() || "gpt-4.1-mini";
+  return process.env.OPENAI_QUERY_REWRITE_MODEL?.trim() || "gpt-6-luna";
 }
 
 function getRewriteBudget(query: string) {
@@ -145,7 +146,7 @@ function getRewriteBudget(query: string) {
         normalized,
       )) ||
     /(?:<=|>=|<|>)\s*\d/.test(query) ||
-    /[$€£¥₫]\s*\d/.test(query);
+    /[$\u20AC\u00A3\u00A5\u20AB]\s*\d/.test(query);
 
   const hasExplicitNegation =
     /\b(?:khong muon|khong lay|khong dung|khong phai|loai tru|ngoai tru|tru|without|except|excluding|exclude|not)\b/.test(
@@ -318,7 +319,7 @@ function parseMerchantVerticals(settings: unknown) {
 function looksLikePriceSemantic(value: string) {
   const normalized = normalizeCommerceText(value);
   return (
-    /[$€£¥₫]/.test(value) ||
+    /[$â‚¬Â£Â¥â‚«]/.test(value) ||
     /\b(?:vnd|usd|eur|gbp|jpy|dong|price|cost|budget|affordable|cheapest|most expensive|re nhat|dat nhat)\b/.test(
       normalized,
     ) ||
@@ -345,7 +346,7 @@ function normalizeCommerceText(value: string) {
     .toLocaleLowerCase("vi-VN")
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
-    .replace(/đ/g, "d")
+    .replace(/\u0111/g, "d")
     .replace(/[^\p{L}\p{N}]+/gu, " ")
     .replace(/\s+/g, " ")
     .trim();
@@ -710,14 +711,14 @@ async function performRewrite({ shop, cleanQuery, searchLanguage, merchantVertic
       additionalProperties: false,
     };
     llmStartedAt = Date.now();
-    const response = await getOpenAiClient().responses.create(
+    const responseRequest = getOpenAiClient().responses.create(
       {
         model,
         instructions,
         input: `SHOPPER_QUERY:\n${cleanQuery}`,
         max_output_tokens: complexityRoute === "SIMPLE" ? 180 : 320,
         store: false,
-        temperature: 0,
+        reasoning: { effort: "low" },
         text: {
           format: {
             type: "json_schema",
@@ -733,7 +734,45 @@ async function performRewrite({ shop, cleanQuery, searchLanguage, merchantVertic
       },
     );
 
-    const llmDurationMs = Date.now() - llmStartedAt;
+    const {
+      data: response,
+      response: rawResponse,
+      request_id: requestId,
+    } = await responseRequest.withResponse();
+
+    const inputTokens =
+      response.usage?.input_tokens ?? 0;
+
+    const outputTokens =
+      response.usage?.output_tokens ?? 0;
+
+    const cachedInputTokens =
+      (response.usage as
+        | {
+            input_tokens_details?: {
+              cached_tokens?: number;
+            };
+          }
+        | null
+        | undefined
+      )?.input_tokens_details?.cached_tokens ?? 0;
+
+    recordOpenAiUsageSafe({
+      shop,
+      operation: "QUERY_REWRITE",
+      model,
+      requestId,
+      inputTokens,
+      cachedInputTokens,
+      outputTokens,
+      totalTokens:
+        inputTokens + outputTokens,
+      headers:
+        rawResponse.headers,
+    });
+
+    const llmDurationMs =
+      Date.now() - llmStartedAt;
     if (
       ["1", "true", "yes", "on"].includes(
         process.env.AI_SEARCH_LOG_LLM_CONTRACT?.trim().toLowerCase() ?? "",

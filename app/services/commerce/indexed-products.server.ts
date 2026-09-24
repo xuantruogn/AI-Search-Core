@@ -1,3 +1,4 @@
+import { Prisma } from "@prisma/client";
 import db from "../../db.server";
 
 export const INDEXED_PRODUCT_STATUS = {
@@ -16,6 +17,9 @@ export type IndexedProductRow = {
   title: string;
   status: string;
   hasVector: boolean | number;
+  vectorStatus: string;
+  searchable: boolean | number;
+  blockedReason: string | null;
   documentHash: string | null;
   sourceDocumentHash: string | null;
   embeddingPipelineVersion: string | null;
@@ -30,6 +34,66 @@ export type IndexedProductRow = {
   updatedAt: Date | string;
 };
 
+export type SearchableIndexedProduct = Pick<
+  IndexedProductRow,
+  "productId" | "handle" | "title"
+>;
+
+export async function listSearchableIndexedProducts(
+  shop: string,
+  productIds: string[],
+): Promise<SearchableIndexedProduct[]> {
+  const ids = [...new Set(productIds.map((id) => id.trim()).filter(Boolean))];
+  if (ids.length === 0) return [];
+
+  return db.$queryRaw<SearchableIndexedProduct[]>(Prisma.sql`
+    SELECT \`productId\`, \`handle\`, \`title\`
+    FROM \`AiSearchIndexedProduct\`
+    WHERE \`shop\` = ${shop}
+      AND \`productId\` IN (${Prisma.join(ids)})
+      AND \`searchable\` = true
+      AND \`hasVector\` = true
+  `);
+}
+
+export type ProductEligibilityInput = {
+  productId: string;
+  searchable: boolean;
+  hasVector: boolean;
+  vectorStatus: string;
+  blockedReason: string | null;
+  status: string;
+  createdAt: Date;
+};
+
+export function planProductEligibility(
+  input: ProductEligibilityInput[],
+  policyActive: boolean,
+  productLimit: number | null,
+) {
+  const rows = [...input].sort((left, right) =>
+    Number(right.searchable) - Number(left.searchable) ||
+    Number(right.vectorStatus === "READY") - Number(left.vectorStatus === "READY") ||
+    left.createdAt.getTime() - right.createdAt.getTime() ||
+    left.productId.localeCompare(right.productId),
+  );
+  const eligible = rows.filter((row) => row.blockedReason !== "UNPUBLISHED");
+  const capacity = !policyActive ? 0 : productLimit === null ? eligible.length : Math.max(0, productLimit);
+  const selected = new Set(eligible.slice(0, capacity).map((row) => row.productId));
+  return rows.map((row) => {
+    const unpublished = row.blockedReason === "UNPUBLISHED";
+    const chosen = selected.has(row.productId);
+    const ready = row.hasVector && row.vectorStatus === "READY";
+    const searchable = chosen && ready;
+    return {
+      ...row, chosen, searchable,
+      blockedReason: unpublished ? "UNPUBLISHED" : chosen ? null : policyActive ? "PRODUCT_LIMIT" : "SUBSCRIPTION",
+      status: unpublished ? "UNPUBLISHED" : searchable ? "INDEXED" : chosen ? "VECTOR_QUOTA_BLOCKED" : policyActive ? "PRODUCT_LIMIT_BLOCKED" : "SUBSCRIPTION_BLOCKED",
+      requiresReindex: chosen && !ready,
+    };
+  });
+}
+
 export async function getIndexedProductStats(shop: string) {
   const rows = await db.$queryRaw<
     Array<{
@@ -38,19 +102,27 @@ export async function getIndexedProductStats(shop: string) {
       vectorQuotaBlockedProducts: bigint | number;
       productLimitBlockedProducts: bigint | number;
       subscriptionBlockedProducts: bigint | number;
+      cachedVectorCount: bigint | number;
+      blockedProductCount: bigint | number;
+      staleVectorCount: bigint | number;
+      catalogProductCount: bigint | number;
     }>
   >`
     SELECT
+      COUNT(*) AS \`catalogProductCount\`,
       SUM(CASE WHEN \`hasVector\` = true THEN 1 ELSE 0 END) AS \`indexedProducts\`,
       SUM(
         CASE
-          WHEN \`hasVector\` = true OR \`status\` = 'PRODUCT_SLOT_RESERVED' THEN 1
+          WHEN \`blockedReason\` IS NULL OR \`status\` = 'PRODUCT_SLOT_RESERVED' THEN 1
           ELSE 0
         END
       ) AS \`productSlotsUsed\`,
       SUM(CASE WHEN \`status\` = 'VECTOR_QUOTA_BLOCKED' THEN 1 ELSE 0 END) AS \`vectorQuotaBlockedProducts\`,
       SUM(CASE WHEN \`status\` = 'PRODUCT_LIMIT_BLOCKED' THEN 1 ELSE 0 END) AS \`productLimitBlockedProducts\`,
-      SUM(CASE WHEN \`status\` = 'SUBSCRIPTION_BLOCKED' THEN 1 ELSE 0 END) AS \`subscriptionBlockedProducts\`
+      SUM(CASE WHEN \`status\` = 'SUBSCRIPTION_BLOCKED' THEN 1 ELSE 0 END) AS \`subscriptionBlockedProducts\`,
+      SUM(CASE WHEN \`hasVector\` = true THEN 1 ELSE 0 END) AS \`cachedVectorCount\`,
+      SUM(CASE WHEN \`searchable\` = false THEN 1 ELSE 0 END) AS \`blockedProductCount\`,
+      SUM(CASE WHEN \`vectorStatus\` = 'STALE' THEN 1 ELSE 0 END) AS \`staleVectorCount\`
     FROM \`AiSearchIndexedProduct\`
     WHERE \`shop\` = ${shop}
   `;
@@ -62,6 +134,11 @@ export async function getIndexedProductStats(shop: string) {
     vectorQuotaBlockedProducts: Number(row?.vectorQuotaBlockedProducts ?? 0),
     productLimitBlockedProducts: Number(row?.productLimitBlockedProducts ?? 0),
     subscriptionBlockedProducts: Number(row?.subscriptionBlockedProducts ?? 0),
+    cachedVectorCount: Number(row?.cachedVectorCount ?? 0),
+    activeProductSlotsUsed: Number(row?.productSlotsUsed ?? 0),
+    blockedProductCount: Number(row?.blockedProductCount ?? 0),
+    staleVectorCount: Number(row?.staleVectorCount ?? 0),
+    catalogProductCount: Number(row?.catalogProductCount ?? 0),
   };
 }
 
@@ -84,7 +161,7 @@ export async function countProductSlotsUsed(shop: string) {
     WHERE
       \`shop\` = ${shop}
       AND (
-        \`hasVector\` = true
+        \`blockedReason\` IS NULL
         OR \`status\` = 'PRODUCT_SLOT_RESERVED'
       )
   `;
@@ -126,6 +203,7 @@ export async function getIndexedProduct(shop: string, productId: string) {
   const rows = await db.$queryRaw<IndexedProductRow[]>`
     SELECT
       \`id\`, \`shop\`, \`productId\`, \`handle\`, \`title\`, \`status\`, \`hasVector\`,
+      \`vectorStatus\`, \`searchable\`, \`blockedReason\`,
       \`documentHash\`, \`sourceDocumentHash\`, \`embeddingPipelineVersion\`,
       \`enrichmentVersion\`, \`enrichmentStatus\`, \`enrichmentLastError\`,
       \`enrichmentRetryAt\`, \`enrichmentUpdatedAt\`,
@@ -220,16 +298,16 @@ export async function reserveProductSlot({
     `;
 
     const existing = await tx.$queryRaw<
-      Array<{ status: string; hasVector: boolean | number }>
+      Array<{ status: string; hasVector: boolean | number; blockedReason: string | null }>
     >`
-      SELECT \`status\`, \`hasVector\`
+      SELECT \`status\`, \`hasVector\`, \`blockedReason\`
       FROM \`AiSearchIndexedProduct\`
       WHERE \`shop\` = ${shop} AND \`productId\` = ${productId}
       LIMIT 1
     `;
 
     if (
-      Boolean(existing[0]?.hasVector) ||
+      existing[0]?.blockedReason === null ||
       existing[0]?.status === INDEXED_PRODUCT_STATUS.productSlotReserved
     ) {
       return { allowed: true, reserved: false } as const;
@@ -264,7 +342,8 @@ export async function reserveProductSlot({
         \`handle\` = ${handle},
         \`title\` = ${title},
         \`status\` = 'PRODUCT_SLOT_RESERVED',
-        \`hasVector\` = false,
+        \`hasVector\` = \`hasVector\`,
+        \`blockedReason\` = NULL,
         \`documentHash\` = ${documentHash},
         \`lastSeenAt\` = UTC_TIMESTAMP(3),
         \`updatedAt\` = UTC_TIMESTAMP(3)
@@ -304,9 +383,11 @@ export async function upsertIndexedProduct({
   await db.$executeRaw`
     INSERT INTO \`AiSearchIndexedProduct\` (
       \`shop\`, \`productId\`, \`handle\`, \`title\`, \`status\`, \`hasVector\`, \`documentHash\`,
+      \`vectorStatus\`, \`searchable\`, \`blockedReason\`,
       \`lastIndexedAt\`, \`lastSeenAt\`, \`createdAt\`, \`updatedAt\`
     ) VALUES (
       ${shop}, ${productId}, ${handle}, ${title}, 'INDEXED', true, ${documentHash},
+      'READY', true, NULL,
       UTC_TIMESTAMP(3), UTC_TIMESTAMP(3), UTC_TIMESTAMP(3), UTC_TIMESTAMP(3)
     )
     ON DUPLICATE KEY UPDATE
@@ -314,6 +395,9 @@ export async function upsertIndexedProduct({
       \`title\` = ${title},
       \`status\` = 'INDEXED',
       \`hasVector\` = true,
+      \`vectorStatus\` = 'READY',
+      \`searchable\` = true,
+      \`blockedReason\` = NULL,
       \`documentHash\` = ${documentHash},
       \`lastIndexedAt\` = UTC_TIMESTAMP(3),
       \`lastSeenAt\` = UTC_TIMESTAMP(3),
@@ -348,16 +432,28 @@ export async function markIndexedProductBlocked({
   await db.$executeRaw`
     INSERT INTO \`AiSearchIndexedProduct\` (
       \`shop\`, \`productId\`, \`handle\`, \`title\`, \`status\`, \`hasVector\`, \`documentHash\`,
+      \`vectorStatus\`, \`searchable\`, \`blockedReason\`,
       \`lastSeenAt\`, \`createdAt\`, \`updatedAt\`
     ) VALUES (
       ${shop}, ${productId}, ${handle}, ${title}, ${status}, ${hasVector}, ${documentHash},
+      ${hasVector ? (reason === "VECTOR_UPDATE_LIMIT" ? "STALE" : "READY") : "MISSING"},
+      ${reason === "VECTOR_UPDATE_LIMIT" && hasVector},
+      ${reason === "VECTOR_UPDATE_LIMIT" ? null : reason === "SUBSCRIPTION_INACTIVE" ? "SUBSCRIPTION" : reason},
       UTC_TIMESTAMP(3), UTC_TIMESTAMP(3), UTC_TIMESTAMP(3)
     )
     ON DUPLICATE KEY UPDATE
       \`handle\` = ${handle},
       \`title\` = ${title},
       \`status\` = ${status},
-      \`hasVector\` = ${hasVector},
+      \`hasVector\` = (\`hasVector\` OR ${hasVector}),
+      \`searchable\` = CASE WHEN ${reason === "VECTOR_UPDATE_LIMIT"} AND (\`hasVector\` OR ${hasVector}) THEN \`searchable\` ELSE false END,
+      \`blockedReason\` = ${reason === "VECTOR_UPDATE_LIMIT" ? null : reason === "SUBSCRIPTION_INACTIVE" ? "SUBSCRIPTION" : reason},
+      \`vectorStatus\` = CASE
+        WHEN (\`hasVector\` OR ${hasVector}) = false THEN 'MISSING'
+        WHEN ${reason === "VECTOR_UPDATE_LIMIT"} THEN 'STALE'
+        WHEN \`documentHash\` IS NOT NULL AND \`documentHash\` <> ${documentHash} THEN 'STALE'
+        ELSE \`vectorStatus\`
+      END,
       \`documentHash\` = ${documentHash},
       \`lastSeenAt\` = UTC_TIMESTAMP(3),
       \`updatedAt\` = UTC_TIMESTAMP(3)
@@ -502,6 +598,95 @@ export async function removeIndexedProduct(shop: string, productId: string) {
     DELETE FROM \`AiSearchIndexedProduct\`
     WHERE \`shop\` = ${shop} AND \`productId\` = ${productId}
   `;
+}
+
+export async function markIndexedProductUnpublished(shop: string, productId: string) {
+  return db.$executeRaw`
+    UPDATE \`AiSearchIndexedProduct\`
+    SET \`searchable\` = false, \`blockedReason\` = 'UNPUBLISHED',
+        \`status\` = 'UNPUBLISHED', \`updatedAt\` = UTC_TIMESTAMP(3)
+    WHERE \`shop\` = ${shop} AND \`productId\` = ${productId}
+  `;
+}
+
+export async function markIneligibleProductMetadata({
+  shop, productId, handle, title, documentHash,
+}: {
+  shop: string; productId: string; handle: string; title: string; documentHash: string;
+}) {
+  return db.$executeRaw`
+    UPDATE \`AiSearchIndexedProduct\`
+    SET \`handle\` = ${handle}, \`title\` = ${title},
+        \`vectorStatus\` = CASE
+          WHEN \`hasVector\` = false THEN 'MISSING'
+          WHEN \`documentHash\` <> ${documentHash} THEN 'STALE'
+          ELSE \`vectorStatus\` END,
+        \`documentHash\` = ${documentHash}, \`searchable\` = false,
+        \`lastSeenAt\` = UTC_TIMESTAMP(3), \`updatedAt\` = UTC_TIMESTAMP(3)
+    WHERE \`shop\` = ${shop} AND \`productId\` = ${productId}
+  `;
+}
+
+export async function reconcileIndexedProductEligibility({
+  shop, policyActive, productLimit,
+}: {
+  shop: string; policyActive: boolean; productLimit: number | null;
+}) {
+  return db.$transaction(async (tx) => {
+    const versionRows = await tx.$queryRaw<Array<{ productPolicyVersion: number }>>`
+      SELECT \`productPolicyVersion\` FROM \`AiSearchShopSettings\`
+      WHERE \`shop\` = ${shop} FOR UPDATE
+    `;
+    const rows = await tx.$queryRaw<Array<{
+      productId: string; searchable: boolean | number; hasVector: boolean | number;
+      vectorStatus: string; blockedReason: string | null; status: string; createdAt: Date;
+    }>>`
+      SELECT \`productId\`, \`searchable\`, \`hasVector\`, \`vectorStatus\`, \`blockedReason\`, \`status\`, \`createdAt\`
+      FROM \`AiSearchIndexedProduct\` WHERE \`shop\` = ${shop}
+      ORDER BY \`searchable\` DESC, (\`vectorStatus\` = 'READY') DESC, \`createdAt\` ASC, \`productId\` ASC
+      FOR UPDATE
+    `;
+    const decisions = planProductEligibility(rows.map((row) => ({
+      ...row, searchable: Boolean(row.searchable), hasVector: Boolean(row.hasVector),
+    })), policyActive, productLimit);
+    const requiresReindex: string[] = [];
+    const reactivateReady: string[] = [];
+    const deactivate: string[] = [];
+    let policyChanged = false;
+    for (const decision of decisions) {
+      const original = rows.find((row) => row.productId === decision.productId)!;
+      if (decision.searchable && !Boolean(original.searchable)) reactivateReady.push(decision.productId);
+      if (!decision.searchable && Boolean(original.searchable)) deactivate.push(decision.productId);
+      if (decision.requiresReindex) requiresReindex.push(decision.productId);
+      if (Boolean(original.searchable) !== decision.searchable || original.blockedReason !== decision.blockedReason || original.status !== decision.status) {
+        policyChanged = true;
+      }
+      await tx.$executeRaw`
+        UPDATE \`AiSearchIndexedProduct\`
+        SET \`searchable\` = ${decision.searchable},
+            \`blockedReason\` = ${decision.blockedReason},
+            \`status\` = ${decision.status},
+            \`updatedAt\` = UTC_TIMESTAMP(3)
+        WHERE \`shop\` = ${shop} AND \`productId\` = ${decision.productId}
+      `;
+    }
+    if (policyChanged) {
+      await tx.$executeRaw`
+        UPDATE \`AiSearchShopSettings\`
+        SET \`productPolicyVersion\` = \`productPolicyVersion\` + 1
+        WHERE \`shop\` = ${shop}
+      `;
+    }
+    const policyVersion = Number(versionRows[0]?.productPolicyVersion ?? 0) + (policyChanged ? 1 : 0);
+    return {
+      policyVersion,
+      catalogCount: rows.length,
+      cachedVectorCount: rows.filter((row) => Boolean(row.hasVector)).length,
+      activeBefore: rows.filter((row) => Boolean(row.searchable)).length,
+      activeAfter: decisions.filter((row) => row.searchable).length,
+      reactivateReady, deactivate, requiresReindex,
+    };
+  });
 }
 
 export async function listIndexedProducts(shop: string, limit = 20) {

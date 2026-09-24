@@ -53,6 +53,11 @@ export type EntitlementSnapshot = {
   usage: UsageSnapshot;
   indexedProducts: number;
   productSlotsUsed: number;
+  catalogProductCount: number;
+  cachedVectorCount: number;
+  activeProductSlotsUsed: number;
+  blockedProductCount: number;
+  staleVectorCount: number;
   vectorQuotaBlockedProducts: number;
   productLimitBlockedProducts: number;
   subscriptionBlockedProducts: number;

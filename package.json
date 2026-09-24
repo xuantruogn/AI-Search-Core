@@ -22,7 +22,9 @@
     "test:storefront": "node scripts/storefront-selftest.cjs",
     "test:v4": "tsx --env-file=.env scripts/theme-map-v4-selftest.ts",
     "test:v4:corpus": "tsx scripts/theme-map-v4-corpus-selftest.ts",
-    "test:query-plan": "tsx scripts/query-plan-shadow-selftest.ts"
+    "test:query-plan": "tsx scripts/query-plan-shadow-selftest.ts",
+    "test:product-lifecycle": "tsx --env-file=.env scripts/product-lifecycle-selftest.ts",
+    "backfill:product-policy": "tsx --env-file=.env scripts/product-policy-backfill.ts"
   },
   "type": "module",
   "engines": {

@@ -4,6 +4,10 @@ import type {
   ThemeMountRecipe,
   ThemeRendererCandidate,
 } from "../theme/theme-map-v4.types";
+import {
+  parseLiquidDocument,
+  type LiquidToken,
+} from "../theme/liquid-ast.server";
 
 export interface ThemeRenderProduct {
   productId?: string;
@@ -144,45 +148,57 @@ function serializeLiquidValue(
     )}"`;
 }
 
-function replaceIdentifierInLiquidSyntax(
-  source: string,
-  identifier: string,
-  replacement: string,
-): string {
-  const safeIdentifier =
-    assertLiquidIdentifier(
-      identifier,
-      "THEME_RENDER_INVALID_PRODUCT_VARIABLE",
-    );
+function nearestCaseAncestor(token: LiquidToken): number | undefined {
+  for (let index = token.liquidAncestors.length - 1; index >= 0; index--) {
+    const frame = token.liquidAncestors[index];
+    if (frame.name === "case") return frame.tokenIndex;
+  }
+  return undefined;
+}
 
-  const escaped =
-    escapeRegExp(
-      safeIdentifier,
-    );
-
-  const pattern =
-    new RegExp(
-      `(^|[^A-Za-z0-9_-])${escaped}(?=$|[^A-Za-z0-9_-])`,
-      "g",
-    );
-
-  return source.replace(
-    /(\{\{[-]?[\s\S]*?[-]?\}\}|\{%[-]?[\s\S]*?[-]?%\})/g,
-
-    (
-      block,
-    ) =>
-      block.replace(
-        pattern,
-
-        (
-          _match,
-          prefix: string,
-        ) => {
-          return `${prefix}${replacement}`;
-        },
-      ),
+/** Search-result object_type is not a property of all_products Product. */
+function extractKnownProductBranch(source: string, sourceVariable: string): string {
+  const safeVariable = assertLiquidIdentifier(
+    sourceVariable,
+    "THEME_RENDER_INVALID_PRODUCT_VARIABLE",
   );
+  const document = parseLiquidDocument(source);
+  const expectedExpression = `${safeVariable}.object_type`;
+
+  for (const token of document.tokens) {
+    if (
+      token.kind !== "LIQUID_TAG" ||
+      token.name !== "case" ||
+      (token.markup ?? "").replace(/\s+/g, "") !== expectedExpression
+    ) continue;
+
+    const endCase = token.matchingTokenIndex === undefined
+      ? undefined
+      : document.tokens[token.matchingTokenIndex];
+    if (!endCase || endCase.name !== "endcase") {
+      throw new Error("THEME_RENDER_PRODUCT_BRANCH_UNCLOSED");
+    }
+
+    const branches = document.tokens.filter((candidate) =>
+      candidate.kind === "LIQUID_TAG" &&
+      (candidate.name === "when" || candidate.name === "else") &&
+      nearestCaseAncestor(candidate) === token.index,
+    );
+    const productBranchIndex = branches.findIndex((candidate) =>
+      candidate.name === "when" &&
+      /(?:^|[\s,])(?:'product'|"product")(?:$|[\s,])/.test(candidate.markup ?? ""),
+    );
+    if (productBranchIndex < 0) {
+      throw new Error("THEME_RENDER_PRODUCT_BRANCH_NOT_FOUND");
+    }
+
+    const productBranch = branches[productBranchIndex];
+    const nextBranch = branches[productBranchIndex + 1];
+    const body = source.slice(productBranch.end, nextBranch?.start ?? endCase.start);
+    return source.slice(0, token.start) + body + source.slice(endCase.end);
+  }
+
+  return source;
 }
 
 function replaceIdentifierInStatement(
@@ -798,34 +814,50 @@ function renderSnippetItem(
   candidate:
     ThemeRendererCandidate,
 ): string {
+  const sourceVariable =
+    candidate.productBinding.sourceVariable;
+  const productTemplate =
+    extractKnownProductBranch(
+      candidate.itemTemplate,
+      sourceVariable,
+    );
+  const productCandidate = {
+    ...candidate,
+    itemTemplate: productTemplate,
+  };
+
   const standard =
     replaceStandardSnippetTag(
-      candidate
-        .itemTemplate,
+      productTemplate,
 
-      candidate,
+      productCandidate,
     );
 
   if (
     standard !==
     null
   ) {
-    return standard;
+    return rewriteProductExpressions(
+      standard,
+      sourceVariable,
+    );
   }
 
   const liquidBlock =
     replaceLiquidBlockSnippetStatement(
-      candidate
-        .itemTemplate,
+      productTemplate,
 
-      candidate,
+      productCandidate,
     );
 
   if (
     liquidBlock !==
     null
   ) {
-    return liquidBlock;
+    return rewriteProductExpressions(
+      liquidBlock,
+      sourceVariable,
+    );
   }
 
   throw new Error(
@@ -837,15 +869,17 @@ function renderInlineItem(
   candidate:
     ThemeRendererCandidate,
 ): string {
-  return replaceIdentifierInLiquidSyntax(
-    candidate
-      .itemTemplate,
+  const sourceVariable =
+    candidate.productBinding.sourceVariable;
+  const productTemplate =
+    extractKnownProductBranch(
+      candidate.itemTemplate,
+      sourceVariable,
+    );
 
-    candidate
-      .productBinding
-      .sourceVariable,
-
-    "ai_product",
+  return rewriteProductExpressions(
+    productTemplate,
+    sourceVariable,
   );
 }
 
@@ -1256,4 +1290,39 @@ export function buildThemeResultLiquid(
   throw new Error(
     "THEME_RENDER_CANDIDATE_NOT_FOUND",
   );
+}
+
+/** Rebind only parsed Liquid expressions, never surrounding HTML/text. */
+function rewriteProductExpressions(
+  source: string,
+  sourceVariable: string,
+): string {
+  const document = parseLiquidDocument(source);
+  const edits: Array<{ start: number; end: number; replacement: string }> = [];
+  const objectTypePattern = new RegExp(
+    `\\b${escapeRegExp(sourceVariable)}\\s*\\.\\s*object_type\\b`,
+  );
+
+  for (const token of document.tokens) {
+    if (token.kind !== "LIQUID_TAG" && token.kind !== "LIQUID_OUTPUT") continue;
+    if (objectTypePattern.test(token.raw)) {
+      throw new Error("THEME_RENDER_SEARCH_RESULT_METADATA_UNRESOLVED");
+    }
+    const replacement = replaceIdentifierInStatement(
+      token.raw,
+      sourceVariable,
+      "ai_product",
+    );
+    if (replacement !== token.raw) {
+      edits.push({ start: token.start, end: token.end, replacement });
+    }
+  }
+
+  return edits
+    .sort((left, right) => right.start - left.start)
+    .reduce(
+      (result, edit) =>
+        result.slice(0, edit.start) + edit.replacement + result.slice(edit.end),
+      source,
+    );
 }

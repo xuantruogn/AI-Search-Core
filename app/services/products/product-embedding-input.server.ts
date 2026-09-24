@@ -1,4 +1,5 @@
 import { getOpenAiClient } from "../search/embeddings.server";
+import { recordOpenAiUsageSafe } from "../ai/provider-usage.server";
 
 export type ProductSemanticAnalysis = {
   sourceLanguage: string;
@@ -43,7 +44,7 @@ function getModel() {
   return (
     process.env.OPENAI_PRODUCT_ENRICHMENT_MODEL?.trim() ||
     process.env.OPENAI_QUERY_REWRITE_MODEL?.trim() ||
-    "gpt-4.1-mini"
+    "gpt-6-luna"
   );
 }
 
@@ -175,6 +176,7 @@ function composeDocument(
 export async function prepareProductEmbeddingInput(
   sourceDocument: string,
   shopLanguage: string | null,
+  shop?: string,
 ): Promise<ProductEmbeddingInput> {
   if (!isEnabled() || !shopLanguage) {
     return {
@@ -189,7 +191,7 @@ export async function prepareProductEmbeddingInput(
 
   const model = getModel();
   try {
-    const response = await getOpenAiClient().responses.create(
+    const responseRequest = getOpenAiClient().responses.create(
     {
       model,
       instructions: [
@@ -213,7 +215,7 @@ export async function prepareProductEmbeddingInput(
       input: `MERCHANT_PRODUCT_RECORD:\n${sourceDocument}`,
       max_output_tokens: 650,
       store: false,
-      temperature: 0,
+      reasoning: { effort: "low" },
       text: {
         format: {
           type: "json_schema",
@@ -276,7 +278,45 @@ export async function prepareProductEmbeddingInput(
     },
   );
 
-    const analysis = parseAnalysis(response.output_text);
+    const {
+      data: response,
+      response: rawResponse,
+      request_id: requestId,
+    } = await responseRequest.withResponse();
+
+    const inputTokens =
+      response.usage?.input_tokens ?? 0;
+
+    const outputTokens =
+      response.usage?.output_tokens ?? 0;
+
+    const cachedInputTokens =
+      (response.usage as
+        | {
+            input_tokens_details?: {
+              cached_tokens?: number;
+            };
+          }
+        | null
+        | undefined
+      )?.input_tokens_details?.cached_tokens ?? 0;
+
+    recordOpenAiUsageSafe({
+      shop: shop ?? null,
+      operation: "PRODUCT_ENRICHMENT",
+      model,
+      requestId,
+      inputTokens,
+      cachedInputTokens,
+      outputTokens,
+      totalTokens:
+        inputTokens + outputTokens,
+      headers:
+        rawResponse.headers,
+    });
+
+    const analysis =
+      parseAnalysis(response.output_text);
     if (!analysis) {
       throw new Error("Product semantic enrichment returned invalid output");
     }

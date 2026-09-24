@@ -7,6 +7,7 @@ import {
   type CompileThemeBlockInstance,
 } from "../app/services/theme/theme-map-v4.compiler.server";
 import { parseShopifyThemeJson } from "../app/services/theme/theme-json.server";
+import { buildThemeResultLiquid } from "../app/services/renderer/theme-result-renderer.server";
 
 type CorpusFile = { path: string; sha256: string };
 type CorpusSnapshot = {
@@ -121,6 +122,23 @@ function main() {
       map.rendererCandidates.some((candidate) => candidate.status === "ELIGIBLE");
     const blockValid = Boolean(contextCandidate?.mount);
     const valid = family === "CLASSIC_MAIN_SEARCH" ? classicValid : blockValid;
+    if (snapshot.theme.toLowerCase() === "ride" && classicValid) {
+      const ridePlan = buildThemeResultLiquid({
+        map,
+        products: [
+          { productId: "gid://shopify/Product/1", handle: "women-jacket" },
+          { productId: "gid://shopify/Product/2", handle: "winter-jacket" },
+        ],
+      });
+      assert.doesNotMatch(ridePlan.liquid, /ai_product\.object_type/);
+      assert.doesNotMatch(ridePlan.liquid, /item\.object_type/);
+      assert.match(ridePlan.liquid, /render\s+'card-product'/);
+      assert.match(ridePlan.liquid, /card_product:\s*ai_product/);
+      assert.ok(
+        ridePlan.liquid.indexOf("women-jacket") < ridePlan.liquid.indexOf("winter-jacket"),
+        `${snapshot.snapshot_id}: ranked handle order changed`,
+      );
+    }
     if (!valid) {
       failures.push({
         snapshot: snapshot.snapshot_id,

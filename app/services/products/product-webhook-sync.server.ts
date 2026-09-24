@@ -6,7 +6,7 @@ import { ensureProductCollection } from "../search/qdrant.server";
 
 import { normalizeProductGid } from "./product-id.server";
 
-import { removeIndexedProduct } from "../commerce/indexed-products.server";
+import { markIndexedProductUnpublished, removeIndexedProduct } from "../commerce/indexed-products.server";
 import { getShopEntitlement } from "../commerce/entitlement.server";
 
 import {
@@ -48,6 +48,10 @@ export type ProductWebhookSyncResult =
     }
   | {
       action: "deleted";
+      productId: string;
+    }
+  | {
+      action: "unpublished";
       productId: string;
     };
 
@@ -122,11 +126,9 @@ async function recordProductSyncOutcome({
  *
  * This is the common cleanup path for:
  *
- * - products/delete
- * - ACTIVE -> DRAFT
- * - ACTIVE -> ARCHIVED
- * - product unpublished from Online Store
- * - product missing from Shopify
+ * Only an authoritative products/delete event reaches this hard-delete path.
+ * Draft, archived, unpublished, or temporarily missing storefront products
+ * retain their cached vector and are marked non-searchable elsewhere.
  *
  * Important:
  * AiSearchRenderTransportKey currently has no Prisma relation/cascade to
@@ -301,10 +303,8 @@ export async function syncProductFromWebhook({
     );
 
   if (!product) {
-    await deleteProductFromAiIndex({
-      shop,
-      productId: gid,
-    });
+    await markIndexedProductUnpublished(shop, gid);
+    await deleteProductThemeSearchTransportKeys({ shop, productId: gid });
 
     console.log(
       "[AI Search] Product removed from AI Search:",
@@ -312,13 +312,13 @@ export async function syncProductFromWebhook({
         shop,
         productId: gid,
         reason:
-          "NOT_STOREFRONT_SEARCHABLE",
+        "NOT_STOREFRONT_SEARCHABLE_VECTOR_RETAINED",
       },
     );
 
     return {
       action:
-        "deleted",
+        "unpublished",
 
       productId:
         gid,
@@ -432,8 +432,7 @@ export async function deleteProductFromWebhook({
 
   await ensureProductCollection();
 
-  // Explicit Shopify products/delete webhook uses exactly
-  // the same cleanup path as DRAFT/ARCHIVED/unpublished.
+  // Explicit Shopify products/delete is the sole hard-delete path.
   await deleteProductFromAiIndex({
     shop,
     productId: gid,

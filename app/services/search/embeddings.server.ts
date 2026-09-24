@@ -1,5 +1,6 @@
 import OpenAI from "openai";
 import { Agent, fetch as undiciFetch } from "undici";
+import { recordOpenAiUsageSafe } from "../ai/provider-usage.server";
 
 let openaiClient: OpenAI | null = null;
 let openaiApiKey: string | null = null;
@@ -69,6 +70,10 @@ type CreateEmbeddingOptions = {
   maxRetries?: number;
   timeoutMs?: number;
   onDiagnostics?: (diagnostics: EmbeddingRequestDiagnostics) => void;
+  usageContext?: {
+    shop?: string | null;
+    operation?: "QUERY_EMBEDDING" | "PRODUCT_EMBEDDING" | "EMBEDDING";
+  };
 };
 
 function positiveInteger(value: string | undefined, fallback: number) {
@@ -164,6 +169,17 @@ export async function createEmbedding(
     responseEncoding: "base64",
     clientAgeMs: Math.max(0, Date.now() - openaiClientCreatedAt),
     clientRequestOrdinal,
+  });
+
+  recordOpenAiUsageSafe({
+    shop: options.usageContext?.shop ?? null,
+    operation: options.usageContext?.operation ?? "EMBEDDING",
+    model: getEmbeddingModel(),
+    requestId,
+    inputTokens: response.usage?.prompt_tokens ?? response.usage?.total_tokens ?? 0,
+    outputTokens: 0,
+    totalTokens: response.usage?.total_tokens ?? response.usage?.prompt_tokens ?? 0,
+    headers: rawResponse.headers,
   });
 
   const encodedEmbedding = response.data[0]?.embedding as unknown;

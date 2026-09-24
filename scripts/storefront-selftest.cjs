@@ -33,8 +33,10 @@ function renderMetadata(page, options = {}) {
     pageSize: 2,
     totalProducts: 3,
     totalPages: 2,
-    candidateId: "candidate-one",
-    candidateIds: ["candidate-one"],
+    candidateId: options.candidateId || "candidate-one",
+    candidateIds: options.emptyFirstCandidate
+      ? ["candidate-one", "candidate-two"]
+      : ["candidate-one"],
     runtimeMode: "STATIC",
     mount: {
       strategy: "ELEMENT_ID",
@@ -76,13 +78,22 @@ async function scenario(browser, options = {}) {
       if (url.searchParams.get("mode") === "render-v4") {
         calls.render += 1;
         const pageNumber = Number(url.searchParams.get("page") || 1);
-        const body = pageNumber === 1
+        const requestedCandidate = url.searchParams.get("candidate_id") || "candidate-one";
+        const emptyCandidate = options.emptyFirstCandidate && requestedCandidate === "candidate-one";
+        const body = emptyCandidate
+          ? '<li class="grid__item"></li><li class="grid__item"></li>'
+          : pageNumber === 1
           ? '<li data-handle="beta"><a href="/products/beta">beta</a></li><li data-handle="alpha"><a href="/products/alpha">alpha</a></li>'
           : '<li data-handle="gamma"><a href="/products/gamma">gamma</a></li>';
         return route.fulfill({
           contentType: "text/html",
           body,
-          headers: { "X-AI-Search-Render-Meta": renderMetadata(pageNumber, options) },
+          headers: {
+            "X-AI-Search-Render-Meta": renderMetadata(pageNumber, {
+              ...options,
+              candidateId: requestedCandidate,
+            }),
+          },
         });
       }
       calls.search += 1;
@@ -128,7 +139,7 @@ async function scenario(browser, options = {}) {
     assert.equal(new URL(page.url()).searchParams.get("page"), "2");
     assert.equal(await page.evaluate(() => history.state.receipt), "srch_fixture");
     assert.equal(calls.search, 1);
-    assert.equal(calls.render, 2);
+    assert.equal(calls.render, options.emptyFirstCandidate ? 4 : 2);
     assert.equal(calls.nativeRender, 0);
     assert.equal(calls.click, 1);
   }
@@ -151,6 +162,7 @@ async function main() {
     await scenario(browser, { backendError: true });
     await scenario(browser, { changedTheme: true });
     await scenario(browser, { missingMount: true });
+    await scenario(browser, { emptyFirstCandidate: true });
     console.log("Theme Map V4 storefront self-test: PASS");
   } finally {
     await browser.close();

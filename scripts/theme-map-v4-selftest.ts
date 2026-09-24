@@ -120,6 +120,45 @@ async function main() {
   });
   assert.ok(plan.liquid.indexOf("second") < plan.liquid.indexOf("first"));
 
+  const rideStyle = compile(`
+    <ul id="product-grid" role="list">
+      {% for item in search.results %}
+        <li class="grid__item">
+          {% case item.object_type %}
+            {% when 'product' %}
+              {% render 'card-product', card_product: item, show_vendor: false %}
+          {% endcase %}
+        </li>
+      {% endfor %}
+    </ul>
+  `, "card-product", "card_product");
+  assert.equal(rideStyle.status, "VERIFIED");
+  const ridePlan = buildThemeResultLiquid({
+    map: rideStyle,
+    products: [
+      { productId: "gid://shopify/Product/2", handle: "women-jacket" },
+      { productId: "gid://shopify/Product/1", handle: "winter-jacket" },
+    ],
+  });
+  assert.doesNotMatch(ridePlan.liquid, /ai_product\.object_type/);
+  assert.doesNotMatch(ridePlan.liquid, /item\.object_type/);
+  assert.match(ridePlan.liquid, /render\s+'card-product'/);
+  assert.match(ridePlan.liquid, /card_product:\s*ai_product/);
+  assert.equal(
+    (ridePlan.liquid.match(/card_product:\s*ai_product/g) || []).length,
+    2,
+  );
+  assert.throws(
+    () => buildThemeResultLiquid({
+      map: rideStyle,
+      products: Array.from({ length: 21 }, (_, index) => ({
+        productId: `gid://shopify/Product/${index + 1}`,
+        handle: `unique-product-${index + 1}`,
+      })),
+    }),
+    /THEME_RENDER_PAGE_SIZE_EXCEEDED/,
+  );
+
   const rankedProducts = Array.from({ length: 1000 }, (_, index) => ({
     productId: `gid://shopify/Product/${index + 1}`,
     handle: `product-${index + 1}`,

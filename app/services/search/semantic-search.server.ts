@@ -1,4 +1,4 @@
-import {
+﻿import {
   createEmbedding,
   getEmbeddingModel,
   type EmbeddingRequestDiagnostics,
@@ -9,6 +9,7 @@ import { rewriteSearchQuery, type QueryRewriteResult } from "./query-rewriter.se
 import { applyShopContextToQuery } from "./shop-context-index.server";
 
 import db from "../../db.server";
+import { listSearchableIndexedProducts } from "../commerce/indexed-products.server";
 
 function readMinimumVectorScore() {
   const value = Number.parseFloat(
@@ -123,7 +124,7 @@ export async function semanticSearch({
   let effectiveRewrite = preparedRewrite;
 
   // Start Qdrant lazily.
-  // Query ngoài catalog không cần chạm Qdrant.
+  // Query ngoÃ i catalog khÃ´ng cáº§n cháº¡m Qdrant.
   let collectionReady:
     | Promise<
         | { ok: true }
@@ -414,8 +415,8 @@ export async function semanticSearch({
       Date.now() -
       preparationStartedAt;
 
-    // Chạy chuẩn bị Qdrant song song
-    // với OpenAI embedding.
+    // Cháº¡y chuáº©n bá»‹ Qdrant song song
+    // vá»›i OpenAI embedding.
     void ensureCollectionReady();
 
     const embeddingStartedAt =
@@ -427,6 +428,11 @@ export async function semanticSearch({
         {
           maxRetries:
             0,
+
+          usageContext: {
+            shop,
+            operation: "QUERY_EMBEDDING",
+          },
 
           onDiagnostics:
             (
@@ -683,8 +689,8 @@ export async function semanticSearch({
       usageCompleted,
     ]);
 
-  // Usage accounting phải hoàn tất
-  // trước khi caller rollback failed search.
+  // Usage accounting pháº£i hoÃ n táº¥t
+  // trÆ°á»›c khi caller rollback failed search.
   if (
     retrieval.status ===
     "rejected"
@@ -698,15 +704,10 @@ export async function semanticSearch({
   const vectorCandidateCount = results.length;
   if (identityIds.length > 0) {
     const existing = new Set(results.map((result) => result.productId));
-    const identityRows = await db.aiSearchIndexedProduct.findMany({
-      where: {
-        shop,
-        productId: { in: identityIds.filter((id) => !existing.has(id)).slice(0, limit) },
-        status: "INDEXED",
-        hasVector: true,
-      },
-      select: { productId: true, handle: true, title: true },
-    });
+    const identityRows = await listSearchableIndexedProducts(
+      shop,
+      identityIds.filter((id) => !existing.has(id)).slice(0, limit),
+    );
     const identitySet = new Set(identityIds);
     results = [
       ...results.map((result) => identitySet.has(result.productId)
@@ -728,29 +729,29 @@ export async function semanticSearch({
   // ============================================================
   // 3. REGISTRY GUARD
   //
-  // Qdrant không phải source of truth cuối cùng.
+  // Qdrant khÃ´ng pháº£i source of truth cuá»‘i cÃ¹ng.
   //
-  // Chỉ giữ vector khi DB registry xác nhận:
+  // Chá»‰ giá»¯ vector khi DB registry xÃ¡c nháº­n:
   //
-  // status = INDEXED
+  // searchable = true
   // hasVector = true
   //
-  // Mục tiêu:
+  // Má»¥c tiÃªu:
   //
-  // - orphan vector không xuất hiện trên storefront
-  // - orphan vector không ảnh hưởng relative threshold
-  // - orphan vector không bị đưa vào render receipt
+  // - orphan vector khÃ´ng xuáº¥t hiá»‡n trÃªn storefront
+  // - orphan vector khÃ´ng áº£nh hÆ°á»Ÿng relative threshold
+  // - orphan vector khÃ´ng bá»‹ Ä‘Æ°a vÃ o render receipt
   //
-  // Search-time chỉ FILTER, không DELETE.
+  // Search-time chá»‰ FILTER, khÃ´ng DELETE.
   //
-  // Không delete ngay ở đây vì search có thể trúng đúng khoảng
-  // thời gian rất ngắn:
+  // KhÃ´ng delete ngay á»Ÿ Ä‘Ã¢y vÃ¬ search cÃ³ thá»ƒ trÃºng Ä‘Ãºng khoáº£ng
+  // thá»i gian ráº¥t ngáº¯n:
   //
   // Qdrant upsert
-  //       ↓
+  //       â†“
   // DB registry upsert
   //
-  // Background reconciliation sẽ xử lý delete lâu dài.
+  // Background reconciliation sáº½ xá»­ lÃ½ delete lÃ¢u dÃ i.
   // ============================================================
 
   const resultProductIds =
@@ -780,29 +781,7 @@ export async function semanticSearch({
     0
   ) {
     const validRegistryRows =
-      await db
-        .aiSearchIndexedProduct
-        .findMany({
-          where: {
-            shop,
-
-            productId: {
-              in:
-                resultProductIds,
-            },
-
-            status:
-              "INDEXED",
-
-            hasVector:
-              true,
-          },
-
-          select: {
-            productId:
-              true,
-          },
-        });
+      await listSearchableIndexedProducts(shop, resultProductIds);
 
     const validProductIds =
       new Set(
@@ -889,13 +868,13 @@ export async function semanticSearch({
   // ============================================================
   // 4. SIMILARITY THRESHOLD
   //
-  // Quan trọng:
+  // Quan trá»ng:
   //
-  // threshold phải tính SAU registry guard.
+  // threshold pháº£i tÃ­nh SAU registry guard.
   //
-  // Nếu orphan vector có score cao nhất,
-  // nó không được phép đẩy threshold lên
-  // và làm loại nhầm product hợp lệ.
+  // Náº¿u orphan vector cÃ³ score cao nháº¥t,
+  // nÃ³ khÃ´ng Ä‘Æ°á»£c phÃ©p Ä‘áº©y threshold lÃªn
+  // vÃ  lÃ m loáº¡i nháº§m product há»£p lá»‡.
   // ============================================================
 
   const thresholdStartedAt =

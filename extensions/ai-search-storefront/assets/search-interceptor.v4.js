@@ -748,6 +748,30 @@
     return parseRenderMetadata(encodedValue);
   }
 
+  function assertMeaningfulProductCards(fragment, metadata) {
+    const totalProducts = Number(metadata?.totalProducts || 0);
+
+    if (!(totalProducts > 0)) return;
+
+    const elements = Array.from(fragment.children);
+    const hasMeaningfulCard = elements.some(function (element) {
+      if ((element.textContent || "").trim()) return true;
+
+      return Boolean(
+        element.matches(
+          "a[href], img, picture, form, button, product-component, [data-product-id]",
+        ) ||
+          element.querySelector(
+            "a[href], img, picture, form, button, product-component, [data-product-id]",
+          ),
+      );
+    });
+
+    if (!hasMeaningfulCard) {
+      throw new Error("THEME_RENDER_EMPTY_PRODUCT_CARDS");
+    }
+  }
+
   function numericThemeId(value) {
     return String(value || "").replace(
       /^gid:\/\/shopify\/(?:OnlineStore)?Theme\//,
@@ -990,6 +1014,11 @@
         decodeMetadata(response, template);
 
       try {
+        assertMeaningfulProductCards(
+          template.content,
+          metadata,
+        );
+
         const mount =
           verifyMount(metadata, receipt);
 

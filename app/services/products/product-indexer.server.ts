@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+﻿import { createHash } from "node:crypto";
 import { getShopSettings } from "../commerce/shop-registry.server";
 
 import type { ProductForIndex } from "./product-document.server";
@@ -13,7 +13,6 @@ import {
   replaceProductShopContext,
 } from "../search/shop-context-index.server";
 import {
-  deleteProductVectorForShop,
   getProductVectorForShop,
   migrateProductVectorPointIdIfNeeded,
   updateProductVectorPayloadForShop,
@@ -26,6 +25,7 @@ import {
 } from "../theme/theme-search-transport-key.server";
 import {
   getIndexedProduct,
+  markIneligibleProductMetadata,
   markIndexedProductBlocked,
   releaseProductSlotReservation,
   reserveProductSlot,
@@ -192,6 +192,24 @@ export async function indexProduct({
   const existingVector =
     existingRecord?.payload ?? null;
 
+  if (
+    registryProduct &&
+    !Boolean(registryProduct.searchable) &&
+    ["PRODUCT_LIMIT", "SUBSCRIPTION"].includes(registryProduct.blockedReason ?? "")
+  ) {
+    await markIneligibleProductMetadata({
+      shop, productId: product.id, handle: product.handle,
+      title: product.title, documentHash,
+    });
+    return {
+      productId: product.id, handle: product.handle, title: product.title,
+      action: "blocked",
+      blockedReason: registryProduct.blockedReason === "SUBSCRIPTION"
+        ? "SUBSCRIPTION_INACTIVE" : "PRODUCT_LIMIT",
+      vectorDimensions: null, documentHash,
+    };
+  }
+
   const isPipelineMigration =
     Boolean(
       existingVector &&
@@ -280,7 +298,7 @@ export async function indexProduct({
     // registry exists. Reserve a plan slot before adopting that vector so a
     // Basic shop can never silently keep more than its 500-product allowance.
     if (
-      !registryProduct?.hasVector
+      !Boolean(registryProduct?.searchable)
     ) {
       const slot =
         await reserveProductSlot({
@@ -303,12 +321,6 @@ export async function indexProduct({
         });
 
       if (!slot.allowed) {
-        await deleteProductVectorForShop({
-          shop,
-          productId:
-            product.id,
-        });
-
         await markIndexedProductBlocked({
           shop,
 
@@ -326,8 +338,7 @@ export async function indexProduct({
           reason:
             "PRODUCT_LIMIT",
 
-          hasVector:
-            false,
+          hasVector: true,
         });
 
         return {
@@ -436,9 +447,9 @@ export async function indexProduct({
       product,
     });
 
-    // Render Transport Key không phụ thuộc document hash.
-    // Dù embedding không đổi, SKU / barcode / vendor /
-    // productType / tags vẫn phải được refresh.
+    // Render Transport Key khÃ´ng phá»¥ thuá»™c document hash.
+    // DÃ¹ embedding khÃ´ng Ä‘á»•i, SKU / barcode / vendor /
+    // productType / tags váº«n pháº£i Ä‘Æ°á»£c refresh.
     await replaceRenderTransportKeysForProduct(
       shop,
       product,
@@ -474,7 +485,7 @@ export async function indexProduct({
   let productSlotReserved =
     false;
 
-  if (!alreadyIndexed) {
+  if (!Boolean(registryProduct?.searchable)) {
     const slot =
       await reserveProductSlot({
         shop,
@@ -671,6 +682,7 @@ export async function indexProduct({
       await prepareProductEmbeddingInput(
         document,
         searchLanguage,
+        shop,
       );
 
     const logEmbeddingInput =
@@ -719,6 +731,12 @@ export async function indexProduct({
     const vector =
       await createEmbedding(
         embeddingInput.document,
+      {
+          usageContext: {
+            shop,
+            operation: "PRODUCT_EMBEDDING",
+          },
+        },
       );
 
     try {
@@ -773,6 +791,8 @@ export async function indexProduct({
           product.title,
 
         documentHash,
+
+        searchable: true,
 
         indexedAt:
           new Date().toISOString(),
@@ -847,8 +867,8 @@ export async function indexProduct({
           : null,
     });
 
-    // Product đã được index thành công.
-    // Tạo lại các search transport signature dùng cho
+    // Product Ä‘Ã£ Ä‘Æ°á»£c index thÃ nh cÃ´ng.
+    // Táº¡o láº¡i cÃ¡c search transport signature dÃ¹ng cho
     // native Section Rendering transport.
     await replaceRenderTransportKeysForProduct(
       shop,

@@ -117,6 +117,23 @@ interface ResolvedArguments {
     boolean;
 }
 
+function hasRenderableSnippetProductBinding(args: {
+  itemTemplate: string;
+  snippetName: string;
+  sourceVariable: string;
+  productArgument: string;
+}): boolean {
+  const snippet = escapeRegexLiteral(args.snippetName);
+  const source = escapeRegexLiteral(args.sourceVariable);
+  const argument = escapeRegexLiteral(args.productArgument);
+  const invocation = new RegExp(
+    `(?:render|include)\\s+['"]${snippet}['"][\\s\\S]*?\\b${argument}\\s*:\\s*${source}(?=\\s|,|%})`,
+    "i",
+  );
+
+  return invocation.test(args.itemTemplate);
+}
+
 /**
  * Runtime rendering profile được compile sẵn từ source theme.
  *
@@ -2545,6 +2562,22 @@ function compileSnippetCandidate(
   ) {
     rejectionReasons.add(
       "PRODUCT_ARGUMENT_NOT_PROVEN",
+    );
+  }
+
+  if (
+    call.snippetName &&
+    call.productBinding &&
+    productArgument &&
+    !hasRenderableSnippetProductBinding({
+      itemTemplate,
+      snippetName: call.snippetName,
+      sourceVariable: call.productBinding.sourceVariable,
+      productArgument,
+    })
+  ) {
+    rejectionReasons.add(
+      "APP_PROXY_PRODUCT_BINDING_NOT_RENDERABLE",
     );
   }
 

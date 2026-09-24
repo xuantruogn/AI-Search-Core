@@ -8,6 +8,7 @@ import { kickProductSyncQueue } from "../products/product-sync-queue.server";
 import {
   listStaleIndexedProducts,
   markIndexedProductCatalogSeen,
+  markIndexedProductUnpublished,
   removeIndexedProduct,
 } from "../commerce/indexed-products.server";
 
@@ -185,6 +186,16 @@ async function cleanupStaleRegistryEntries({
         revalidatedSearchable +=
           1;
 
+        continue;
+      }
+
+      if (shopifyPresence === "NOT_SEARCHABLE") {
+        await markIndexedProductUnpublished(shop, product.productId);
+        transportKeysRemoved += await deleteProductThemeSearchTransportKeys({
+          shop,
+          productId: product.productId,
+        });
+        await markIndexedProductCatalogSeen({ shop, productId: product.productId });
         continue;
       }
 

@@ -1,4 +1,5 @@
 import db from "../../db.server";
+import { listSearchableIndexedProducts } from "../commerce/indexed-products.server";
 import type { QueryPlan, QueryConstraint } from "./query-plan.server";
 import { normalizeQueryText } from "./deterministic-query-parser.server";
 import type { SearchResult } from "./semantic-search.server";
@@ -70,10 +71,7 @@ export async function retrieveStructuredCandidates(args: {
     .slice(0, args.limit)
     .map(([id]) => id);
   if (!ids.length) return [];
-  const products = await db.aiSearchIndexedProduct.findMany({
-    where: { shop: args.shop, productId: { in: ids }, status: "INDEXED" },
-    select: { productId: true, handle: true, title: true },
-  });
+  const products = await listSearchableIndexedProducts(args.shop, ids);
   const byId = new Map(products.map((product) => [product.productId, product]));
   const top = Math.max(...ids.map((id) => scores.get(id) || 0), 1);
   return ids.flatMap((id) => {

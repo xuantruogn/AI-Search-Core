@@ -1,7 +1,7 @@
-// AI Search Bridge - Prisma schema
+// AI Buyense - Prisma schema (safe extension of current production schema)
 // Production database: MySQL.
-// DATABASE_URL is supplied through the environment.
-
+// Existing AI Search schema is preserved; Billing V2 extends AiSearchShop directly.
+// Newly added shop lifecycle/billing cache fields are nullable to preserve unknown/blank data.
 generator client {
   provider = "prisma-client-js"
 }
@@ -10,6 +10,221 @@ datasource db {
   provider = "mysql"
   url      = env("DATABASE_URL")
 }
+
+// =====================================================
+// BILLING / COMMERCIAL EXTENSION
+// - AiSearchShop remains the single tenant/shop root.
+// - Existing AI Search models/columns are preserved.
+// - Optional billing fields stay NULL until real data is available.
+// =====================================================
+
+enum PlanVisibility {
+  PUBLIC
+  PRIVATE
+  INTERNAL
+}
+
+enum BillingMode {
+  SHOPIFY_APP_PRICING
+  MANUAL_BILLING
+}
+
+enum BillingInterval {
+  EVERY_30_DAYS
+  ANNUAL
+}
+
+enum BillingSubscriptionStatus {
+  PENDING
+  ACTIVE
+  FROZEN
+  CANCELLED
+  DECLINED
+  EXPIRED
+}
+
+enum ReplacementBehavior {
+  STANDARD
+  APPLY_IMMEDIATELY
+  APPLY_ON_NEXT_BILLING_CYCLE
+}
+
+enum BillingEventType {
+  SUBSCRIPTION_CREATED
+  SUBSCRIPTION_APPROVED
+  SUBSCRIPTION_ACTIVATED
+  SUBSCRIPTION_CANCELLED
+  SUBSCRIPTION_FROZEN
+  SUBSCRIPTION_UNFROZEN
+  PLAN_UPGRADE
+  PLAN_DOWNGRADE
+  APP_UNINSTALLED
+  APP_REINSTALLED
+  BILLING_RECONCILED
+}
+
+enum BillingEventSource {
+  CALLBACK
+  WEBHOOK
+  API
+  RECONCILIATION
+}
+
+model Plan {
+  id                      String          @id @default(cuid()) @db.VarChar(191)
+  handle                  String          @unique @db.VarChar(191)
+  name                    String          @db.VarChar(191)
+  visibility              PlanVisibility  @default(PUBLIC)
+  billingMode             BillingMode     @default(SHOPIFY_APP_PRICING)
+  interval                BillingInterval @default(EVERY_30_DAYS)
+  price                   Decimal         @db.Decimal(10, 2)
+  currencyCode            String          @default("USD") @db.VarChar(10)
+  trialDays               Int             @default(0)
+
+  maxIndexedProducts      Int?
+  maxMonthlySearches      Int?
+  maxMonthlyVectorUpdates Int?
+
+  usageBillingEnabled     Boolean         @default(false)
+  featureFlags            Json?
+  shopifyPlanHandle       String?         @db.VarChar(191)
+
+  version                 Int             @default(1)
+  isActive                Boolean         @default(true)
+  sortOrder               Int             @default(0)
+
+  createdAt               DateTime        @default(now())
+  updatedAt               DateTime        @updatedAt
+
+  subscriptions           BillingSubscription[]
+  assignments             PlanAssignment[]
+
+  @@map("plans")
+}
+
+model PlanAssignment {
+  id                  String       @id @default(cuid()) @db.VarChar(191)
+  shop                String       @db.VarChar(191)
+  planId              String       @db.VarChar(191)
+
+  shopRecord          AiSearchShop @relation(fields: [shop], references: [shop], onDelete: Cascade)
+  plan                Plan         @relation(fields: [planId], references: [id], onDelete: Cascade)
+
+  customPriceOverride Decimal?     @db.Decimal(10, 2)
+  notes               String?      @db.Text
+
+  startsAt            DateTime? // NULL until an assignment actually starts
+  endsAt              DateTime?
+  isActive            Boolean?  // NULL means not yet established/imported
+  createdAt           DateTime     @default(now())
+
+  @@unique([shop, planId])
+  @@index([shop, isActive])
+  @@map("plan_assignments")
+}
+
+model BillingSubscription {
+  id                     String                     @id @default(cuid()) @db.VarChar(191)
+  shop                   String                     @db.VarChar(191)
+  planId                 String?                    @db.VarChar(191)
+
+  shopRecord             AiSearchShop               @relation(fields: [shop], references: [shop], onDelete: Cascade)
+  plan                   Plan?                      @relation(fields: [planId], references: [id])
+
+  // Nullable so legacy/partial data is never filled with invented values.
+  shopifySubscriptionGid String?                    @unique @db.VarChar(191)
+  shopifyPlanHandle      String?                    @db.VarChar(191)
+  status                 BillingSubscriptionStatus?
+
+  planNameSnapshot       String?                    @db.VarChar(191)
+  priceSnapshot          Decimal?                   @db.Decimal(10, 2)
+  currencySnapshot       String?                    @db.VarChar(10)
+  intervalSnapshot       BillingInterval?
+
+  trialStartsAt          DateTime?
+  trialEndsAt            DateTime?
+  currentPeriodStartsAt  DateTime?
+  currentPeriodEndsAt    DateTime?
+
+  activatedAt            DateTime?
+  cancelledAt            DateTime?
+  frozenAt               DateTime?
+  frozenReason           String?                    @db.VarChar(255)
+
+  replacementBehavior    ReplacementBehavior?
+  isPendingSchedule      Boolean?
+  testMode               Boolean?
+  rawResponse            Json?
+
+  createdAt              DateTime                   @default(now())
+  updatedAt              DateTime                   @updatedAt
+
+  @@index([shop, status])
+  @@index([shop, createdAt])
+  @@map("billing_subscriptions")
+}
+
+model BillingEvent {
+  id              String             @id @default(cuid()) @db.VarChar(191)
+  shop            String             @db.VarChar(191)
+  shopRecord      AiSearchShop       @relation(fields: [shop], references: [shop], onDelete: Cascade)
+
+  subscriptionGid String?            @db.VarChar(191)
+  type            BillingEventType
+  source          BillingEventSource
+  idempotencyKey  String?            @unique @db.VarChar(191)
+  payload         Json?
+
+  occurredAt      DateTime
+  createdAt       DateTime           @default(now())
+
+  @@index([shop, occurredAt])
+  @@index([subscriptionGid])
+  @@map("billing_events")
+}
+
+// Aggregate/cache for billing/dev dashboard only.
+// AiSearchUsagePeriod + AiSearchUsageEvent remain the runtime usage source.
+model UsageCounter {
+  id                   String       @id @default(cuid()) @db.VarChar(191)
+  shop                 String       @db.VarChar(191)
+  shopRecord           AiSearchShop @relation(fields: [shop], references: [shop], onDelete: Cascade)
+
+  periodStart          DateTime
+  periodEnd            DateTime
+
+  searches             Int          @default(0)
+  vectorUpdates        Int          @default(0)
+  llmCalls             Int          @default(0)
+  embeddingCalls       Int          @default(0)
+
+  llmInputTokens       BigInt       @default(0)
+  llmOutputTokens      BigInt       @default(0)
+  embeddingInputTokens BigInt       @default(0)
+
+  estimatedCostUsd     Decimal      @default(0) @db.Decimal(14, 6)
+  updatedAt            DateTime     @updatedAt
+
+  @@unique([shop, periodStart])
+  @@map("usage_counters")
+}
+
+model CatalogState {
+  shop                   String       @id @db.VarChar(191)
+  shopRecord             AiSearchShop @relation(fields: [shop], references: [shop], onDelete: Cascade)
+
+  shopifyProductCount    Int          @default(0)
+  eligibleProductCount   Int          @default(0)
+  indexedProductCount    Int          @default(0)
+  searchableProductCount Int          @default(0)
+
+  lastFullSyncAt         DateTime?
+  lastDeltaSyncAt        DateTime?
+  updatedAt              DateTime     @updatedAt
+
+  @@map("catalog_states")
+}
+
 
 model Session {
   id                  String    @id @db.VarChar(191)
@@ -44,6 +259,7 @@ model AiSearchSyncJob {
   updatedAt   DateTime  @updatedAt
   startedAt   DateTime?
   processedAt DateTime?
+  policyVersion Int?
 
   @@index([status, createdAt])
   @@index([shop, productId])
@@ -66,6 +282,7 @@ model AiSearchLeaseLock {
 // =====================================================
 
 model AiSearchShop {
+  // Existing identity/state fields - kept unchanged.
   shop          String    @id @db.VarChar(191)
   shopifyShopId String?   @db.VarChar(191)
   status        String    @default("ACTIVE") @db.VarChar(64)
@@ -74,6 +291,18 @@ model AiSearchShop {
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
+  // Billing/lifecycle extension. All newly added scalar fields are nullable so
+  // existing shops remain NULL until Shopify/app logic provides real values.
+  frozenAt               DateTime?
+  reinstalledAt          DateTime?
+  installCount           Int?
+  currentPlanHandle      String?   @db.VarChar(191)
+  currentSubscriptionGid String?   @db.VarChar(191)
+  pendingPlanHandle      String?   @db.VarChar(191)
+  pendingSubscriptionGid String?   @db.VarChar(191)
+  pendingChangeAt        DateTime?
+
+  // Existing AI Search relations - kept unchanged.
   subscription      AiSearchSubscription?
   settings          AiSearchShopSettings?
   usagePeriods      AiSearchUsagePeriod[]
@@ -82,6 +311,16 @@ model AiSearchShop {
   queryLogs         AiSearchQueryLog[]
   products          AiSearchIndexedProduct[]
   catalogJobs       AiSearchCatalogSyncJob[]
+  quotaGrants       AiSearchQuotaGrant[]
+  apiUsageEvents    AiSearchApiUsageEvent[]
+  adminAuditLogs    AiSearchAdminAuditLog[]
+
+  // New billing relations. AiSearchShop remains the only shop master.
+  billingSubscriptions BillingSubscription[]
+  planAssignments      PlanAssignment[]
+  billingEvents        BillingEvent[]
+  usageCounters        UsageCounter[]
+  catalogState         CatalogState?
 }
 
 model AiSearchSubscription {
@@ -115,6 +354,7 @@ model AiSearchShopSettings {
   resultLimit               Int      @default(20)
   createdAt                 DateTime @default(now())
   updatedAt                 DateTime @updatedAt
+  productPolicyVersion      Int      @default(0)
 
   shopRecord AiSearchShop @relation(fields: [shop], references: [shop], onDelete: Cascade)
 }
@@ -238,32 +478,37 @@ model AiSearchUsageReservation {
 }
 
 model AiSearchIndexedProduct {
-  id                Int       @id @default(autoincrement())
-  shop              String    @db.VarChar(191)
-  productId         String    @db.VarChar(64)
-  handle            String    @db.VarChar(255)
-  title             String    @db.VarChar(255)
-  status            String    @default("INDEXED") @db.VarChar(64)
-  hasVector         Boolean   @default(false)
-  documentHash      String?   @db.VarChar(64)
-  sourceDocumentHash String?  @db.VarChar(64)
-  embeddingPipelineVersion String? @db.VarChar(64)
-  enrichmentVersion String?  @db.VarChar(64)
-  enrichmentStatus String    @default("PENDING") @db.VarChar(32)
-  enrichmentLastError String? @db.Text
-  enrichmentRetryAt DateTime?
-  enrichmentUpdatedAt DateTime?
-  lastIndexedAt     DateTime?
-  lastSeenAt        DateTime  @default(now())
-  lastCatalogSeenAt DateTime?
-  createdAt         DateTime  @default(now())
-  updatedAt         DateTime  @updatedAt
+  id                       Int       @id @default(autoincrement())
+  shop                     String    @db.VarChar(191)
+  productId                String    @db.VarChar(64)
+  handle                   String    @db.VarChar(255)
+  title                    String    @db.VarChar(255)
+  status                   String    @default("INDEXED") @db.VarChar(64)
+  hasVector                Boolean   @default(false)
+  vectorStatus             String    @default("MISSING") @db.VarChar(32)
+  searchable               Boolean   @default(false)
+  blockedReason            String?   @db.VarChar(64)
+  documentHash             String?   @db.VarChar(64)
+  sourceDocumentHash       String?   @db.VarChar(64)
+  embeddingPipelineVersion String?   @db.VarChar(64)
+  enrichmentVersion        String?   @db.VarChar(64)
+  enrichmentStatus         String    @default("PENDING") @db.VarChar(32)
+  enrichmentLastError      String?   @db.Text
+  enrichmentRetryAt        DateTime?
+  enrichmentUpdatedAt      DateTime?
+  lastIndexedAt            DateTime?
+  lastSeenAt               DateTime  @default(now())
+  lastCatalogSeenAt        DateTime?
+  createdAt                DateTime  @default(now())
+  updatedAt                DateTime  @updatedAt
 
   shopRecord   AiSearchShop              @relation(fields: [shop], references: [shop], onDelete: Cascade)
   contextTerms AiSearchShopContextTerm[]
 
   @@unique([shop, productId])
   @@index([shop, status])
+  @@index([shop, searchable])
+  @@index([shop, vectorStatus])
   @@index([shop, handle])
   @@index([shop, lastCatalogSeenAt])
   @@index([shop, enrichmentStatus, enrichmentRetryAt], map: "idx_enrich_retry")
@@ -428,4 +673,63 @@ model AiSearchRenderTransportKey {
    * Lấy toàn bộ candidate key của một AI product.
    */
   @@index([shop, productId])
+}
+
+model AiSearchQuotaGrant {
+  id        String    @id @default(cuid()) @db.VarChar(191)
+  shop      String    @db.VarChar(191)
+  kind      String    @db.VarChar(64)
+  amount    Int
+  reason    String?   @db.Text
+  startsAt  DateTime  @default(now())
+  expiresAt DateTime?
+  revokedAt DateTime?
+  createdBy String    @db.VarChar(191)
+  createdAt DateTime  @default(now())
+
+  shopRecord AiSearchShop @relation(fields: [shop], references: [shop], onDelete: Cascade)
+
+  @@index([shop, kind, startsAt, expiresAt])
+  @@index([shop, revokedAt, createdAt])
+}
+
+model AiSearchAdminAuditLog {
+  id         String   @id @default(cuid()) @db.VarChar(191)
+  actorShop  String   @db.VarChar(191)
+  targetShop String   @db.VarChar(191)
+  action     String   @db.VarChar(64)
+  reason     String?  @db.Text
+  beforeJson String?  @db.LongText
+  afterJson  String?  @db.LongText
+  createdAt  DateTime @default(now())
+
+  targetShopRecord AiSearchShop @relation(fields: [targetShop], references: [shop], onDelete: Cascade)
+
+  @@index([targetShop, createdAt])
+  @@index([actorShop, createdAt])
+}
+
+model AiSearchApiUsageEvent {
+  id                  Int      @id @default(autoincrement())
+  shop                String?  @db.VarChar(191)
+  provider            String   @default("OPENAI") @db.VarChar(64)
+  operation           String   @db.VarChar(64)
+  model               String   @db.VarChar(191)
+  requestId           String?  @db.VarChar(191)
+  inputTokens         Int      @default(0)
+  cachedInputTokens   Int      @default(0)
+  outputTokens        Int      @default(0)
+  totalTokens         Int      @default(0)
+  estimatedCostMicros Int      @default(0)
+  remainingRequests   Int?
+  remainingTokens     Int?
+  resetRequests       String?  @db.VarChar(64)
+  resetTokens         String?  @db.VarChar(64)
+  createdAt           DateTime @default(now())
+
+  shopRecord AiSearchShop? @relation(fields: [shop], references: [shop], onDelete: Cascade)
+
+  @@index([shop, createdAt])
+  @@index([provider, createdAt])
+  @@index([model, createdAt])
 }

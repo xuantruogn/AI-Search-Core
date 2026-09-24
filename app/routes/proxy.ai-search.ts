@@ -1435,6 +1435,20 @@ const resultCacheStatus = "MISS" as const;
             candidateId,
           });
 
+        if (process.env.NODE_ENV !== "production") {
+          console.log("[AI Search][Theme Map V4] generated APP_PROXY_LIQUID", {
+            shop: session.shop,
+            receiptId: cachedPage.result.receiptId,
+            page: cachedPage.page,
+            candidateId: renderPlan.candidateId,
+            sourceFile: renderPlan.candidate.sourceFile,
+            snippet: renderPlan.candidate.snippet ?? null,
+            productBinding: renderPlan.candidate.productBinding,
+            arguments: renderPlan.candidate.arguments,
+            liquid: renderPlan.liquid,
+          });
+        }
+
         buildLiquidMs =
           Date.now() -
           buildLiquidStartedAt;

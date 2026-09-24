@@ -1,0 +1,649 @@
+TASK: Redesign the product-limit/subscription recovery and product synchronization lifecycle.
+
+IMPORTANT BUSINESS RULE:
+
+A product that has already been indexed/vectorized MUST NOT have its vector/index data deleted merely because the shop's plan/product limit was reduced, subscription became inactive, or the product temporarily became ineligible due to quota.
+
+Plan limits control whether a product is ACTIVE/SEARCHABLE, not whether cached vector data is physically retained.
+
+Only a real Shopify product deletion should hard-delete the product/vector.
+
+CURRENT BUG:
+
+When productLimit is lowered below the number of indexed products, the indexed count falls and later rises again.
+
+The current recovery service queues blocked products as:
+
+topic: "PRODUCTS_UPDATE"
+
+This causes quota recovery to enter the normal Shopify product-update indexing pipeline and may execute:
+
+Shopify processing
+→ GPT product enrichment
+→ embedding
+→ vector write
+→ indexed
+
+This must stop.
+
+The existing recoverBlockedProducts() currently handles:
+- subscriptionBlockedProducts
+- vectorQuotaBlockedProducts
+- productLimitBlockedProducts
+
+and calls enqueueProductSyncJob(... topic: "PRODUCTS_UPDATE").
+
+Do not patch only this one function. Inspect the full lifecycle and fix the architecture consistently.
+
+Inspect at minimum:
+
+- commerce/entitlement.server.ts
+- commerce/indexed-products.server.ts
+- product-indexer.server.ts
+- product-sync-job.server.ts
+- product-sync-queue.server.ts
+- current product webhook handlers
+- all callers of recoverBlockedProducts()
+- all callers of recoverQuotaBlockedProducts()
+- code that handles productLimit changes
+- code that counts productSlotsUsed
+- vector search filtering
+- Prisma models for indexed products/jobs/settings/usage
+
+Search the repository for:
+
+recoverBlockedProducts
+recoverQuotaBlockedProducts
+productSlotsUsed
+productLimitBlockedProducts
+vectorQuotaBlockedProducts
+subscriptionBlockedProducts
+PRODUCTS_UPDATE
+blockedReason
+productLimit
+vectorUpdateLimit
+
+DO NOT rewrite unrelated search logic.
+
+==================================================
+1. SEPARATE VECTOR STATE FROM SEARCH ELIGIBILITY
+==================================================
+
+A product must conceptually have two independent state dimensions:
+
+Vector/data state:
+- MISSING
+- READY
+- STALE
+- ERROR
+
+Search eligibility:
+- searchable = true/false
+- blockedReason for diagnostics, e.g.
+  PRODUCT_LIMIT
+  SUBSCRIPTION
+  UNPUBLISHED
+  OTHER
+
+Use existing schema fields if equivalent fields already exist.
+Do not create duplicate concepts unnecessarily.
+
+If schema changes are needed, add the minimum fields required.
+
+Important:
+blockedReason is diagnostic.
+The desired eligibility should be recomputable from current catalog state + current policy.
+Do not rely only on the historical blockedReason to decide future eligibility.
+
+==================================================
+2. PRODUCT LIMIT APPLIES TO ACTIVE PRODUCTS ONLY
+==================================================
+
+productLimit must represent the maximum number of products allowed to participate in AI Search.
+
+It must NOT represent the maximum number of cached vectors stored.
+
+Example:
+
+catalog products      = 1283
+cached vectors        = 1283
+productLimit          = 100
+searchable products   = 100
+blocked by limit      = 1183
+
+This state is valid.
+
+Audit the current meaning of entitlement.productSlotsUsed.
+
+If productSlotsUsed currently counts indexed rows or vector records, change/refactor it so the entitlement check uses ACTIVE/SEARCHABLE product slots.
+
+Expose separate counts where useful:
+
+activeProductSlotsUsed
+cachedVectorCount
+blockedProductCount
+
+Do not decrement historical usage counters when deactivating products.
+
+==================================================
+3. LOWERING PRODUCT LIMIT
+==================================================
+
+Example:
+
+oldLimit = 10000
+newLimit = 100
+currently searchable = 1283
+
+Expected behavior:
+
+- acquire a shop-level policy reconciliation lock
+- read the latest policy
+- determine desired active product set deterministically
+- keep exactly 100 eligible products searchable
+- mark the other 1183 as searchable=false / PRODUCT_LIMIT blocked
+- KEEP their vector data
+- KEEP their embedding metadata/content hashes
+- do NOT call GPT
+- do NOT call embeddings API
+- do NOT enqueue PRODUCTS_UPDATE
+- do NOT delete vectors
+- do NOT increment vector usage
+
+Changing a plan/limit is a POLICY RECONCILIATION operation, not a product-sync operation.
+
+Use deterministic ordering when deciding which products stay active.
+
+Prefer preserving the currently active set to minimize churn.
+Use an existing stable field such as indexedAt/createdAt/productId as tie-breaker if suitable.
+
+Do not randomly change which products occupy the available slots on every reconciliation.
+
+==================================================
+4. INCREASING PRODUCT LIMIT
+==================================================
+
+Example:
+
+oldLimit = 100
+newLimit = 500
+
+There are 1183 product-limit-blocked products.
+
+Open 400 additional slots.
+
+For each newly eligible product:
+
+If:
+- vector exists
+- vector status READY
+- product content has not changed
+
+Then:
+- simply searchable=false → searchable=true
+- no GPT
+- no embedding
+- no vector quota usage
+
+If:
+- vector missing
+or
+- vector status STALE
+
+Then:
+- product becomes eligible for reindex
+- enqueue a dedicated REINDEX_PRODUCT job
+- consume vector quota only when an actual vector write occurs
+- after successful reindex mark READY + searchable
+
+Do not enqueue PRODUCTS_UPDATE for simple quota recovery.
+
+==================================================
+5. PRODUCT WEBHOOK WHILE PRODUCT IS BLOCKED
+==================================================
+
+If a product is not searchable because of PRODUCT_LIMIT or SUBSCRIPTION and Shopify sends PRODUCTS_UPDATE:
+
+Do not blindly run expensive enrichment/embedding.
+
+Update the local product metadata needed to detect change.
+
+Calculate/update the existing content hash using the current project conventions.
+
+If content changed:
+- vectorStatus = STALE
+
+Keep:
+- searchable = false
+
+Do NOT call GPT/embedding while the product is ineligible solely to keep an unused vector fresh.
+
+When it later becomes eligible:
+- READY vector → activate immediately
+- STALE/MISSING → reindex then activate
+
+Preserve existing behavior for genuinely active products unless this task requires changing it.
+
+==================================================
+6. SUBSCRIPTION STATE
+==================================================
+
+Subscription inactive:
+
+- products become non-searchable according to policy
+- vectors are retained
+- no mass re-embedding
+- no vector deletion
+
+Subscription active again:
+
+- run policy reconciliation
+- reactivate cached READY vectors immediately
+- only enqueue reindex for products whose vectors are STALE/MISSING
+
+The current subscription recovery branch must no longer queue 50 generic PRODUCTS_UPDATE jobs.
+
+==================================================
+7. VECTOR UPDATE QUOTA IS INDEPENDENT
+==================================================
+
+productLimit = capacity
+vectorUpdateLimit = number of actual vector update operations allowed
+
+Do not couple them.
+
+Activating an existing READY vector:
+- must NOT consume vectorUpdateLimit
+
+Deactivating due to productLimit:
+- must NOT consume vectorUpdateLimit
+
+Only actual vector creation/update increments vector usage.
+
+If vector quota is exhausted and an active/eligible product becomes stale:
+- preserve the old vector according to existing safe behavior
+- record STALE / vector-quota-blocked state
+- do not pretend that product capacity itself has been consumed by a vector operation
+
+Review all existing vector quota checks for this distinction.
+
+==================================================
+8. REPLACE GENERIC RECOVERY
+==================================================
+
+Refactor recoverBlockedProducts().
+
+Preferred high-level behavior:
+
+recoverBlockedProducts(shop)
+    → reconcileProductEligibility(shop)
+    → immediately activate eligible cached READY products
+    → identify eligible products that are MISSING/STALE
+    → enqueue only dedicated reindex jobs within current vector budget
+
+It must NOT represent quota recovery as a fake Shopify PRODUCTS_UPDATE event.
+
+If the existing job table requires a topic/kind, introduce/reuse explicit job semantics such as:
+
+SHOPIFY_PRODUCT_UPDATE
+REINDEX_PRODUCT
+
+Policy reconciliation should preferably not require a product job at all when it is only changing eligibility flags.
+
+Preserve backward-compatible exported function names temporarily if older routes import recoverQuotaBlockedProducts, but route them to the new logic.
+
+==================================================
+9. STALE JOB PROTECTION / POLICY VERSION
+==================================================
+
+There may already be many queued jobs created under an older limit.
+
+Prevent them from restoring products after the limit has changed.
+
+Introduce or reuse a per-shop policy/version/generation concept.
+
+Example:
+
+policyVersion 41:
+productLimit=10000
+
+then limit changes:
+
+policyVersion 42:
+productLimit=100
+
+A job created under version 41 must not blindly index/activate a product under version 42.
+
+At execution time:
+- compare job policy version / current policy
+or
+- always re-evaluate current eligibility atomically immediately before the expensive operation and before activation.
+
+Prefer explicit policyVersion if it fits the current schema.
+
+Stale jobs should be discarded or re-evaluated safely.
+
+==================================================
+10. SHOP-LEVEL RECONCILIATION LOCK
+==================================================
+
+Current per-product locks are insufficient to protect the invariant:
+
+activeProductCount <= effectiveProductLimit
+
+Ensure only one product-policy reconciliation per shop runs at once.
+
+A limit decrease and a recovery/increase operation must never fight each other.
+
+If the policy changes during an existing reconciliation:
+- detect version mismatch
+- stop/retry using the newest policy
+
+Do not allow:
+DOWN reconciliation
+and
+UP recovery
+
+to run independently against stale snapshots.
+
+==================================================
+11. ATOMICITY
+==================================================
+
+Protect the invariant:
+
+if productLimit != unlimited:
+    active/searchable products <= effective productLimit
+
+Avoid:
+
+read count
+if count < limit
+activate
+
+without transactional protection.
+
+Two workers must not both observe the same final slot.
+
+Use the project's current DB transaction/locking approach where possible.
+
+Do not add a complex distributed system if a DB transaction/update is sufficient.
+
+==================================================
+12. SEARCH FILTERING
+==================================================
+
+Because vectors for blocked products remain stored, vector search MUST exclude non-searchable products.
+
+Check the current search retrieval implementation.
+
+Preferred:
+filter at vector-query/retrieval time by:
+- shop
+- searchable/eligible product
+
+Do not retrieve only top K from all vectors and then remove blocked products afterwards, because blocked vectors may consume the entire top K.
+
+If the current vector store cannot filter on eligibility directly, implement a safe eligible-product restriction using the current architecture.
+
+A product blocked by productLimit/subscription must never appear in storefront AI results.
+
+==================================================
+13. PRODUCT DELETE / UNPUBLISH RULES
+==================================================
+
+Real Shopify product DELETE:
+- delete local product state as appropriate
+- delete vector
+- release active slot
+
+Unpublished/non-searchable catalog state:
+- make not searchable
+- vector may remain cached for inexpensive future reactivation
+- if product content changes while inactive, mark STALE
+
+Do not confuse real catalog deletion with plan downgrade.
+
+==================================================
+14. USAGE / METRICS
+==================================================
+
+Do not modify historical usage counters to enforce a product limit.
+
+Separate state metrics from usage metrics.
+
+State:
+- catalogProductCount
+- cachedVectorCount
+- active/searchableProductCount
+- blockedByProductLimit
+- staleVectorCount
+
+Usage:
+- actual vector update count
+- product embedding calls
+- product enrichment calls
+- sync operations
+
+A false→true searchable toggle using an existing READY vector is not a vector update.
+
+A true→false searchable toggle is not a vector update.
+
+==================================================
+15. LOGGING / OBSERVABILITY
+==================================================
+
+Add structured logs around policy reconciliation.
+
+At minimum:
+
+[PRODUCT POLICY RECONCILE START]
+shop
+policyVersion
+effectiveProductLimit
+catalogCount
+cachedVectorCount
+activeCount
+blockedCount
+
+[PRODUCT POLICY RECONCILE PLAN]
+keepActive
+deactivate
+reactivateReady
+requiresReindex
+
+[PRODUCT POLICY RECONCILE DONE]
+activeBefore
+activeAfter
+cachedBefore
+cachedAfter
+blockedAfter
+targetLimit
+policyVersion
+
+For product jobs include:
+jobId
+jobKind/source
+productId
+jobPolicyVersion
+currentPolicyVersion
+currentEligibility
+vectorStatus
+requiresAI
+
+This must make it immediately obvious if active count ever goes:
+1283 → ... → 0 → ... → 100.
+
+Do not dump large semantic product payloads as the primary debugging mechanism for quota reconciliation.
+
+==================================================
+16. RECOVERY BATCHING
+==================================================
+
+The current function can attempt up to:
+50 subscription
++ 50 vector
++ 50 product-limit
+= 150 jobs
+
+After the redesign most product-limit/subscription recovery should be DB state flips, not jobs.
+
+For real reindex jobs:
+- use a single bounded batch budget
+- respect vector quota
+- respect queue concurrency
+- do not enqueue duplicate work for the same shop+product+desired vector version
+
+Deduplication must not fail merely because the recovery "kind" string differs.
+
+==================================================
+17. MIGRATION / BACKFILL
+==================================================
+
+Do not destroy existing vectors.
+
+Provide a safe migration/backfill for existing AiSearchIndexedProduct rows.
+
+After migration for each shop:
+- inspect current effective product limit
+- preserve existing vector records
+- choose up to limit eligible products as searchable
+- remaining products become non-searchable PRODUCT_LIMIT blocked
+- unlimited plans keep all eligible READY products searchable
+- no OpenAI calls during migration/backfill
+
+Make migration restart-safe/idempotent.
+
+==================================================
+18. TESTS REQUIRED
+==================================================
+
+Add/adjust tests for at least these scenarios:
+
+A.
+1283 READY/searchable products
+limit 10000 → 100
+
+Expected:
+cached vectors = 1283
+searchable = 100
+blocked = 1183
+GPT calls = 0
+embedding calls = 0
+vector deletions = 0
+
+B.
+limit 100 → 500
+
+400 blocked products have READY vectors.
+
+Expected:
+searchable becomes 500
+GPT calls = 0
+embedding calls = 0
+
+C.
+limit 100 → 500
+30 of the 400 products are STALE.
+
+Expected:
+370 activate immediately
+30 reindex subject to vector budget
+no unnecessary work for READY vectors.
+
+D.
+Product blocked by product limit receives Shopify update.
+
+Expected:
+searchable remains false
+content/vector marked STALE when needed
+no expensive AI call immediately.
+
+E.
+Subscription inactive → active.
+
+Expected:
+vectors retained throughout
+READY vectors reactivate without re-embedding.
+
+F.
+Old queued job created before product limit decrease executes afterward.
+
+Expected:
+current policy is re-evaluated;
+job cannot activate a product beyond current limit.
+
+G.
+Concurrent workers attempt final available slot.
+
+Expected:
+active count never exceeds limit.
+
+H.
+Search over stored vectors.
+
+Expected:
+blocked products never appear in results.
+
+I.
+Actual Shopify product delete.
+
+Expected:
+vector/local record cleaned as designed.
+
+J.
+Repeated reconciliation with no state changes.
+
+Expected:
+idempotent:
+0 vector writes
+0 AI calls
+0 unnecessary jobs
+
+==================================================
+19. IMPORTANT NON-GOALS
+==================================================
+
+Do NOT:
+- rewrite semantic search ranking
+- rewrite query LLM logic
+- change merchant billing logic unnecessarily
+- delete all vectors and rebuild
+- reset usage counters
+- solve the issue by simply raising queue limits
+- solve it by adding more retries
+- create new embeddings for unchanged cached products
+- treat policy recovery as PRODUCTS_UPDATE
+
+Keep changes scoped to:
+product lifecycle
+eligibility
+entitlement/product-slot accounting
+quota recovery
+sync queue semantics
+search eligibility filtering
+observability
+
+==================================================
+20. FINAL REPORT
+==================================================
+
+After implementation return:
+
+1. Root causes found in the actual current code.
+2. Files changed.
+3. Schema changes/migration, if any.
+4. Old flow vs new flow.
+5. Exact definition of:
+   - cached vector
+   - active/searchable product
+   - product slot used
+   - vector update
+6. How stale queued jobs are prevented.
+7. How limit decrease avoids deleting vectors.
+8. How limit increase reuses cached vectors.
+9. Test results.
+10. Any unresolved edge cases.
+
+Before editing, inspect the current implementation and reuse existing fields/services where possible.
+Do not create parallel duplicate state systems if equivalent concepts already exist.

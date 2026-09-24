@@ -15,6 +15,7 @@ import {
 } from "./product-sync-job.server";
 import { withProductSyncLock } from "./product-sync-lock.server";
 import { ensureShopForBackgroundWork } from "../commerce/shop-registry.server";
+import { withDistributedLease } from "../commerce/lease-lock.server";
 
 type AdminGraphqlClient = {
   graphql: (
@@ -36,10 +37,41 @@ export type ProcessClaimedProductSyncJobInput = {
 };
 
 function requiresAdmin(topic: string) {
-  return topic === "PRODUCTS_CREATE" || topic === "PRODUCTS_UPDATE";
+  return topic === "PRODUCTS_CREATE" || topic === "PRODUCTS_UPDATE" || topic === "REINDEX_PRODUCT";
 }
 
-async function runJobWork({ job, admin }: ProcessClaimedProductSyncJobInput) {
+async function runJobWorkWithPolicyStable({ job, admin }: ProcessClaimedProductSyncJobInput) {
+  if (job.topic === "REINDEX_PRODUCT") {
+    const policyRows = await db.$queryRaw<Array<{ productPolicyVersion: number }>>`
+      SELECT \`productPolicyVersion\` FROM \`AiSearchShopSettings\`
+      WHERE \`shop\` = ${job.shop} LIMIT 1
+    `;
+    const productRows = await db.$queryRaw<Array<{
+      blockedReason: string | null; vectorStatus: string; searchable: boolean | number;
+    }>>`
+      SELECT \`blockedReason\`, \`vectorStatus\`, \`searchable\`
+      FROM \`AiSearchIndexedProduct\`
+      WHERE \`shop\` = ${job.shop} AND \`productId\` = ${job.productId} LIMIT 1
+    `;
+    const jobRows = await db.$queryRaw<Array<{ policyVersion: number | null }>>`
+      SELECT \`policyVersion\` FROM \`AiSearchSyncJob\` WHERE \`id\` = ${job.id} LIMIT 1
+    `;
+    const policy = policyRows[0];
+    const product = productRows[0];
+    const jobPolicyVersion = jobRows[0]?.policyVersion ?? null;
+    const currentPolicyVersion = policy?.productPolicyVersion ?? 0;
+    const eligible = Boolean(product) && product?.blockedReason === null;
+    console.log("[AI Search] Product policy job check", {
+      jobId: job.id, jobKind: job.topic, productId: job.productId,
+      jobPolicyVersion, currentPolicyVersion,
+      currentEligibility: eligible, vectorStatus: product?.vectorStatus ?? "MISSING",
+      requiresAI: eligible && product?.vectorStatus !== "READY",
+    });
+    if (!eligible || jobPolicyVersion !== currentPolicyVersion) {
+      return { action: "skipped", productId: job.productId } as const;
+    }
+  }
+
   if (requiresAdmin(job.topic)) {
     if (!admin) {
       throw new Error(`Admin API client required for ${job.topic}`);
@@ -60,6 +92,21 @@ async function runJobWork({ job, admin }: ProcessClaimedProductSyncJobInput) {
   }
 
   throw new Error(`Unsupported AI Search sync topic: ${job.topic}`);
+}
+
+async function runJobWork(input: ProcessClaimedProductSyncJobInput) {
+  if (input.job.topic !== "REINDEX_PRODUCT") {
+    return runJobWorkWithPolicyStable(input);
+  }
+
+  // Keep the policy generation stable from the stale-job check through the
+  // actual vector write and registry activation. A downgrade cannot race the
+  // job and be overwritten after the initial version check.
+  return withDistributedLease({
+    shop: input.job.shop,
+    resource: "product-policy:reconcile",
+    task: () => runJobWorkWithPolicyStable(input),
+  });
 }
 
 // =====================================================

@@ -1,6 +1,7 @@
 import db from "../../db.server";
 import { getIndexedProductStats } from "./indexed-products.server";
 import { PLAN_DEFINITIONS } from "./plans.server";
+import { applyActiveQuotaGrants } from "./quota-grants.server";
 import {
   ensureShopRecord,
   getShopLifecycleStatus,
@@ -40,6 +41,11 @@ export async function getShopEntitlement(
     vectorQuotaBlockedProducts,
     productLimitBlockedProducts,
     subscriptionBlockedProducts,
+    catalogProductCount,
+    cachedVectorCount,
+    activeProductSlotsUsed,
+    blockedProductCount,
+    staleVectorCount,
   } = productStats;
 
   const usage = await ensureUsagePeriod({
@@ -58,7 +64,7 @@ export async function getShopEntitlement(
 
   const definition = PLAN_DEFINITIONS[subscription.plan];
 
-  const limits = {
+  const baseLimits = {
     productLimit: applyOverride(
       definition.limits.productLimit,
       settings.productLimitOverride,
@@ -72,13 +78,14 @@ export async function getShopEntitlement(
       settings.vectorUpdateLimitOverride,
     ),
   };
+  const limits = await applyActiveQuotaGrants(shop, baseLimits);
 
   const subscriptionActive =
     shopLifecycleStatus === "ACTIVE" && subscription.status === "ACTIVE";
   const productSlotAvailable =
     limits.productLimit === null || productSlotsUsed < limits.productLimit;
   const productLimitExceeded =
-    limits.productLimit !== null && indexedProducts > limits.productLimit;
+    limits.productLimit !== null && productSlotsUsed > limits.productLimit;
   const searchQuotaAvailable =
     limits.searchLimit === null || usage.searchCount < limits.searchLimit;
   const vectorQuotaAvailable =
@@ -100,12 +107,6 @@ export async function getShopEntitlement(
     disabledReason = "INITIAL_SYNC_IN_PROGRESS";
   } else if (catalogSyncStatus === "FAILED" && indexedProducts === 0) {
     disabledReason = "INITIAL_SYNC_FAILED";
-  } else if (subscriptionBlockedProducts > 0) {
-    disabledReason = "CATALOG_STALE_SUBSCRIPTION";
-  } else if (vectorQuotaBlockedProducts > 0) {
-    disabledReason = "CATALOG_STALE_QUOTA";
-  } else if (!vectorQuotaAvailable) {
-    disabledReason = "VECTOR_UPDATE_QUOTA_EXCEEDED";
   } else if (!searchQuotaAvailable) {
     disabledReason = "SEARCH_QUOTA_EXCEEDED";
   }
@@ -124,6 +125,11 @@ export async function getShopEntitlement(
     usage,
     indexedProducts,
     productSlotsUsed,
+    catalogProductCount,
+    cachedVectorCount,
+    activeProductSlotsUsed,
+    blockedProductCount,
+    staleVectorCount,
     vectorQuotaBlockedProducts,
     productLimitBlockedProducts,
     subscriptionBlockedProducts,

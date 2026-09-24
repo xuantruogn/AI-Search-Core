@@ -19,6 +19,7 @@ export type ProductVectorPayload = {
   minVariantPrice?: number;
   maxVariantPrice?: number;
   currencyCode?: string;
+  searchable?: boolean;
 };
 
 export type UpsertProductVectorInput = {
@@ -329,7 +330,11 @@ export async function deleteProductVectorForShop({
 // BACKGROUND ORPHAN VECTOR RECONCILIATION
 //
 // Source of truth:
-// AiSearchIndexedProduct(status=INDEXED, hasVector=true)
+// AiSearchIndexedProduct(hasVector=true)
+//
+// Search eligibility is intentionally not part of orphan detection. A vector
+// retained for a temporarily ineligible product is still owned by the
+// registry and must not be deleted here.
 //
 // Qdrant can contain an orphan when a process crashes after the vector write
 // but before the registry write, or when old data predates the registry.
@@ -508,7 +513,6 @@ export async function reconcileOrphanProductVectorsForShop({
               productId: {
                 in: candidateProductIds,
               },
-              status: "INDEXED",
               hasVector: true,
             },
             select: {
@@ -562,7 +566,6 @@ export async function reconcileOrphanProductVectorsForShop({
                 productId: {
                   in: recheckProductIds,
                 },
-                status: "INDEXED",
                 hasVector: true,
               },
               select: {
@@ -646,6 +649,18 @@ export async function searchProductVectors({
 }: SearchProductVectorsInput): Promise<ProductVectorSearchResult[]> {
   const totalStartedAt = Date.now();
   const qdrant = getQdrantClient();
+  const eligibleRows = await db.$queryRaw<Array<{ productId: string }>>`
+    SELECT \`productId\` FROM \`AiSearchIndexedProduct\`
+    WHERE \`shop\` = ${shop} AND \`searchable\` = true AND \`hasVector\` = true
+  `;
+  const eligibleProductIds = eligibleRows.map((row) => row.productId);
+  if (eligibleProductIds.length === 0) {
+    onDiagnostics?.({
+      requestMs: 0, responseMappingCodeMs: 0,
+      totalMs: Date.now() - totalStartedAt, passCount: 0, finalCandidateWindow: 0,
+    });
+    return [];
+  }
   const safeLimit = Number.isFinite(limit)
     ? Math.max(1, Math.min(Math.trunc(limit), 1000)) : 20;
 
@@ -668,6 +683,10 @@ export async function searchProductVectors({
             match: {
               value: shop,
             },
+          },
+          {
+            key: "productId",
+            match: { any: eligibleProductIds },
           },
         ],
       },
