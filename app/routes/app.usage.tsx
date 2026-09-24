@@ -41,13 +41,16 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     });
   }
 
-  // C. Đếm tổng số sản phẩm đã Index trong Vector Database (AiSearchIndexedProduct)
-  const indexedProductsCount = await prisma.aiSearchIndexedProduct.count({
-    where: {
-      shop,
-      status: "INDEXED",
-    },
-  });
+  // C. Product capacity is based on searchable products. Cached vectors are
+  // retained independently so plan downgrades do not force re-embedding.
+  const [activeProductsCount, cachedVectorCount, cachedProductLimitBlockedCount] =
+    await Promise.all([
+      prisma.aiSearchIndexedProduct.count({ where: { shop, searchable: true } }),
+      prisma.aiSearchIndexedProduct.count({ where: { shop, hasVector: true } }),
+      prisma.aiSearchIndexedProduct.count({
+        where: { shop, status: "PRODUCT_LIMIT_BLOCKED", hasVector: true },
+      }),
+    ]);
 
   // D. Lấy 50 Sự kiện Usage gần nhất (AiSearchUsageEvent)
   const recentEvents = await prisma.aiSearchUsageEvent.findMany({
@@ -98,7 +101,9 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
           blockedSearchCount: 0,
           blockedVectorCount: 0,
         },
-    indexedProductsCount,
+    activeProductsCount,
+    cachedVectorCount,
+    cachedProductLimitBlockedCount,
     productLimitBlocked,
     limits,
     events: recentEvents.map((event) => ({
@@ -281,7 +286,7 @@ export default function UsagePage() {
           </div>
         </div>
 
-        {/* INDEXED PRODUCTS */}
+        {/* ACTIVE AI PRODUCTS */}
         <div
           style={{
             background: "#fff",
@@ -292,11 +297,11 @@ export default function UsagePage() {
           }}
         >
           <div style={{ fontSize: 13, fontWeight: 600, color: "#616161" }}>
-            AI Indexed Products
+            Active AI Products
           </div>
-          {renderProgressBar(data.indexedProductsCount, limits.productLimit, "#5c6ac4")}
+          {renderProgressBar(data.activeProductsCount, limits.productLimit, "#5c6ac4")}
           <div style={{ fontSize: 11, color: "#8c9196", marginTop: 8 }}>
-            Total catalog items processed for AI vector search.
+            {data.cachedVectorCount.toLocaleString("en-US")} vectors cached · {data.cachedProductLimitBlockedCount.toLocaleString("en-US")} cached & blocked from AI Search.
           </div>
         </div>
 
@@ -399,7 +404,7 @@ export default function UsagePage() {
             }}
           >
             <span style={{ color: "#616161", display: "block", fontSize: 12 }}>
-              Unindexed Products (Exceeded Limit)
+              Products Blocked by Product Limit
             </span>
             <strong style={{ fontSize: 18, color: data.productLimitBlocked > 0 ? "#d32f2f" : "#008060" }}>
               {data.productLimitBlocked.toLocaleString("en-US")}

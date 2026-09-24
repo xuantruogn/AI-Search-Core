@@ -60,6 +60,7 @@ export type EntitlementSnapshot = {
   staleVectorCount: number;
   vectorQuotaBlockedProducts: number;
   productLimitBlockedProducts: number;
+  cachedProductLimitBlockedProducts: number;
   subscriptionBlockedProducts: number;
   resultLimit: number;
   searchAllowed: boolean;

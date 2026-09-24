@@ -43,6 +43,15 @@ function boundedPositiveInteger(value: number) {
   return Math.min(integer, 1_000_000_000);
 }
 
+async function reconcileProductPolicyAfterQuotaChange(shop: string) {
+  // Dynamic import avoids a static quota-grants -> reconciliation ->
+  // entitlement -> quota-grants cycle while keeping the invariant at the
+  // mutation boundary: whenever product capacity changes, eligibility is
+  // reconciled before the mutation is considered complete.
+  const { reconcileShopCommercialState } = await import("./reconciliation.server");
+  await reconcileShopCommercialState({ shop });
+}
+
 function emptyTotals(): QuotaGrantTotals {
   return { search: 0, product: 0, vectorUpdate: 0 };
 }
@@ -194,6 +203,9 @@ export async function createQuotaGrant({
     });
   });
   invalidate(targetShop);
+  if (kind === QUOTA_GRANT_KIND.product) {
+    await reconcileProductPolicyAfterQuotaChange(targetShop);
+  }
   return id;
 }
 
@@ -215,7 +227,9 @@ export async function revokeQuotaGrant({
     where: { id: grantId },
   });
   if (!grant) throw new Error("Grant not found");
-  if (grant.revokedAt) return;
+  if (grant.revokedAt) {
+    return { shop: grant.shop, kind: grant.kind as QuotaGrantKind, alreadyRevoked: true };
+  }
 
   await db.$transaction(async (tx) => {
     await tx.aiSearchQuotaGrant.update({
@@ -237,6 +251,10 @@ export async function revokeQuotaGrant({
     });
   });
   invalidate(grant.shop);
+  if (grant.kind === QUOTA_GRANT_KIND.product) {
+    await reconcileProductPolicyAfterQuotaChange(grant.shop);
+  }
+  return { shop: grant.shop, kind: grant.kind as QuotaGrantKind, alreadyRevoked: false };
 }
 
 function normalizeAbsoluteOverride(value: number | null) {
@@ -298,6 +316,9 @@ export async function setAbsoluteQuotaOverridesWithAudit({
     });
   });
   invalidate(targetShop);
+  if (before.productLimitOverride !== after.productLimitOverride) {
+    await reconcileProductPolicyAfterQuotaChange(targetShop);
+  }
 }
 
 export async function setShopAiEnabledWithAudit({

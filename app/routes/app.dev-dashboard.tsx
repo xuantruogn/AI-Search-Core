@@ -104,7 +104,7 @@ export async function action({ request }: ActionFunctionArgs) {
         ),
         reason: requireReason(form),
       });
-      return { ok: true, message: `Absolute support limits updated for ${targetShop}.` };
+      return { ok: true, message: `Absolute support limits updated and product eligibility reconciled for ${targetShop}.` };
     }
 
     if (intent === "toggle_ai") {

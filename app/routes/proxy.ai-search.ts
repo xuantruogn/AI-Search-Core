@@ -1897,24 +1897,32 @@ const resultCacheStatus = "MISS" as const;
       billingStartedAt;
 
     if (billingChanged) {
-      void reconcileShopCommercialState(
-        {
-          shop:
-            session.shop,
-
-          forceCatalogRefresh:
-            true,
-        },
-      ).catch(() => {});
+      // Billing changes must be applied before this request evaluates search
+      // eligibility; otherwise an old active-product set can temporarily sit
+      // above the new product limit.
+      await reconcileShopCommercialState({
+        shop: session.shop,
+        forceCatalogRefresh: true,
+      });
     }
 
     const entitlementStartedAt =
       Date.now();
 
-    const entitlement =
+    let entitlement =
       await getShopEntitlement(
         session.shop,
       );
+
+    // Safety net for any out-of-band limit reduction (for example an expired
+    // product grant or support override). Reconcile synchronously once before
+    // deciding whether AI Search is allowed.
+    if (entitlement.productLimitExceeded) {
+      await reconcileShopCommercialState({
+        shop: session.shop,
+      });
+      entitlement = await getShopEntitlement(session.shop);
+    }
 
     entitlementDbMs =
       Date.now() -

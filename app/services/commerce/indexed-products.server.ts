@@ -101,6 +101,7 @@ export async function getIndexedProductStats(shop: string) {
       productSlotsUsed: bigint | number;
       vectorQuotaBlockedProducts: bigint | number;
       productLimitBlockedProducts: bigint | number;
+      cachedProductLimitBlockedProducts: bigint | number;
       subscriptionBlockedProducts: bigint | number;
       cachedVectorCount: bigint | number;
       blockedProductCount: bigint | number;
@@ -119,6 +120,7 @@ export async function getIndexedProductStats(shop: string) {
       ) AS \`productSlotsUsed\`,
       SUM(CASE WHEN \`status\` = 'VECTOR_QUOTA_BLOCKED' THEN 1 ELSE 0 END) AS \`vectorQuotaBlockedProducts\`,
       SUM(CASE WHEN \`status\` = 'PRODUCT_LIMIT_BLOCKED' THEN 1 ELSE 0 END) AS \`productLimitBlockedProducts\`,
+      SUM(CASE WHEN \`status\` = 'PRODUCT_LIMIT_BLOCKED' AND \`hasVector\` = true THEN 1 ELSE 0 END) AS \`cachedProductLimitBlockedProducts\`,
       SUM(CASE WHEN \`status\` = 'SUBSCRIPTION_BLOCKED' THEN 1 ELSE 0 END) AS \`subscriptionBlockedProducts\`,
       SUM(CASE WHEN \`hasVector\` = true THEN 1 ELSE 0 END) AS \`cachedVectorCount\`,
       SUM(CASE WHEN \`searchable\` = false THEN 1 ELSE 0 END) AS \`blockedProductCount\`,
@@ -133,6 +135,7 @@ export async function getIndexedProductStats(shop: string) {
     productSlotsUsed: Number(row?.productSlotsUsed ?? 0),
     vectorQuotaBlockedProducts: Number(row?.vectorQuotaBlockedProducts ?? 0),
     productLimitBlockedProducts: Number(row?.productLimitBlockedProducts ?? 0),
+    cachedProductLimitBlockedProducts: Number(row?.cachedProductLimitBlockedProducts ?? 0),
     subscriptionBlockedProducts: Number(row?.subscriptionBlockedProducts ?? 0),
     cachedVectorCount: Number(row?.cachedVectorCount ?? 0),
     activeProductSlotsUsed: Number(row?.productSlotsUsed ?? 0),

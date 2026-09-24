@@ -36,15 +36,25 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   }
 
   try {
-    void reconcileShopCommercialState({
-      shop: session.shop,
-      forceCatalogRefresh: billingChanged,
-    }).catch((error) => {
-      console.error("[AI Search] Commercial reconciliation failed:", {
+    const reconcile = () =>
+      reconcileShopCommercialState({
         shop: session.shop,
-        error: error instanceof Error ? error.message : String(error),
+        forceCatalogRefresh: billingChanged,
       });
-    });
+
+    if (billingChanged) {
+      // A plan/status change alters product eligibility immediately. Wait for
+      // reconciliation so nested admin loaders never render an old active
+      // product count against the new limit.
+      await reconcile();
+    } else {
+      void reconcile().catch((error) => {
+        console.error("[AI Search] Commercial reconciliation failed:", {
+          shop: session.shop,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    }
   } catch (error) {
     console.error(
       "[AI Search] Commercial reconciliation scheduling failed:",

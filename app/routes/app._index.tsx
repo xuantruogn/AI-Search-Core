@@ -1211,7 +1211,7 @@ export default function Dashboard() {
     entitlement.limits.searchLimit,
   );
   const productProgress = percentage(
-    entitlement.indexedProducts,
+    entitlement.activeProductSlotsUsed,
     entitlement.limits.productLimit,
   );
 
@@ -1324,9 +1324,12 @@ export default function Dashboard() {
 
         {entitlement.productLimitBlockedProducts > 0 ||
         entitlement.vectorQuotaBlockedProducts > 0 ? (
-          <Notice state="warning" title="Partial Catalog Vector Indexing">
+          <Notice state="warning" title="Product Capacity Restrictions Active">
             {entitlement.productLimitBlockedProducts > 0
-              ? `${entitlement.productLimitBlockedProducts.toLocaleString("en-US")} products are currently restricted by product limit. `
+              ? `${entitlement.productLimitBlockedProducts.toLocaleString("en-US")} products are excluded from AI Search by the product limit. `
+              : ""}
+            {entitlement.cachedProductLimitBlockedProducts > 0
+              ? `${entitlement.cachedProductLimitBlockedProducts.toLocaleString("en-US")} of them retain cached vectors for fast recovery but remain non-searchable. `
               : ""}
             {entitlement.vectorQuotaBlockedProducts > 0
               ? `${entitlement.vectorQuotaBlockedProducts.toLocaleString("en-US")} products are pending vector quota.`
@@ -1336,9 +1339,9 @@ export default function Dashboard() {
 
         <section className="vip-metrics">
           <MetricCard
-            eyebrow="Indexed products"
-            value={formatUsage(entitlement.indexedProducts, entitlement.limits.productLimit)}
-            detail="Products indexed with vectors for AI ranking."
+            eyebrow="Active products"
+            value={formatUsage(entitlement.activeProductSlotsUsed, entitlement.limits.productLimit)}
+            detail={`${entitlement.cachedVectorCount.toLocaleString("en-US")} vectors cached · ${entitlement.cachedProductLimitBlockedProducts.toLocaleString("en-US")} cached & blocked from AI Search.`}
             progress={productProgress}
             accent="violet"
           />

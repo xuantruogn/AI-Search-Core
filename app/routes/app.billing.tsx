@@ -423,14 +423,14 @@ export default function BillingPage() {
             </div>
           </div>
 
-          {/* AI Indexed Products */}
+          {/* Active AI Products */}
           <div style={{ border: "1px solid #f1f2f3", borderRadius: 8, padding: 14, background: "#fafafa" }}>
-            <div style={{ fontSize: 12, color: "#616161", marginBottom: 4 }}>AI Indexed Products</div>
+            <div style={{ fontSize: 12, color: "#616161", marginBottom: 4 }}>Active AI Products</div>
             <div style={{ fontSize: 18, fontWeight: 700, color: "#1a1a1a" }}>
-              {data.entitlement.indexedProducts.toLocaleString("en-US")} / {limitText(data.entitlement.limits.productLimit, "")}
+              {data.entitlement.activeProductSlotsUsed.toLocaleString("en-US")} / {limitText(data.entitlement.limits.productLimit, "")}
             </div>
             <div style={{ fontSize: 11, color: "#616161", marginTop: 4 }}>
-              Products ready for AI ranking
+              {data.entitlement.cachedVectorCount.toLocaleString("en-US")} vectors cached · {data.entitlement.cachedProductLimitBlockedProducts.toLocaleString("en-US")} cached & blocked
             </div>
           </div>
 
