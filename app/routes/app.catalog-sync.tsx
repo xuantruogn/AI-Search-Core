@@ -1,6 +1,6 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
-import { useFetcher, useLoaderData, useNavigate } from "react-router";
+import { useFetcher, useLoaderData } from "react-router";
 
 import { authenticate } from "../shopify.server";
 import {
@@ -13,27 +13,84 @@ import { kickCatalogSyncQueue } from "../services/catalog/catalog-sync-queue.ser
 import { reconcileShopCommercialState } from "../services/commerce/reconciliation.server";
 import { retryFailedProductSyncJobs } from "../services/products/product-sync-job.server";
 import { kickProductSyncQueue } from "../services/products/product-sync-queue.server";
-import { listIndexedProducts } from "../services/commerce/indexed-products.server";
+import prisma from "../db.server";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
+  const url = new URL(request.url);
 
-  const [job, products] = await Promise.all([
+  const activeTab = url.searchParams.get("tab") || "indexed"; // 'indexed' | 'unindexed'
+  const page = Math.max(1, parseInt(url.searchParams.get("page") || "1", 10));
+  const pageSize = 50; // THAY ĐỔI THÀNH 50 SẢN PHẨM / TRANG
+  const skip = (page - 1) * pageSize;
+
+  // 1. Đếm tổng quan kho hàng
+  const [job, totalProducts, indexedProductsCount] = await Promise.all([
     getLatestCatalogSyncJob(session.shop),
-    listIndexedProducts(session.shop, 30),
+    prisma.aiSearchIndexedProduct.count({ where: { shop: session.shop } }),
+    prisma.aiSearchIndexedProduct.count({
+      where: {
+        shop: session.shop,
+        hasVector: true,
+        documentHash: { not: null },
+      },
+    }),
   ]);
+
+  const unindexedProductsCount = Math.max(0, totalProducts - indexedProductsCount);
+
+  // 2. Lọc đúng sản phẩm cho từng Tab
+  const targetHasVector = activeTab === "indexed";
+  const targetTotal = targetHasVector ? indexedProductsCount : unindexedProductsCount;
+
+  const rawProducts = await prisma.aiSearchIndexedProduct.findMany({
+    where: {
+      shop: session.shop,
+      ...(targetHasVector
+        ? { hasVector: true, documentHash: { not: null } }
+        : { OR: [{ hasVector: false }, { documentHash: null }] }),
+    },
+    orderBy: { updatedAt: "desc" },
+    skip,
+    take: pageSize,
+    select: {
+      id: true,
+      productId: true,
+      handle: true,
+      title: true,
+      status: true,
+      documentHash: true,
+      hasVector: true,
+    },
+  });
+
+  const products = rawProducts.map((p) => ({
+    id: p.id,
+    productId: p.productId,
+    handle: p.handle,
+    title: p.title,
+    status: p.status,
+    hasVector: Boolean(p.hasVector && p.documentHash),
+  }));
+
+  const totalPages = Math.ceil(targetTotal / pageSize) || 1;
 
   return {
     shop: session.shop,
     job,
-    products: products.map((product) => ({
-      id: product.id,
-      productId: product.productId,
-      handle: product.handle,
-      title: product.title,
-      status: product.status,
-      hasVector: Boolean(product.documentHash),
-    })),
+    stats: {
+      total: totalProducts,
+      indexed: indexedProductsCount,
+      unindexed: unindexedProductsCount,
+    },
+    tableData: {
+      activeTab,
+      page,
+      pageSize,
+      totalPages,
+      totalItems: targetTotal,
+      products,
+    },
   };
 };
 
@@ -42,7 +99,6 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const form = await request.formData();
   const intent = String(form.get("intent") || "sync_auto");
 
-  // RESCUE ACTION: Retry both Product Jobs and Catalog Jobs that FAILED
   if (intent === "retry_all_failed") {
     const productResult = await retryFailedProductSyncJobs(session.shop, 100);
     if (productResult.requeued > 0) kickProductSyncQueue();
@@ -76,10 +132,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     };
   }
 
-  // PRIMARY ACTION: Auto-detect Initial Sync vs Full Catalog Refresh
   if (intent === "sync_auto") {
     const jobId = await enqueueInitialCatalogSyncIfNeeded(session.shop);
-    
     if (jobId) {
       kickCatalogSyncQueue();
       return {
@@ -151,8 +205,8 @@ const catalogCss = `
     padding-bottom: 12px;
   }
   .cat-btn {
-    padding: 10px 18px;
-    border-radius: 10px;
+    padding: 8px 14px;
+    border-radius: 8px;
     border: 1px solid #c9cccf;
     background: #ffffff;
     color: #1a1a1a;
@@ -161,9 +215,13 @@ const catalogCss = `
     cursor: pointer;
     transition: all 0.15s ease;
   }
-  .cat-btn:hover {
+  .cat-btn:hover:not(:disabled) {
     background: #f6f6f7;
     border-color: #a8abaf;
+  }
+  .cat-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
   }
   .cat-btn-primary {
     background: #008060;
@@ -171,7 +229,7 @@ const catalogCss = `
     border: none;
     box-shadow: 0 2px 6px rgba(0, 128, 96, 0.25);
   }
-  .cat-btn-primary:hover {
+  .cat-btn-primary:hover:not(:disabled) {
     background: #006e52;
   }
   .cat-btn-warning {
@@ -179,7 +237,7 @@ const catalogCss = `
     color: #8a5b00;
     border: 1px solid #f3d489;
   }
-  .cat-btn-warning:hover {
+  .cat-btn-warning:hover:not(:disabled) {
     background: #fde8b3;
   }
   .cat-status-row {
@@ -191,6 +249,7 @@ const catalogCss = `
   }
   .cat-table {
     width: 100%;
+    table-layout: fixed;
     border-collapse: collapse;
     font-size: 13px;
   }
@@ -205,7 +264,76 @@ const catalogCss = `
   .cat-table td {
     padding: 12px 12px;
     border-bottom: 1px solid #f0f0f4;
+    word-break: break-word;
   }
+  
+  /* TABS STYLES - GREEN FOR INDEXED, RED FOR UNINDEXED */
+  .cat-tabs {
+    display: flex;
+    gap: 12px;
+    border-bottom: 1px solid #e2e4ed;
+    margin-bottom: 16px;
+  }
+  .cat-tab-item {
+    padding: 10px 16px;
+    font-size: 14px;
+    font-weight: 700;
+    color: #5c6270;
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    transition: all 0.2s ease;
+  }
+  .cat-tab-item.tab-indexed.active {
+    color: #008060;
+    border-bottom-color: #008060;
+  }
+  .cat-tab-item.tab-unindexed.active {
+    color: #d32f2f;
+    border-bottom-color: #d32f2f;
+  }
+
+  /* ADVANCED PAGINATION STYLES */
+  .cat-pagination {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding-top: 16px;
+    border-top: 1px solid #f0f0f4;
+    margin-top: 16px;
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+  .cat-page-btn {
+    min-width: 34px;
+    height: 34px;
+    padding: 0 8px;
+    border-radius: 8px;
+    border: 1px solid #c9cccf;
+    background: #ffffff;
+    color: #1a1a1a;
+    font-weight: 700;
+    font-size: 13px;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.15s ease;
+  }
+  .cat-page-btn:hover:not(:disabled):not(.active) {
+    background: #f6f6f7;
+    border-color: #a8abaf;
+  }
+  .cat-page-btn.active {
+    background: #008060;
+    color: #ffffff;
+    border-color: #008060;
+    cursor: default;
+  }
+  .cat-page-btn:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+  }
+
   @keyframes spin {
     0% { transform: rotate(0deg); }
     100% { transform: rotate(360deg); }
@@ -223,26 +351,67 @@ const catalogCss = `
 `;
 
 export default function CatalogSyncPage() {
-  const data = useLoaderData<typeof loader>();
-  const fetcher = useFetcher<typeof action>();
-  const navigate = useNavigate();
-  const isBusy = fetcher.state !== "idle";
+  const initialData = useLoaderData<typeof loader>();
+  const actionFetcher = useFetcher<typeof action>();
+  const tableFetcher = useFetcher<typeof loader>();
+  const statusFetcher = useFetcher<{
+    job: typeof initialData.job;
+  }>();
 
-  const isProcessing =
-    data.job?.status === "PROCESSING" ||
-    data.job?.status === "PENDING" ||
-    data.job?.status === "RUNNING";
+  const [activeTab, setActiveTab] = useState<"indexed" | "unindexed">("indexed");
+  const [currentPage, setCurrentPage] = useState(1);
 
-  // AUTO-REFRESH PAGE EVERY 3 SECONDS WHEN SYNC IS PROCESSING
+  const isActionBusy = actionFetcher.state !== "idle";
+  const isTableLoading = tableFetcher.state !== "idle";
+
+  const liveJob = statusFetcher.data?.job ?? initialData.job;
+
+    const isProcessing =
+      liveJob?.status === "PROCESSING" ||
+      liveJob?.status === "PENDING" ||
+      liveJob?.status === "RUNNING";
+
+  const currentTableData = tableFetcher.data?.tableData || initialData.tableData;
+  const currentStats = tableFetcher.data?.stats || initialData.stats;
+
+  const loadTableData = (tab: "indexed" | "unindexed", page: number) => {
+    setActiveTab(tab);
+    setCurrentPage(page);
+    tableFetcher.load(`.?tab=${tab}&page=${page}`);
+  };
+
   useEffect(() => {
-    if (!isProcessing) return;
+  if (!isProcessing) return;
 
-    const timer = setInterval(() => {
-      navigate(".", { replace: true });
-    }, 3000);
+  const loadStatus = () => {
+    statusFetcher.load("/app/catalog-status");
+  };
 
-    return () => clearInterval(timer);
-  }, [isProcessing, navigate]);
+  loadStatus();
+
+  const timer = window.setInterval(loadStatus, 3000);
+
+  return () => window.clearInterval(timer);
+}, [isProcessing]);
+
+  // HÀM TÍNH TOÁN CÁC NÚT SỐ TRANG HIỂN THỊ (VD: 1, 2, 3, 4, 5...)
+  const getPageNumbers = (current: number, total: number) => {
+    const pages: number[] = [];
+    const maxVisible = 5;
+    let start = Math.max(1, current - Math.floor(maxVisible / 2));
+    let end = Math.min(total, start + maxVisible - 1);
+
+    if (end - start + 1 < maxVisible) {
+      start = Math.max(1, end - maxVisible + 1);
+    }
+
+    for (let i = start; i <= end; i++) {
+      pages.push(i);
+    }
+    return pages;
+  };
+
+  const pageNumbers = getPageNumbers(currentTableData.page, currentTableData.totalPages);
 
   return (
     <div className="cat-shell">
@@ -266,7 +435,7 @@ export default function CatalogSyncPage() {
             <div className="cat-card-title">
               <span>📦 Catalog Data Synchronization</span>
               <span style={{ fontSize: 12, padding: "4px 10px", borderRadius: 20, background: "#f1f2f3", color: "#5c6270" }}>
-                {data.shop}
+                {initialData.shop}
               </span>
             </div>
 
@@ -280,44 +449,42 @@ export default function CatalogSyncPage() {
           </div>
 
           <div>
-            {/* PRIMARY SYNC BUTTON */}
-            <fetcher.Form method="post">
+            <actionFetcher.Form method="post">
               <input type="hidden" name="intent" value="sync_auto" />
               <button
                 type="submit"
-                disabled={isBusy || isProcessing}
+                disabled={isActionBusy || isProcessing}
                 className="cat-btn cat-btn-primary"
                 style={{ width: "100%", padding: "12px 20px", fontSize: 14 }}
               >
-                {isBusy || isProcessing ? "Processing Sync..." : "🔄 Sync Catalog Now (Refresh Vectors)"}
+                {isActionBusy || isProcessing ? "Processing Sync..." : "🔄 Sync Catalog Now (Refresh Vectors)"}
               </button>
-            </fetcher.Form>
+            </actionFetcher.Form>
 
-            {/* ACTION FEEDBACK MESSAGE */}
-            {fetcher.data?.message ? (
+            {actionFetcher.data?.message ? (
               <div
                 style={{
                   marginTop: 12,
                   padding: 12,
                   borderRadius: 10,
-                  background: fetcher.data.success ? "#e4f8f0" : "#ffebe9",
-                  color: fetcher.data.success ? "#008060" : "#d32f2f",
+                  background: actionFetcher.data.success ? "#e4f8f0" : "#ffebe9",
+                  color: actionFetcher.data.success ? "#008060" : "#d32f2f",
                   fontSize: 13,
                   fontWeight: 600,
                 }}
               >
-                {fetcher.data.message}
+                {actionFetcher.data.message}
               </div>
             ) : null}
           </div>
         </div>
 
-        {/* BLOCK 2: BACKGROUND SYNC JOB & TROUBLESHOOTING */}
+        {/* BLOCK 2: CATALOG SUMMARY */}
         <div className="cat-card">
           <div>
             <div className="cat-card-title">
-              <span>⚡ Background Sync Progress</span>
-              {data.job?.status ? (
+              <span>📊 Catalog Overview</span>
+              {liveJob?.status ? (
                 <span
                   style={{
                     fontSize: 11,
@@ -326,55 +493,44 @@ export default function CatalogSyncPage() {
                     borderRadius: 12,
                     display: "inline-flex",
                     alignItems: "center",
-                    background: data.job.status === "DONE" ? "#e4f8f0" : "#fff6df",
-                    color: data.job.status === "DONE" ? "#008060" : "#8a5b00",
+                    background: initialData.job.status === "DONE" ? "#e4f8f0" : "#fff6df",
+                    color: initialData.job.status === "DONE" ? "#008060" : "#8a5b00",
                   }}
                 >
                   {isProcessing ? <span className="spinner" /> : null}
-                  {data.job.status === "DONE"
-                    ? "COMPLETED"
+                 {liveJob.status === "DONE"
+                    ? "SYNC COMPLETED"
                     : isProcessing
-                    ? "PROCESSING..."
-                    : data.job.status}
+                    ? "SYNCING..."
+                    : initialData.job.status}
                 </span>
               ) : null}
             </div>
 
-            {data.job ? (
-              <div style={{ marginBottom: 12 }}>
-                <div className="cat-status-row">
-                  <span style={{ color: "#5c6270" }}>Job ID:</span>
-                  <strong>#{data.job.id}</strong>
-                </div>
-                <div className="cat-status-row">
-                  <span style={{ color: "#5c6270" }}>Trigger Reason:</span>
-                  <span>{data.job.reason ?? "—"}</span>
-                </div>
-                <div className="cat-status-row">
-                  <span style={{ color: "#5c6270" }}>Processed / Indexed:</span>
-                  <strong>{data.job.productsProcessed} / {data.job.productsIndexed}</strong>
-                </div>
-                <div className="cat-status-row">
-                  <span style={{ color: "#5c6270" }}>Skipped / Blocked:</span>
-                  <span>{data.job.productsSkipped} / {data.job.productsBlocked}</span>
-                </div>
-                <div className="cat-status-row">
-                  <span style={{ color: "#5c6270" }}>Failed:</span>
-                  <strong style={{ color: data.job.productsFailed > 0 ? "#d32f2f" : "#1a1c23" }}>
-                    {data.job.productsFailed}
-                  </strong>
-                </div>
-                {data.job.lastError ? (
-                  <div style={{ marginTop: 10, padding: 10, background: "#ffebe9", color: "#d32f2f", borderRadius: 8, fontSize: 12 }}>
-                    <strong>Error details:</strong> {data.job.lastError}
-                  </div>
-                ) : null}
+            <div style={{ marginBottom: 12 }}>
+              <div className="cat-status-row">
+                <span style={{ color: "#5c6270" }}>Total Products:</span>
+                <strong>{currentStats.total}</strong>
               </div>
-            ) : (
-              <div style={{ padding: "16px 0", textAlign: "center", color: "#8c9196", fontSize: 13 }}>
-                No active or past catalog sync jobs recorded.
+
+              <div className="cat-status-row">
+                <span style={{ color: "#5c6270" }}>Indexed Products:</span>
+                <strong style={{ color: "#008060" }}>{currentStats.indexed}</strong>
               </div>
-            )}
+
+              <div className="cat-status-row">
+                <span style={{ color: "#5c6270" }}>Unindexed Products:</span>
+                <strong style={{ color: currentStats.unindexed > 0 ? "#d32f2f" : "#1a1c23" }}>
+                  {currentStats.unindexed}
+                </strong>
+              </div>
+
+              {liveJob?.lastError ? (
+                <div style={{ marginTop: 10, padding: 10, background: "#ffebe9", color: "#d32f2f", borderRadius: 8, fontSize: 12 }}>
+                  <strong>Error details:</strong> {initialData.job.lastError}
+                </div>
+              ) : null}
+            </div>
           </div>
 
           {/* TROUBLESHOOTING & RESCUE TOOLS */}
@@ -383,84 +539,185 @@ export default function CatalogSyncPage() {
               🛠️ Troubleshooting & Maintenance
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-              <fetcher.Form method="post">
+              <actionFetcher.Form method="post">
                 <input type="hidden" name="intent" value="reconcile" />
-                <button type="submit" disabled={isBusy} className="cat-btn" style={{ width: "100%", fontSize: 12 }}>
+                <button type="submit" disabled={isActionBusy} className="cat-btn" style={{ width: "100%", fontSize: 12 }}>
                   Reconcile Quota
                 </button>
-              </fetcher.Form>
+              </actionFetcher.Form>
 
-              <fetcher.Form method="post">
+              <actionFetcher.Form method="post">
                 <input type="hidden" name="intent" value="retry_all_failed" />
-                <button type="submit" disabled={isBusy} className="cat-btn cat-btn-warning" style={{ width: "100%", fontSize: 12 }}>
+                <button type="submit" disabled={isActionBusy} className="cat-btn cat-btn-warning" style={{ width: "100%", fontSize: 12 }}>
                   Retry Failed Jobs
                 </button>
-              </fetcher.Form>
+              </actionFetcher.Form>
             </div>
           </div>
         </div>
       </div>
 
-      {/* BLOCK 3: INDEXED PRODUCT REGISTRY */}
+      {/* BLOCK 3: PRODUCT REGISTRY WITH FULL PAGINATION CONTROLS */}
       <div className="cat-card">
-        <div className="cat-card-title">
-          <span>🗂️ Indexed Product Registry (Last 30 Products)</span>
+        {/* ENGLISH TABS HEADER */}
+        <div className="cat-tabs">
+          <div
+            className={`cat-tab-item tab-indexed ${activeTab === "indexed" ? "active" : ""}`}
+            onClick={() => loadTableData("indexed", 1)}
+          >
+            ✅ Indexed Products ({currentStats.indexed})
+          </div>
+          <div
+            className={`cat-tab-item tab-unindexed ${activeTab === "unindexed" ? "active" : ""}`}
+            onClick={() => loadTableData("unindexed", 1)}
+          >
+            ⏳ Unindexed Products ({currentStats.unindexed})
+          </div>
         </div>
-        <div style={{ overflowX: "auto" }}>
+
+        {/* TABLE CONTENT */}
+        <div style={{ overflowX: "auto", opacity: isTableLoading ? 0.6 : 1, transition: "opacity 0.2s" }}>
           <table className="cat-table">
             <thead>
               <tr>
-                <th>Product Title</th>
-                <th>Handle / Path</th>
-                <th>Store Status</th>
-                <th>AI Vector Status</th>
+                <th style={{ width: "35%" }}>Product Title</th>
+                <th style={{ width: "25%" }}>Handle / Path</th>
+                <th style={{ width: "20%" }}>Store Status</th>
+                <th style={{ width: "20%" }}>Status</th>
               </tr>
             </thead>
             <tbody>
-              {data.products.length > 0 ? (
-                data.products.map((product) => (
-                  <tr key={product.id}>
-                    <td style={{ fontWeight: 700, color: "#1a1c23" }}>{product.title}</td>
-                    <td style={{ color: "#5c6270" }}>{product.handle}</td>
-                    <td>
-                      <span
-                        style={{
-                          padding: "4px 10px",
-                          borderRadius: 12,
-                          fontSize: 11,
-                          fontWeight: 700,
-                          background: product.status === "ACTIVE" ? "#e4f8f0" : "#f1f2f3",
-                          color: product.status === "ACTIVE" ? "#008060" : "#5c6270",
-                        }}
-                      >
-                        {product.status === "ACTIVE" ? "ACTIVE" : product.status}
-                      </span>
-                    </td>
-                    <td>
-                      <span
-                        style={{
-                          padding: "4px 10px",
-                          borderRadius: 12,
-                          fontSize: 11,
-                          fontWeight: 700,
-                          background: product.hasVector ? "#e4f8f0" : "#fff6df",
-                          color: product.hasVector ? "#008060" : "#8a5b00",
-                        }}
-                      >
-                        {product.hasVector ? "✓ Vector Indexed" : "⏳ Pending Vector"}
-                      </span>
-                    </td>
-                  </tr>
-                ))
+              {currentTableData.products.length > 0 ? (
+                currentTableData.products.map((product) => {
+                  const isIndexed = activeTab === "indexed" ? true : false;
+
+                  return (
+                    <tr key={product.id}>
+                      <td style={{ fontWeight: 700, color: "#1a1c23" }}>{product.title}</td>
+                      <td style={{ color: "#5c6270" }}>{product.handle}</td>
+                      <td>
+                        <span
+                          style={{
+                            padding: "4px 10px",
+                            borderRadius: 12,
+                            fontSize: 11,
+                            fontWeight: 700,
+                            background: product.status === "ACTIVE" ? "#e4f8f0" : "#f1f2f3",
+                            color: product.status === "ACTIVE" ? "#008060" : "#5c6270",
+                          }}
+                        >
+                          {product.status === "ACTIVE" ? "ACTIVE" : product.status}
+                        </span>
+                      </td>
+                      <td>
+                        {isIndexed ? (
+                          <span
+                            style={{
+                              padding: "4px 10px",
+                              borderRadius: 12,
+                              fontSize: 11,
+                              fontWeight: 700,
+                              background: "#e4f8f0",
+                              color: "#008060",
+                              border: "1px solid #b7ebc6",
+                            }}
+                          >
+                            ✓ Indexed
+                          </span>
+                        ) : (
+                          <span
+                            style={{
+                              padding: "4px 10px",
+                              borderRadius: 12,
+                              fontSize: 11,
+                              fontWeight: 700,
+                              background: "#ffebe9",
+                              color: "#d32f2f",
+                              border: "1px solid #f3b8b8",
+                            }}
+                          >
+                            ❌ Unindexed
+                          </span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })
               ) : (
                 <tr>
                   <td colSpan={4} style={{ textAlign: "center", padding: 24, color: "#8c9196" }}>
-                    No product vectors found in the search index registry.
+                    {isTableLoading
+                      ? "Loading product list..."
+                      : activeTab === "indexed"
+                      ? "No indexed products found."
+                      : "No unindexed products found."}
                   </td>
                 </tr>
               )}
             </tbody>
           </table>
+        </div>
+
+        {/* ADVANCED MULTI-PAGE PAGINATION CONTROLS */}
+        <div className="cat-pagination">
+          <div style={{ fontSize: 13, color: "#5c6270" }}>
+            Showing <strong>{currentTableData.products.length}</strong> of <strong>{currentTableData.totalItems}</strong> products 
+            (Page {currentTableData.page} of {currentTableData.totalPages})
+          </div>
+
+          <div style={{ display: "flex", gap: 5, alignItems: "center" }}>
+            {/* 1. NÚT VỀ TRANG ĐẦU »» */}
+            <button
+              className="cat-page-btn"
+              title="First Page"
+              disabled={currentPage <= 1 || isTableLoading}
+              onClick={() => loadTableData(activeTab, 1)}
+            >
+              «
+            </button>
+
+            {/* 2. NÚT TRANG TRƯỚC */}
+            <button
+              className="cat-page-btn"
+              style={{ padding: "0 10px" }}
+              disabled={currentPage <= 1 || isTableLoading}
+              onClick={() => loadTableData(activeTab, currentPage - 1)}
+            >
+              ◄ Previous
+            </button>
+
+            {/* 3. DÃY NÚT SỐ TRANG TRỰC TIẾP (VD: 1, 2, 3, 4, 5) */}
+            {pageNumbers.map((p) => (
+              <button
+                key={p}
+                className={`cat-page-btn ${p === currentPage ? "active" : ""}`}
+                disabled={isTableLoading}
+                onClick={() => loadTableData(activeTab, p)}
+              >
+                {p}
+              </button>
+            ))}
+
+            {/* 4. NÚT TRANG SAU */}
+            <button
+              className="cat-page-btn"
+              style={{ padding: "0 10px" }}
+              disabled={currentPage >= currentTableData.totalPages || isTableLoading}
+              onClick={() => loadTableData(activeTab, currentPage + 1)}
+            >
+              Next ►
+            </button>
+
+            {/* 5. NÚT ĐẾN TRANG CUỐI »» */}
+            <button
+              className="cat-page-btn"
+              title="Last Page"
+              disabled={currentPage >= currentTableData.totalPages || isTableLoading}
+              onClick={() => loadTableData(activeTab, currentTableData.totalPages)}
+            >
+              »
+            </button>
+          </div>
         </div>
       </div>
     </div>

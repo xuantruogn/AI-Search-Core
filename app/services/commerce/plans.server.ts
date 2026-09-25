@@ -36,9 +36,9 @@ export const PLAN_DEFINITIONS: Record<AiSearchPlan, PlanDefinition> = {
     label: "Basic",
     description: "For smaller catalogs with monthly AI usage limits.",
     limits: {
-      productLimit: 500,
+      productLimit: 505,
       searchLimit: 3_000,
-      vectorUpdateLimit: 500,
+      vectorUpdateLimit: 1000,
     },
   },
   PRO: {

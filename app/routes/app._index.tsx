@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import type { LoaderFunctionArgs } from "react-router";
 import { Link, useFetcher, useLoaderData } from "react-router";
 
@@ -5,13 +6,51 @@ import { authenticate } from "../shopify.server";
 import { getShopEntitlement } from "../services/commerce/entitlement.server";
 import { getProductSyncQueueStats } from "../services/products/product-sync-job.server";
 import { getLatestCatalogSyncJob } from "../services/catalog/catalog-sync-job.server";
-import { getShopifyPricingPlansUrl } from "../services/billing/shopify-app-pricing.server";
 import { getThemeAppEmbedDeepLink } from "../services/theme/app-embed.server";
 import { getThemeIntegrationStatus } from "../services/theme/theme-integration.server";
 import { getShopSettings } from "../services/commerce/shop-registry.server";
 import { getSearchImpactSnapshot } from "../services/search/search-impact.server";
 
 type UiState = "success" | "warning" | "critical" | "neutral";
+
+type DashboardStatus = {
+  updatedAt: string;
+
+  subscription: {
+    ready: boolean;
+    status: string;
+  };
+
+  catalog: {
+    ready: boolean;
+    busy: boolean;
+    failed: boolean;
+    status: string;
+    pending: number;
+    processing: number;
+    failedCount: number;
+    productsProcessed: number;
+    productsIndexed: number;
+  };
+
+  aiEngine: {
+    ready: boolean;
+    status: string;
+  };
+
+  appEmbed: {
+    ready: boolean;
+    status: string;
+    themeName: string | null;
+  };
+
+  themeMap: {
+    ready: boolean;
+    status: string;
+  };
+
+  allReady: boolean;
+};
 
 type ThemeSummary = {
   integrationStatus: string;
@@ -143,7 +182,6 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
           lastError: catalogJob.lastError,
         }
       : null,
-    pricingUrl: getShopifyPricingPlansUrl(session.shop),
     appEmbedUrl: getThemeAppEmbedDeepLink(session.shop),
   };
 };
@@ -165,18 +203,6 @@ function percentage(used: number, limit: number | null) {
   return Math.min(100, Math.max(0, Math.round((used / limit) * 100)));
 }
 
-function percent(part: number, total: number) {
-  if (total <= 0) return 0;
-  return Math.round((part / total) * 100);
-}
-
-function stateLabel(state: UiState) {
-  if (state === "success") return "Operational";
-  if (state === "warning") return "Needs attention";
-  if (state === "critical") return "Action required";
-  return "Paused";
-}
-
 function StatusPill({ state, children }: { state: UiState; children: string }) {
   return (
     <span className={`vip-pill vip-pill--${state}`}>
@@ -192,18 +218,26 @@ function MetricCard({
   detail,
   progress,
   accent = "violet",
+  isSyncing = false,
 }: {
   eyebrow: string;
   value: string;
   detail: string;
   progress?: number | null;
-  accent?: "violet" | "cyan" | "green" | "amber";
+  accent?: "violet" | "cyan";
+  isSyncing?: boolean;
 }) {
   return (
     <div className={`vip-metric vip-metric--${accent}`}>
       <div className="vip-metric__top">
         <span className="vip-metric__eyebrow">{eyebrow}</span>
-        <span className="vip-metric__spark" aria-hidden="true" />
+        {isSyncing ? (
+          <span className="vip-syncing-tag">
+            <span className="vip-spinner" /> Syncing...
+          </span>
+        ) : (
+          <span className="vip-metric__spark" aria-hidden="true" />
+        )}
       </div>
       <div className="vip-metric__value">{value}</div>
       <div className="vip-metric__detail">{detail}</div>
@@ -216,10 +250,9 @@ function MetricCard({
   );
 }
 
-function ReadinessItem({
+function ReadinessStep({
   index,
   title,
-  detail,
   state,
   status,
   action,
@@ -227,35 +260,31 @@ function ReadinessItem({
 }: {
   index: number;
   title: string;
-  detail: string;
   state: UiState;
   status: string;
   action?: { label: string; href: string; targetTop?: boolean };
   actionNode?: React.ReactNode;
 }) {
   return (
-    <div className="vip-check-row">
-      <div className={`vip-check-index vip-check-index--${state}`}>{index}</div>
-      <div className="vip-check-copy">
-        <div className="vip-check-title-row">
-          <strong>{title}</strong>
-          <StatusPill state={state}>{status}</StatusPill>
-        </div>
-        <div className="vip-check-detail">{detail}</div>
+    <div className="vip-step-card">
+      <div className="vip-step-card__head">
+        <span className={`vip-step-badge vip-step-badge--${state}`}>{index}</span>
+        <StatusPill state={state}>{status}</StatusPill>
       </div>
-      {actionNode ? (
-        <div className="vip-check-action">{actionNode}</div>
-      ) : action ? (
-        <div className="vip-check-action">
-          {action.targetTop ? (
+      <strong className="vip-step-card__title">{title}</strong>
+      <div className="vip-step-card__action">
+        {actionNode ? (
+          actionNode
+        ) : action ? (
+          action.targetTop ? (
             <a href={action.href} target="_top" rel="noreferrer">
               {action.label}
             </a>
           ) : (
             <Link to={action.href}>{action.label}</Link>
-          )}
-        </div>
-      ) : null}
+          )
+        ) : null}
+      </div>
     </div>
   );
 }
@@ -276,28 +305,6 @@ function HealthRow({
         {label}
       </div>
       <strong>{value}</strong>
-    </div>
-  );
-}
-
-function Notice({
-  state,
-  title,
-  children,
-}: {
-  state: UiState;
-  title: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div className={`vip-notice vip-notice--${state}`}>
-      <div className="vip-notice__icon" aria-hidden="true">
-        {state === "critical" ? "!" : state === "warning" ? "i" : "✓"}
-      </div>
-      <div>
-        <strong>{title}</strong>
-        <div>{children}</div>
-      </div>
     </div>
   );
 }
@@ -324,12 +331,7 @@ function QuickLink({
   );
 
   return targetTop ? (
-    <a
-      className="vip-quick-link"
-      href={href}
-      target="_top"
-      rel="noreferrer"
-    >
+    <a className="vip-quick-link" href={href} target="_top" rel="noreferrer">
       {content}
     </a>
   ) : (
@@ -375,7 +377,7 @@ function SearchPerformanceChart({
   }
 
   const width = 720;
-  const height = 220;
+  const height = 210;
   const padLeft = 38;
   const padRight = 18;
   const padTop = 20;
@@ -398,8 +400,7 @@ function SearchPerformanceChart({
         : Math.ceil(rawMax / 10) * 10;
 
   const xFor = (index: number) =>
-    padLeft +
-    (index / Math.max(1, visible.length - 1)) * plotWidth;
+    padLeft + (index / Math.max(1, visible.length - 1)) * plotWidth;
   const yFor = (value: number) =>
     padTop + plotHeight - (value / maxY) * plotHeight;
 
@@ -445,7 +446,7 @@ function SearchPerformanceChart({
       <svg
         viewBox={`0 0 ${width} ${height}`}
         role="img"
-        aria-label="Total AI searches, searches with clicks, and search anomalies over the last 7 days"
+        aria-label="Total AI searches"
         className="vip-chart"
       >
         {[0, 0.25, 0.5, 0.75, 1].map((ratio) => {
@@ -521,227 +522,226 @@ const dashboardCss = `
     --vip-muted: #5c6270;
     --vip-border: #e2e4ed;
     --vip-panel: #ffffff;
-    --vip-shadow: 0 12px 36px rgba(26, 22, 60, .06);
+    --vip-shadow: 0 4px 20px rgba(0, 0, 0, 0.03);
     display: grid;
-    gap: 24px;
+    gap: 20px;
     color: var(--vip-text);
     padding-bottom: 32px;
     width: 100%;
     box-sizing: border-box;
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   }
 
-  .vip-hero {
-    position: relative;
-    overflow: hidden;
-    min-height: 240px;
-    border-radius: 24px;
-    padding: 32px;
-    color: white;
-    background:
-      radial-gradient(circle at 82% 15%, rgba(117, 235, 255, .3), transparent 30%),
-      radial-gradient(circle at 70% 92%, rgba(173, 121, 255, .3), transparent 38%),
-      linear-gradient(135deg, #16132e 0%, #31266f 52%, #155e75 118%);
-    box-shadow: 0 20px 60px rgba(47, 38, 110, .25);
-  }
+  .vip-setup-box {
+  border: 1px solid var(--vip-border);
+  border-radius: 16px;
+  background: var(--vip-panel);
+  box-shadow: var(--vip-shadow);
+  padding: 16px 20px;
+}
 
-  .vip-hero:after {
-    content: "";
-    position: absolute;
-    inset: 0;
-    background-image: linear-gradient(rgba(255,255,255,.04) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.04) 1px, transparent 1px);
-    background-size: 36px 36px;
-    mask-image: linear-gradient(to bottom left, #000, transparent 70%);
-    pointer-events: none;
-  }
+  .vip-setup-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 14px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #f0f0f4;
+}
 
-  .vip-hero__content {
-    position: relative;
-    z-index: 2;
-    display: grid;
-    grid-template-columns: minmax(0, 1.6fr) minmax(280px, .7fr);
-    gap: 32px;
-    align-items: stretch;
-  }
+.vip-setup-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
 
-  .vip-kicker {
-    display: inline-flex;
-    align-items: center;
-    gap: 10px;
-    margin-bottom: 16px;
-    color: rgba(255,255,255,.85);
-    font-size: 13px;
-    font-weight: 800;
-    letter-spacing: .12em;
-    text-transform: uppercase;
-  }
+.vip-setup-title h3 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 800;
+  line-height: 1.2;
+}
+.vip-setup-title span:not(.vip-setup-icon) {
+  display: block;
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--vip-muted);
+}
 
-  .vip-kicker:before {
-    content: "";
-    width: 28px;
-    height: 2px;
-    background: rgba(255,255,255,.6);
-  }
-
-  .vip-hero h2 {
+.vip-setup-icon {
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border-radius: 9px;
+  background: #f1f0fb;
+  color: #6f5cf5;
+  font-size: 15px;
+  font-weight: 800;
+}
+  .vip-setup-head h3 {
     margin: 0;
-    max-width: 820px;
-    font-size: clamp(32px, 4.2vw, 50px);
-    line-height: 1.08;
-    letter-spacing: -.03em;
+    font-size: 18px;
     font-weight: 800;
   }
 
-  .vip-hero__subtitle {
-    max-width: 760px;
-    margin: 16px 0 24px;
-    color: rgba(255,255,255,.88);
-    font-size: 16px;
-    line-height: 1.6;
-  }
+  .vip-setup-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 10px;
+}
 
-  .vip-hero__meta {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 10px;
-  }
 
-  .vip-hero__meta span {
-    border: 1px solid rgba(255,255,255,.18);
-    background: rgba(255,255,255,.1);
-    border-radius: 999px;
-    padding: 8px 14px;
-    color: rgba(255,255,255,.92);
-    font-size: 13px;
-    font-weight: 600;
-    backdrop-filter: blur(10px);
-  }
+  .vip-step-card {
+  min-width: 0;
+  min-height: 72px;
+  padding: 10px 12px;
+  border: 1px solid #eef0f4;
+  border-radius: 12px;
+  background: #fcfcfd;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  transition: border-color .15s ease, box-shadow .15s ease, transform .15s ease;
+}
 
-  .vip-readiness-card {
-    position: relative;
-    z-index: 2;
-    display: flex;
-    flex-direction: column;
-    justify-content: space-between;
-    min-height: 190px;
-    border: 1px solid rgba(255,255,255,.2);
-    border-radius: 22px;
-    padding: 24px;
-    background: rgba(255,255,255,.12);
-    backdrop-filter: blur(16px);
-  }
+ .vip-step-card:hover {
+  border-color: #d8dbe3;
+  box-shadow: 0 4px 12px rgba(0,0,0,.04);
+  transform: translateY(-1px);
+}
 
-  .vip-readiness-card__top {
-    display: flex;
-    justify-content: space-between;
-    gap: 16px;
-    align-items: flex-start;
-  }
+.vip-step-card__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 7px;
+}
 
-  .vip-readiness-card__label {
-    color: rgba(255,255,255,.8);
-    font-size: 13px;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: .08em;
-  }
+ .vip-step-badge {
+  width: 21px;
+  height: 21px;
+  border-radius: 7px;
+  font-size: 10px;
+}
+  .vip-step-badge--success { color: #008060; background: #e4f8f0; }
+  .vip-step-badge--warning { color: #8a5b00; background: #fff6df; }
+  .vip-step-badge--critical { color: #d32f2f; background: #ffebe9; }
+  .vip-step-badge--neutral { color: #5c6270; background: #f1f2f3; }
 
-  .vip-readiness-card__score {
-    margin-top: 8px;
-    font-size: 42px;
-    font-weight: 800;
-    letter-spacing: -.04em;
-  }
+  .vip-step-card__title {
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1.2;
+}
 
-  .vip-ring {
-    --value: 100;
-    width: 76px;
-    height: 76px;
-    border-radius: 50%;
-    display: grid;
-    place-items: center;
-    background: conic-gradient(#79f2c0 calc(var(--value) * 1%), rgba(255,255,255,.15) 0);
-  }
+.vip-step-card__action {
+  margin-top: 5px;
+  min-height: 16px;
+  font-size: 11px;
+  font-weight: 700;
+}
 
-  .vip-ring:after {
-    content: "";
-    width: 60px;
-    height: 60px;
-    border-radius: 50%;
-    background: #282255;
-    box-shadow: inset 0 0 0 1px rgba(255,255,255,.1);
-  }
+  .vip-step-card__action a {
+  color: #008060;
+  text-decoration: none;
+}
 
-  .vip-readiness-card__footer {
-    display: flex;
-    justify-content: space-between;
-    gap: 12px;
-    align-items: flex-end;
-    color: rgba(255,255,255,.82);
-    font-size: 13px;
-    line-height: 1.5;
-  }
-
-  .vip-readiness-card__footer strong {
-    color: white;
-    font-size: 14px;
+  .vip-step-card__action a:hover {
+    text-decoration: underline;
   }
 
   .vip-pill {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    width: fit-content;
-    border-radius: 999px;
-    padding: 7px 12px;
-    font-size: 12px;
-    font-weight: 700;
-    white-space: nowrap;
-  }
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border-radius: 999px;
+  padding: 3px 7px;
+  font-size: 10px;
+  font-weight: 800;
+  white-space: nowrap;
+}
 
-  .vip-pill__dot { width: 8px; height: 8px; border-radius: 50%; }
+  .vip-pill__dot { width: 6px; height: 6px; border-radius: 50%; }
   .vip-pill--success { background: #e4f8f0; color: #008060; }
-  .vip-pill--success .vip-pill__dot { background: #008060; box-shadow: 0 0 0 4px rgba(0,128,96,.15); }
+  .vip-pill--success .vip-pill__dot { background: #008060; }
   .vip-pill--warning { background: #fff6df; color: #8a5b00; }
-  .vip-pill--warning .vip-pill__dot { background: #d89a17; box-shadow: 0 0 0 4px rgba(216,154,23,.15); }
+  .vip-pill--warning .vip-pill__dot { background: #d89a17; }
   .vip-pill--critical { background: #ffebe9; color: #d32f2f; }
-  .vip-pill--critical .vip-pill__dot { background: #d32f2f; box-shadow: 0 0 0 4px rgba(211,47,47,.15); }
+  .vip-pill--critical .vip-pill__dot { background: #d32f2f; }
   .vip-pill--neutral { background: #f1f2f3; color: #5c6270; }
   .vip-pill--neutral .vip-pill__dot { background: #8c9196; }
 
-  .vip-actions {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 12px;
-  }
+ .vip-check-button {
+  appearance: none;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: #008060;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+}
 
-  .vip-action {
+.vip-check-button:hover {
+  text-decoration: underline;
+}
+
+.vip-check-button:disabled {
+  cursor: default;
+  opacity: .65;
+  text-decoration: none;
+}
+
+  @keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+  }
+  .vip-spinner {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    border: 2px solid rgba(0, 128, 96, 0.2);
+    border-radius: 50%;
+    border-top-color: #008060;
+    animation: spin 0.8s linear infinite;
+  }
+  .vip-syncing-tag {
     display: inline-flex;
     align-items: center;
-    gap: 8px;
-    min-height: 42px;
+    gap: 5px;
+    font-size: 11px;
+    font-weight: 800;
+    color: #008060;
+    background: #e4f8f0;
+    padding: 2px 8px;
     border-radius: 12px;
-    padding: 0 18px;
-    font-size: 14px;
-    font-weight: 700;
-    text-decoration: none;
-    transition: transform .18s ease, box-shadow .18s ease, background .18s ease;
   }
 
-  .vip-action:hover { transform: translateY(-1px); }
-  .vip-action--primary { background: white; color: #1e1b4b; box-shadow: 0 10px 24px rgba(0,0,0,.15); }
-  .vip-action--ghost { border: 1px solid rgba(255,255,255,.24); color: white; background: rgba(255,255,255,.12); backdrop-filter: blur(8px); }
-
-  .vip-metrics {
+  .vip-main-grid {
     display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: 16px;
+    grid-template-columns: minmax(0, 1.4fr) minmax(320px, 0.85fr);
+    gap: 20px;
+    align-items: stretch;
+  }
+
+  .vip-left-col {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+  }
+
+  .vip-two-metrics {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 20px;
   }
 
   .vip-metric {
     position: relative;
     overflow: hidden;
-    min-height: 160px;
     border: 1px solid var(--vip-border);
     border-radius: 20px;
     padding: 22px;
@@ -749,169 +749,37 @@ const dashboardCss = `
     box-shadow: var(--vip-shadow);
   }
 
-  .vip-metric:after {
-    content: "";
-    position: absolute;
-    right: -30px;
-    bottom: -40px;
-    width: 130px;
-    height: 130px;
-    border-radius: 50%;
-    opacity: .12;
-  }
-
-  .vip-metric--violet:after { background: #7357ff; }
-  .vip-metric--cyan:after { background: #28b8d5; }
-  .vip-metric--green:after { background: #30ad70; }
-  .vip-metric--amber:after { background: #e6a631; }
-
   .vip-metric__top { display: flex; justify-content: space-between; gap: 12px; align-items: center; }
   .vip-metric__eyebrow { color: #5c6270; font-size: 12px; font-weight: 800; text-transform: uppercase; letter-spacing: .08em; }
-  .vip-metric__spark { width: 8px; height: 8px; border-radius: 50%; background: currentColor; opacity: .65; box-shadow: 0 0 0 5px rgba(120,110,190,.12); }
-  .vip-metric__value { margin-top: 16px; font-size: 32px; font-weight: 800; letter-spacing: -.03em; color: var(--vip-text); }
-  .vip-metric__detail { margin-top: 8px; color: var(--vip-muted); font-size: 13px; line-height: 1.5; }
+  .vip-metric__spark { width: 8px; height: 8px; border-radius: 50%; background: currentColor; opacity: .65; }
+  .vip-metric__value { margin-top: 14px; font-size: 32px; font-weight: 800; color: var(--vip-text); }
+  .vip-metric__detail { margin-top: 6px; color: var(--vip-muted); font-size: 13px; line-height: 1.4; }
 
-  .vip-progress { height: 6px; margin-top: 16px; border-radius: 999px; background: #eef0f4; overflow: hidden; }
-  .vip-progress span { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #6f5cf5, #28b8d5); }
-
-  .vip-grid {
-    display: grid;
-    grid-template-columns: minmax(0, 1.6fr) minmax(320px, .8fr);
-    gap: 20px;
-    align-items: start;
-  }
+  .vip-progress { height: 7px; margin-top: 16px; border-radius: 999px; background: #eef0f4; overflow: hidden; }
+  .vip-progress span { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #008060, #28b8d5); transition: width 0.4s ease; }
 
   .vip-panel {
     border: 1px solid var(--vip-border);
-    border-radius: 22px;
+    border-radius: 20px;
     background: var(--vip-panel);
     box-shadow: var(--vip-shadow);
     overflow: hidden;
   }
 
-  .vip-panel__head {
-    display: flex;
-    justify-content: space-between;
-    align-items: flex-start;
-    gap: 20px;
-    padding: 24px 26px 18px;
-    border-bottom: 1px solid #f0f0f4;
-  }
-
-  .vip-panel__head h3 { margin: 0; font-size: 19px; font-weight: 800; letter-spacing: -.02em; }
-  .vip-panel__head p { margin: 6px 0 0; color: var(--vip-muted); font-size: 13px; line-height: 1.5; }
-  .vip-panel__body { padding: 6px 26px 12px; }
-
-  .vip-check-row {
-    display: grid;
-    grid-template-columns: 40px minmax(0,1fr) auto;
-    gap: 16px;
-    align-items: center;
-    padding: 18px 0;
-    border-bottom: 1px solid #f0f0f4;
-  }
-
-  .vip-check-row:last-child { border-bottom: 0; }
-  .vip-check-index { width: 34px; height: 34px; border-radius: 12px; display: grid; place-items: center; font-size: 14px; font-weight: 800; }
-  .vip-check-index--success { color: #008060; background: #e4f8f0; }
-  .vip-check-index--warning { color: #8a5b00; background: #fff6df; }
-  .vip-check-index--critical { color: #d32f2f; background: #ffebe9; }
-  .vip-check-index--neutral { color: #5c6270; background: #f1f2f3; }
-  .vip-check-title-row { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
-  .vip-check-title-row strong { font-size: 15px; font-weight: 700; color: var(--vip-text); }
-  .vip-check-detail { margin-top: 6px; color: var(--vip-muted); font-size: 13px; line-height: 1.5; }
-  .vip-check-action { font-size: 13px; font-weight: 700; white-space: nowrap; }
-  .vip-check-action a { color: #4f46e5; text-decoration: none; }
-  .vip-check-action a:hover { text-decoration: underline; }
-  .vip-check-button {
-    appearance: none;
-    border: 0;
-    padding: 0;
-    background: transparent;
-    color: #4f46e5;
-    font: inherit;
-    font-weight: 700;
-    font-size: 13px;
-    text-decoration: underline;
-    text-underline-offset: 3px;
-    cursor: pointer;
-  }
-  .vip-check-button:hover { color: #3730a3; }
-  .vip-check-button:disabled { color: #8c9196; cursor: wait; text-decoration: none; }
-
-  .vip-side-stack { display: grid; gap: 20px; }
-  .vip-health { padding: 24px; }
-  .vip-health h3 { margin: 0 0 4px; font-size: 19px; font-weight: 800; }
-  .vip-health > p { margin: 0 0 18px; color: var(--vip-muted); font-size: 13px; }
-  .vip-health-row { display: flex; justify-content: space-between; gap: 16px; align-items: center; padding: 13px 0; border-bottom: 1px solid #f0f0f4; font-size: 13px; }
-  .vip-health-row:last-child { border-bottom: 0; }
-  .vip-health-row strong { font-size: 14px; font-weight: 700; color: var(--vip-text); }
-  .vip-health-label { display: flex; gap: 10px; align-items: center; color: var(--vip-muted); font-size: 13px; }
-  .vip-health-dot { width: 9px; height: 9px; border-radius: 50%; }
-  .vip-health-dot--success { background: #008060; }
-  .vip-health-dot--warning { background: #d89a17; }
-  .vip-health-dot--critical { background: #d32f2f; }
-  .vip-health-dot--neutral { background: #8c9196; }
-
-  .vip-intel {
-    position: relative;
-    overflow: hidden;
-    padding: 24px;
-    background: linear-gradient(145deg, #f8f7ff, #f3fbff);
-  }
-  .vip-intel:after { content: ""; position: absolute; width: 160px; height: 160px; border-radius: 50%; right: -40px; top: -60px; background: linear-gradient(135deg,#7c62ff,#49c2d7); opacity: .15; }
-  .vip-intel__icon { width: 42px; height: 42px; border-radius: 14px; display: grid; place-items: center; background: #241d4f; color: white; font-weight: 800; font-size: 15px; box-shadow: 0 10px 24px rgba(36,29,79,.2); }
-  .vip-intel h3 { margin: 18px 0 6px; font-size: 19px; font-weight: 800; }
-  .vip-intel p { margin: 0 0 16px; color: var(--vip-muted); font-size: 13px; line-height: 1.6; }
-  .vip-intel a { color: #4f46e5; font-size: 13px; font-weight: 700; text-decoration: none; }
-
-  .vip-quick-grid { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 16px; }
-  .vip-quick-link { display: flex; justify-content: space-between; align-items: center; gap: 16px; border: 1px solid var(--vip-border); border-radius: 20px; padding: 20px 22px; text-decoration: none; color: inherit; background: white; box-shadow: var(--vip-shadow); transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease; }
-  .vip-quick-link:hover { transform: translateY(-2px); box-shadow: 0 16px 40px rgba(38,32,72,.1); border-color: #c7c3e0; }
-  .vip-quick-link strong { display: block; font-size: 15px; font-weight: 800; color: var(--vip-text); }
-  .vip-quick-link span:not(.vip-quick-arrow) { display: block; margin-top: 6px; color: var(--vip-muted); font-size: 12px; line-height: 1.45; }
-  .vip-quick-arrow { font-size: 20px; color: #4f46e5; font-weight: 800; }
-
-  .vip-notice { display: grid; grid-template-columns: 36px 1fr; gap: 14px; align-items: start; border-radius: 18px; padding: 16px 20px; font-size: 13px; line-height: 1.55; }
-  .vip-notice__icon { width: 30px; height: 30px; border-radius: 999px; display: grid; place-items: center; font-weight: 800; font-size: 14px; }
-  .vip-notice strong { display: block; margin-bottom: 4px; font-size: 14px; }
-  .vip-notice--critical { background: #ffebe9; color: #d32f2f; border: 1px solid #f8b4b4; }
-  .vip-notice--critical .vip-notice__icon { background: #f8b4b4; }
-  .vip-notice--warning { background: #fff6df; color: #8a5b00; border: 1px solid #f3d489; }
-  .vip-notice--warning .vip-notice__icon { background: #f3d489; }
-  .vip-notice--success { background: #e4f8f0; color: #008060; border: 1px solid #a3e0c9; }
-  .vip-notice--success .vip-notice__icon { background: #a3e0c9; }
-  .vip-notice--neutral { background: #f1f2f3; color: #5c6270; border: 1px solid #e1e3e5; }
-
-  .vip-analytics-grid {
-    display: grid;
-    grid-template-columns: minmax(0, 1.55fr) minmax(330px, .75fr);
-    gap: 20px;
-    align-items: stretch;
-  }
-
-  .vip-impact, .vip-alerts { padding: 24px; }
+  .vip-impact { padding: 22px 24px; }
 
   .vip-impact-head {
     display: flex;
     justify-content: space-between;
     gap: 18px;
     align-items: flex-start;
-    margin-bottom: 20px;
+    margin-bottom: 16px;
   }
 
-  .vip-impact-head h3, .vip-alerts h3 {
+  .vip-impact-head h3 {
     margin: 0;
-    font-size: 19px;
+    font-size: 18px;
     font-weight: 800;
-    letter-spacing: -.02em;
-  }
-
-  .vip-impact-head p, .vip-alerts__intro {
-    margin: 6px 0 0;
-    color: var(--vip-muted);
-    font-size: 13px;
-    line-height: 1.5;
   }
 
   .vip-impact-kpis {
@@ -922,10 +790,10 @@ const dashboardCss = `
   }
 
   .vip-impact-kpi {
-    border: 1px solid #e5e3f0;
-    border-radius: 16px;
-    padding: 15px 16px;
-    background: linear-gradient(180deg,#fff,#fcfcfe);
+    border: 1px solid #eef0f4;
+    border-radius: 14px;
+    padding: 12px 14px;
+    background: #fafafa;
   }
 
   .vip-impact-kpi span {
@@ -934,273 +802,307 @@ const dashboardCss = `
     font-size: 11px;
     font-weight: 800;
     text-transform: uppercase;
-    letter-spacing: .08em;
   }
 
   .vip-impact-kpi strong {
     display: block;
-    margin-top: 8px;
-    font-size: 24px;
+    margin-top: 6px;
+    font-size: 22px;
     font-weight: 800;
-    letter-spacing: -.03em;
-    color: var(--vip-text);
   }
 
   .vip-impact-kpi small {
     display: block;
-    margin-top: 5px;
+    margin-top: 4px;
     color: var(--vip-muted);
     font-size: 11px;
-    line-height: 1.45;
   }
 
   .vip-chart-shell {
-    border: 1px solid #efedf6;
-    border-radius: 20px;
-    padding: 16px 14px 10px;
-    background:
-      radial-gradient(circle at 80% 0%, rgba(112,92,245,.08), transparent 30%),
-      #fdfdff;
+    border: 1px solid #eef0f4;
+    border-radius: 16px;
+    padding: 14px 12px 8px;
+    background: #ffffff;
   }
 
-  .vip-chart { display: block; width: 100%; height: 230px; }
+  .vip-chart { display: block; width: 100%; height: 210px; }
   .vip-chart-label { font-size: 11px; fill: #8c9196; }
-  .vip-chart-axis {
-    display: flex;
-    justify-content: space-between;
-    padding: 0 9px 4px;
-    color: #8c9196;
-    font-size: 11px;
-    font-weight: 600;
-  }
   .vip-chart-axis--7 {
     display: grid;
     grid-template-columns: repeat(7, minmax(0, 1fr));
-    padding: 0 18px 4px;
+    padding: 0 14px 4px;
     text-align: center;
+    font-size: 11px;
+    color: #8c9196;
   }
 
   .vip-chart-legend {
     display: flex;
     flex-wrap: wrap;
     gap: 16px;
-    padding: 2px 8px 10px;
+    padding: 0 6px 10px;
     color: var(--vip-muted);
     font-size: 12px;
     font-weight: 700;
   }
 
-  .vip-chart-legend span {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-  }
-
-  .vip-chart-legend i {
-    width: 10px;
-    height: 10px;
-    border-radius: 999px;
-    display: inline-block;
-  }
+  .vip-chart-legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .vip-chart-legend i { width: 8px; height: 8px; border-radius: 999px; display: inline-block; }
 
   .vip-chart-empty {
-    min-height: 210px;
+    min-height: 190px;
     display: grid;
     place-items: center;
     border: 1px dashed #dcd9e8;
-    border-radius: 18px;
+    border-radius: 14px;
     color: #8c9196;
     font-size: 13px;
-    background: #fcfcfe;
   }
 
-  .vip-baseline-note {
+  .vip-alerts {
+    padding: 22px 24px;
     display: flex;
-    gap: 12px;
-    align-items: flex-start;
-    margin-top: 14px;
-    padding: 13px 15px;
-    border-radius: 14px;
-    border: 1px solid #eef0f4;
-    background: #fafafa;
-    color: var(--vip-muted);
-    font-size: 12px;
-    line-height: 1.55;
+    flex-direction: column;
+    justify-content: space-between;
+    height: 100%;
+    box-sizing: border-box;
   }
 
-  .vip-alert-list {
-    display: grid;
-    gap: 12px;
-    margin-top: 18px;
+  .vip-alerts h3 {
+    margin: 0;
+    font-size: 18px;
+    font-weight: 800;
   }
 
+  .vip-alert-list { display: grid; gap: 12px; margin-top: 16px; }
   .vip-alert {
     display: grid;
-    grid-template-columns: 10px minmax(0,1fr) auto;
+    grid-template-columns: 8px minmax(0,1fr) auto;
     gap: 12px;
     align-items: start;
-    padding: 14px 0;
+    padding: 12px 0;
     border-bottom: 1px solid #f0f0f4;
   }
-
   .vip-alert:last-child { border-bottom: 0; }
+  .vip-alert__dot { width: 8px; height: 8px; border-radius: 50%; margin-top: 4px; }
+  .vip-alert--high .vip-alert__dot { background: #d32f2f; }
+  .vip-alert--medium .vip-alert__dot { background: #d89a17; }
+  .vip-alert__title { font-size: 13px; font-weight: 800; display: flex; gap: 6px; align-items: center; }
+  .vip-alert__query { margin-top: 4px; font-size: 13px; font-weight: 700; }
+  .vip-alert__detail { margin-top: 4px; color: var(--vip-muted); font-size: 12px; }
+  .vip-alert__count { border-radius: 999px; padding: 4px 10px; background: #f1f0fb; color: #008060; font-size: 12px; font-weight: 800; }
 
-  .vip-alert__dot {
-    width: 9px;
-    height: 9px;
-    border-radius: 50%;
-    margin-top: 6px;
-  }
-
-  .vip-alert--high .vip-alert__dot {
-    background: #d32f2f;
-    box-shadow: 0 0 0 5px rgba(211,47,47,.12);
-  }
-
-  .vip-alert--medium .vip-alert__dot {
-    background: #d89a17;
-    box-shadow: 0 0 0 5px rgba(216,154,23,.12);
-  }
-
-  .vip-alert__title {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-    align-items: center;
-    font-size: 13px;
-    font-weight: 800;
-  }
-
-  .vip-alert__query {
-    margin-top: 6px;
-    color: var(--vip-text);
-    font-size: 13px;
-    font-weight: 700;
-  }
-
-  .vip-alert__detail {
-    margin-top: 5px;
-    color: var(--vip-muted);
-    font-size: 12px;
-    line-height: 1.5;
-  }
-
-  .vip-alert__count {
-    min-width: 34px;
-    border-radius: 999px;
-    padding: 5px 9px;
-    background: #f1f0fb;
-    color: #4f46e5;
-    font-size: 12px;
-    font-weight: 800;
-    text-align: center;
-  }
-
-  .vip-alert-empty {
-    margin-top: 18px;
-    padding: 20px;
+  .vip-alerts-healthy-box {
+    margin-top: 16px;
+    padding: 18px;
     border-radius: 16px;
     background: #e4f8f0;
     border: 1px solid #a3e0c9;
     color: #008060;
     font-size: 13px;
-    line-height: 1.55;
+    line-height: 1.6;
     font-weight: 600;
   }
 
-  @media (max-width: 980px) {
-    .vip-hero__content, .vip-grid, .vip-analytics-grid { grid-template-columns: 1fr; }
-    .vip-metrics { grid-template-columns: repeat(2, minmax(0,1fr)); }
-    .vip-impact-kpis { grid-template-columns: repeat(2, minmax(0,1fr)); }
-    .vip-quick-grid { grid-template-columns: 1fr; }
+  .vip-alert-check-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 0;
+    border-bottom: 1px solid #e2e4ed;
+    font-size: 13px;
+    color: #4a4a4a;
+  }
+  .vip-alert-check-item:last-child { border-bottom: 0; }
+
+  .vip-bottom-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1.4fr) minmax(320px, 0.85fr);
+    gap: 20px;
+    align-items: start;
   }
 
-  @media (max-width: 640px) {
-    .vip-hero { padding: 24px; border-radius: 20px; }
-    .vip-metrics, .vip-impact-kpis { grid-template-columns: 1fr; }
-    .vip-check-row { grid-template-columns: 36px minmax(0,1fr); }
-    .vip-check-action { grid-column: 2; }
+  .vip-quick-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+  .vip-quick-link { display: flex; justify-content: space-between; align-items: center; gap: 12px; border: 1px solid var(--vip-border); border-radius: 16px; padding: 18px; text-decoration: none; color: inherit; background: white; box-shadow: var(--vip-shadow); transition: all 0.15s ease; }
+  .vip-quick-link:hover { border-color: #a8abaf; transform: translateY(-1px); }
+  .vip-quick-link strong { display: block; font-size: 14px; font-weight: 800; color: var(--vip-text); }
+  .vip-quick-link span:not(.vip-quick-arrow) { display: block; margin-top: 4px; color: var(--vip-muted); font-size: 12px; }
+  .vip-quick-arrow { font-size: 18px; color: #008060; font-weight: 800; }
+
+  .vip-health { padding: 22px; }
+  .vip-health h3 { margin: 0 0 14px; font-size: 18px; font-weight: 800; }
+  .vip-health-row { display: flex; justify-content: space-between; gap: 12px; align-items: center; padding: 11px 0; border-bottom: 1px solid #f0f0f4; font-size: 13px; }
+  .vip-health-row:last-child { border-bottom: 0; }
+  .vip-health-label { display: flex; gap: 8px; align-items: center; color: var(--vip-muted); }
+  .vip-health-dot { width: 8px; height: 8px; border-radius: 50%; }
+  .vip-health-dot--success { background: #008060; }
+  .vip-health-dot--warning { background: #d89a17; }
+  .vip-health-dot--critical { background: #d32f2f; }
+
+  @media (max-width: 980px) {
+    .vip-setup-grid { grid-template-columns: repeat(2, 1fr); }
+    .vip-main-grid, .vip-bottom-grid { grid-template-columns: 1fr; }
+    .vip-quick-grid { grid-template-columns: 1fr; }
   }
 `;
 
 export default function Dashboard() {
   const data = useLoaderData<typeof loader>();
-  const themeSyncFetcher = useFetcher<{ success?: boolean; message?: string }>();
+
+  const themeSyncFetcher = useFetcher<{
+    success?: boolean;
+    message?: string;
+  }>();
+
+  const statusFetcher = useFetcher<DashboardStatus>();
+
   const themeSyncing = themeSyncFetcher.state !== "idle";
+
   const { entitlement } = data;
 
-  const catalogStatus = (data.catalogJob?.status ?? "NOT_STARTED").toUpperCase();
-  const catalogReady = catalogStatus === "DONE";
-  const catalogBusy = ["PENDING", "PROCESSING", "RUNNING"].includes(catalogStatus);
-  const catalogFailed = catalogStatus === "FAILED" || Boolean(data.catalogJob?.lastError);
-  const queueHasFailures = data.queue.failed > 0;
-  const embedReady = data.theme.appEmbedEnabled === true;
-  const themeReady = data.theme.integrationReady;
-  const searchSettingReady = data.settings.aiSearchEnabled;
+  /*
+   * =========================================================
+   * LIVE SETUP WATCHER
+   * =========================================================
+   *
+   * Không dùng navigate() để polling.
+   * Chỉ fetch dữ liệu trạng thái, không reload Dashboard.
+   * Vì vậy scroll position của người dùng không bị ảnh hưởng.
+   */
 
-  let overall: { state: UiState; title: string; detail: string };
+  useEffect(() => {
+    const loadStatus = () => {
+      statusFetcher.load("/app/dashboard-status");
+    };
 
-  if (!entitlement.active) {
-    overall = {
-      state: "warning",
-      title: "Activate Plan to Launch AI Search",
-      detail: "Subscription is currently inactive. Storefront searches are safely handled by Shopify Native Search.",
-    };
-  } else if (catalogFailed || queueHasFailures) {
-    overall = {
-      state: "critical",
-      title: "Action Required Before Launch",
-      detail: "Catalog sync or product processing queue encountered errors. Safe fallback remains active.",
-    };
-  } else if (!catalogReady) {
-    overall = {
-      state: "warning",
-      title: catalogBusy ? "Preparing Catalog Index" : "Catalog Index Not Ready",
-      detail: "Preparing product catalog and vector embeddings for storefront search.",
-    };
-  } else if (!searchSettingReady) {
-    overall = {
-      state: "neutral",
-      title: "AI Search Engine is Paused",
-      detail: "Storefront is using default Shopify Search. You can re-enable AI Search in Settings anytime.",
-    };
-  } else if (!embedReady) {
-    overall = {
-      state: "warning",
-      title: "One More Step: Enable App Embed",
-      detail: "Backend is ready. Enable App Embed in Theme Editor to display AI search on storefront.",
-    };
-  } else if (!themeReady) {
-    overall = {
-      state: "warning",
-      title: "Pending Theme Integration Check",
-      detail: "Active theme render path is awaiting confirmation. Safe fallback is active.",
-    };
-  } else if (!entitlement.searchAllowed) {
-    overall = {
-      state: "warning",
-      title: "Shopify Native Search is Active",
-      detail: entitlement.disabledReason
-        ? `AI Search is temporarily paused: ${entitlement.disabledReason}.`
-        : "AI Search is currently paused by entitlement limits.",
-    };
-  } else {
-    overall = {
-      state: "success",
-      title: "AI Search is Operational",
-      detail: "Catalog, subscription, and theme integration are 100% ready for production traffic.",
-    };
-  }
+    // Lấy trạng thái ngay khi Dashboard mở.
+    loadStatus();
 
+    // Theo dõi toàn bộ 5 task.
+    const timer = window.setInterval(loadStatus, 5000);
+
+    return () => {
+      window.clearInterval(timer);
+    };
+  }, []);
+
+  /*
+   * Sau khi Sync Theme hoàn tất,
+   * kiểm tra lại trạng thái ngay thay vì chờ 5 giây.
+   */
+  useEffect(() => {
+    if (
+      themeSyncFetcher.state === "idle" &&
+      themeSyncFetcher.data?.success === true
+    ) {
+      statusFetcher.load("/app/dashboard-status");
+    }
+  }, [
+    themeSyncFetcher.state,
+    themeSyncFetcher.data?.success,
+  ]);
+
+  /*
+   * =========================================================
+   * LIVE STATUS
+   * =========================================================
+   */
+
+  const live = statusFetcher.data;
+
+  /*
+   * Nếu watcher chưa trả dữ liệu,
+   * dùng trạng thái ban đầu từ Dashboard loader.
+   */
+  const subscriptionReady =
+    live?.subscription.ready ??
+    entitlement.active;
+
+  const catalogStatus =
+    live?.catalog.status ??
+    (data.catalogJob?.status ?? "NOT_STARTED").toUpperCase();
+
+  const catalogBusy =
+    live?.catalog.busy ??
+    (
+      ["PENDING", "PROCESSING", "RUNNING"].includes(catalogStatus) ||
+      data.queue.pending > 0 ||
+      data.queue.processing > 0
+    );
+
+  const catalogReady =
+    live?.catalog.ready ??
+    (
+      catalogStatus === "DONE" &&
+      !Boolean(data.catalogJob?.lastError) &&
+      data.queue.failed === 0 &&
+      data.queue.pending === 0 &&
+      data.queue.processing === 0
+    );
+
+  const catalogFailed =
+    live?.catalog.failed ??
+    (
+      catalogStatus === "FAILED" ||
+      Boolean(data.catalogJob?.lastError) ||
+      data.queue.failed > 0
+    );
+
+  const searchSettingReady =
+    live?.aiEngine.ready ??
+    data.settings.aiSearchEnabled;
+
+  const embedReady =
+    live?.appEmbed.ready ??
+    data.theme.appEmbedEnabled === true;
+
+  const themeReady =
+    live?.themeMap.ready ??
+    data.theme.integrationReady;
+
+  const isBackgroundSyncing =
+    catalogBusy;
+
+  /*
+   * Đây là trạng thái thật của 5 task.
+   */
   const readinessSteps = [
-    entitlement.active,
-    catalogReady && !catalogFailed && !queueHasFailures,
+    subscriptionReady,
+    catalogReady && !catalogFailed,
     searchSettingReady,
     embedReady,
     themeReady,
   ];
-  const readinessDone = readinessSteps.filter(Boolean).length;
-  const readinessPercent = Math.round((readinessDone / readinessSteps.length) * 100);
+
+  const readinessDone =
+    readinessSteps.filter(Boolean).length;
+
+  const isFullyReady =
+    live?.allReady ??
+    readinessDone === readinessSteps.length;
+
+  /*
+   * Chỉ hiện Live Setup khi:
+   *
+   * - Có task chưa hoàn thành
+   * - Hoặc đang đồng bộ
+   * - Hoặc có lỗi / cần hành động
+   */
+  const showLiveSetup = !isFullyReady;
+
+  /*
+   * Queue state dùng cho System Health bên dưới.
+   */
+  const queueHasFailures =
+    live?.catalog.failed ??
+    data.queue.failed > 0;
+
+  const isQueueBusy =
+    live?.catalog.busy ??
+    (
+      data.queue.pending > 0 ||
+      data.queue.processing > 0
+    );
 
   const searchRemaining = remaining(
     entitlement.limits.searchLimit,
@@ -1215,27 +1117,13 @@ export default function Dashboard() {
     entitlement.limits.productLimit,
   );
 
-  const fallbackCount = entitlement.usage.fallbackCount;
-  const storefrontSearches = entitlement.usage.searchCount + fallbackCount;
   const impact = data.searchImpact;
   const current7dSeries = impact.series.slice(-7);
   const previous7dSeries = impact.series.slice(-14, -7);
-  const current7dSearches = current7dSeries.reduce(
-    (sum, item) => sum + item.searches,
-    0,
-  );
-  const previous7dSearches = previous7dSeries.reduce(
-    (sum, item) => sum + item.searches,
-    0,
-  );
-  const current7dClickedSearches = current7dSeries.reduce(
-    (sum, item) => sum + item.clickedSearches,
-    0,
-  );
-  const current7dAbnormalSearches = current7dSeries.reduce(
-    (sum, item) => sum + item.abnormalSearches,
-    0,
-  );
+  const current7dSearches = current7dSeries.reduce((sum, item) => sum + item.searches, 0);
+  const previous7dSearches = previous7dSeries.reduce((sum, item) => sum + item.searches, 0);
+  const current7dClickedSearches = current7dSeries.reduce((sum, item) => sum + item.clickedSearches, 0);
+  const current7dAbnormalSearches = current7dSeries.reduce((sum, item) => sum + item.abnormalSearches, 0);
   const current7dCtr = impact.comparison.current7dCtr;
   const previous7dCtr = impact.comparison.previous7dCtr;
   const searchVolumeDeltaPercent =
@@ -1243,12 +1131,9 @@ export default function Dashboard() {
       ? ((current7dSearches - previous7dSearches) / previous7dSearches) * 100
       : null;
 
-  const aiCoverage = percent(entitlement.usage.searchCount, storefrontSearches);
-  const fallbackRate = percent(fallbackCount, storefrontSearches);
-
   const queueState: UiState = queueHasFailures
     ? "critical"
-    : data.queue.processing > 0 || data.queue.pending > 0
+    : isQueueBusy
       ? "warning"
       : "success";
 
@@ -1257,430 +1142,332 @@ export default function Dashboard() {
       <style>{dashboardCss}</style>
 
       <div className="vip-shell">
-        <section className="vip-hero">
-          <div className="vip-hero__content">
+              {showLiveSetup ? (
+                <section className="vip-setup-box">
+          <div className="vip-setup-head">
             <div>
-              <div className="vip-kicker">AI Search · Merchant Console</div>
-              <StatusPill state={overall.state}>{stateLabel(overall.state)}</StatusPill>
-              <h2 style={{ marginTop: 16 }}>{overall.title}</h2>
-              <p className="vip-hero__subtitle">{overall.detail}</p>
+              <div className="vip-setup-title">
+                <span className="vip-setup-icon">✦</span>
+                <div>
+                  <h3>Live Setup</h3>
+                  <span>Production readiness</span>
+                </div>
+              </div>
+            </div>
+            <StatusPill state={isFullyReady ? "success" : "warning"}>
+              {`${readinessDone}/5 Completed`}
+            </StatusPill>
+          </div>
 
-              <div className="vip-actions">
-                <Link className="vip-action vip-action--primary" to="/app/settings">
-                  Configure search
-                </Link>
-                <Link className="vip-action vip-action--ghost" to="/app/search-analytics">
-                  Search Analytics
-                </Link>
-                {data.pricingUrl ? (
-                  <a
-                    className="vip-action vip-action--ghost"
-                    href={data.pricingUrl}
-                    target="_top"
+          <div className="vip-setup-grid">
+            {/* Step 1 */}
+            <ReadinessStep
+              index={1}
+              title="Subscription"
+              state={entitlement.active ? "success" : "warning"}
+              status={entitlement.active ? "Active" : "Action Needed"}
+              action={{ label: "Billing →", href: "/app/billing" }}
+            />
+
+            {/* Step 2 */}
+            <ReadinessStep
+              index={2}
+              title="Catalog Index"
+              state={
+                catalogFailed
+                  ? "critical"
+                  : catalogReady
+                    ? "success"
+                    : "warning"
+              }
+              status={
+                catalogFailed
+                  ? "Error"
+                  : catalogReady
+                    ? "Synced"
+                    : "Syncing"
+              }
+              action={{ label: "Open Sync →", href: "/app/catalog-sync" }}
+            />
+
+            {/* Step 3 */}
+            <ReadinessStep
+              index={3}
+              title="AI Engine"
+              state={searchSettingReady ? "success" : "neutral"}
+              status={searchSettingReady ? "Enabled" : "Disabled"}
+              action={{ label: "Settings →", href: "/app/settings" }}
+            />
+
+            {/* Step 4 */}
+            <ReadinessStep
+              index={4}
+              title="App Embed"
+              state={embedReady ? "success" : "warning"}
+              status={embedReady ? "Enabled" : "Disabled"}
+              action={
+                data.appEmbedUrl
+                  ? { label: "Theme Editor →", href: data.appEmbedUrl, targetTop: true }
+                  : { label: "Settings →", href: "/app/settings" }
+              }
+            />
+
+            {/* Step 5 */}
+            <ReadinessStep
+              index={5}
+              title="Theme Map"
+              state={
+                themeSyncFetcher.data?.success === false
+                  ? "critical"
+                  : themeReady
+                    ? "success"
+                    : "warning"
+              }
+              status={
+                themeSyncing
+                  ? "Syncing"
+                  : themeReady
+                    ? "Ready"
+                    : "Needs Check"
+              }
+              actionNode={
+                <themeSyncFetcher.Form method="post" action="/app/settings">
+                  <input type="hidden" name="intent" value="sync_theme_map" />
+                  <button
+                    type="submit"
+                    className="vip-check-button"
+                    disabled={themeSyncing}
                   >
-                    Plan & billing
-                  </a>
-                ) : null}
-              </div>
-
-              <div className="vip-hero__meta" style={{ marginTop: 22 }}>
-                <span>{data.shop}</span>
-                <span>{entitlement.planLabel}</span>
-                <span>{entitlement.subscriptionStatus}</span>
-                {data.theme.themeName ? <span>Theme · {data.theme.themeName}</span> : null}
-              </div>
-            </div>
-
-            <div className="vip-readiness-card">
-              <div className="vip-readiness-card__top">
-                <div>
-                  <div className="vip-readiness-card__label">Production readiness</div>
-                  <div className="vip-readiness-card__score">{readinessPercent}%</div>
-                </div>
-                <div
-                  className="vip-ring"
-                  style={{ "--value": readinessPercent } as React.CSSProperties}
-                  aria-label={`${readinessPercent}% production ready`}
-                />
-              </div>
-              <div className="vip-readiness-card__footer">
-                <div>
-                  <strong>{readinessDone}/{readinessSteps.length} checks passed</strong>
-                  <div style={{ marginTop: 4 }}>Live storefront safety remains protected by fallback.</div>
-                </div>
-              </div>
-            </div>
+                    {themeSyncing ? "Syncing..." : "Sync Theme"}
+                  </button>
+                </themeSyncFetcher.Form>
+              }
+            />
           </div>
-        </section>
+                </section>
+          ) : null}
 
-        {(catalogFailed || queueHasFailures) ? (
-          <Notice state="critical" title="Catalog Sync Attention Required">
-            Product queue has {data.queue.failed.toLocaleString("en-US")} FAILED jobs.
-            {data.catalogJob?.lastError
-              ? ` Latest catalog error: ${data.catalogJob.lastError}`
-              : " Check background queue and logs before opening live traffic."}
-          </Notice>
-        ) : null}
 
-        {entitlement.productLimitBlockedProducts > 0 ||
-        entitlement.vectorQuotaBlockedProducts > 0 ? (
-          <Notice state="warning" title="Partial Catalog Vector Indexing">
-            {entitlement.productLimitBlockedProducts > 0
-              ? `${entitlement.productLimitBlockedProducts.toLocaleString("en-US")} products are currently restricted by product limit. `
-              : ""}
-            {entitlement.vectorQuotaBlockedProducts > 0
-              ? `${entitlement.vectorQuotaBlockedProducts.toLocaleString("en-US")} products are pending vector quota.`
-              : ""}
-          </Notice>
-        ) : null}
-
-        <section className="vip-metrics">
-          <MetricCard
-            eyebrow="Indexed products"
-            value={formatUsage(entitlement.indexedProducts, entitlement.limits.productLimit)}
-            detail="Products indexed with vectors for AI ranking."
-            progress={productProgress}
-            accent="violet"
-          />
-          <MetricCard
-            eyebrow="AI searches"
-            value={formatUsage(entitlement.usage.searchCount, entitlement.limits.searchLimit)}
-            detail={
-              searchRemaining === null
-                ? "Unlimited plan · executions logged."
-                : `${searchRemaining.toLocaleString("en-US")} remaining in cycle.`
-            }
-            progress={searchProgress}
-            accent="cyan"
-          />
-          <MetricCard
-            eyebrow="AI coverage"
-            value={`${aiCoverage}%`}
-            detail={`${entitlement.usage.searchCount.toLocaleString("en-US")} / ${storefrontSearches.toLocaleString("en-US")} storefront searches processed by AI.`}
-            accent="green"
-          />
-          <MetricCard
-            eyebrow="Safe fallback"
-            value={`${fallbackRate}%`}
-            detail={`${fallbackCount.toLocaleString("en-US")} searches routed to safe Shopify Search fallback.`}
-            accent="amber"
-          />
-        </section>
-
-        <section className="vip-analytics-grid">
-          <div className="vip-panel vip-impact">
-            <div className="vip-impact-head">
-              <div>
-                <h3>Search performance</h3>
-                <p>
-                  Compare total searches, clicked searches, and anomalies over the last 7 days.
-                </p>
-              </div>
-              <StatusPill state={current7dSearches > 0 ? "success" : "neutral"}>
-                {`${current7dSearches.toLocaleString("en-US")} searches · 7 days`}
-              </StatusPill>
+        {/* BỐ CỤC CHÍNH GRID CÂN BẰNG CHIỀU CAO */}
+        <section className="vip-main-grid">
+          {/* CỘT TRÁI: METRICS & CHART */}
+          <div className="vip-left-col">
+            <div className="vip-two-metrics">
+              <MetricCard
+                eyebrow="Indexed Products"
+                value={formatUsage(entitlement.indexedProducts, entitlement.limits.productLimit)}
+                detail="Products ready for AI vector ranking."
+                progress={productProgress}
+                accent="violet"
+                isSyncing={isBackgroundSyncing}
+              />
+              <MetricCard
+                eyebrow="AI Searches"
+                value={formatUsage(entitlement.usage.searchCount, entitlement.limits.searchLimit)}
+                detail={
+                  searchRemaining === null
+                    ? "Unlimited plan active."
+                    : `${searchRemaining.toLocaleString("en-US")} searches left this cycle.`
+                }
+                progress={searchProgress}
+                accent="cyan"
+              />
             </div>
 
-            <div className="vip-impact-kpis">
-              <div className="vip-impact-kpi">
-                <span>AI searches · 7 days</span>
-                <strong>{current7dSearches.toLocaleString("en-US")}</strong>
-                <small>
-                  {previous7dSearches > 0
-                    ? `${signedPct(searchVolumeDeltaPercent)} vs previous 7 days`
-                    : `7 days prior: ${previous7dSearches.toLocaleString("en-US")}`}
-                </small>
+            <div className="vip-panel vip-impact">
+              <div className="vip-impact-head">
+                <div>
+                  <h3>Search Performance</h3>
+                  <span style={{ fontSize: 13, color: "#5c6270" }}>
+                    Compare searches, clicks, and abnormal queries over the last 7 days.
+                  </span>
+                </div>
+                <StatusPill state={current7dSearches > 0 ? "success" : "neutral"}>
+                  {`${current7dSearches.toLocaleString("en-US")} searches · 7d`}
+                </StatusPill>
               </div>
 
-              <div className="vip-impact-kpi">
-                <span>Searches with click</span>
-                <strong>{current7dClickedSearches.toLocaleString("en-US")}</strong>
-                <small>
-                  {current7dSearches > 0
-                    ? `${Math.max(0, current7dSearches - current7dClickedSearches).toLocaleString("en-US")} searches without clicks`
-                    : "No searches recorded in last 7 days"}
-                </small>
+              <div className="vip-impact-kpis">
+                <div className="vip-impact-kpi">
+                  <span>AI Searches</span>
+                  <strong>{current7dSearches.toLocaleString("en-US")}</strong>
+                  <small>
+                    {previous7dSearches > 0
+                      ? `${signedPct(searchVolumeDeltaPercent)} vs prior 7d`
+                      : `Prior 7d: ${previous7dSearches}`}
+                  </small>
+                </div>
+
+                <div className="vip-impact-kpi">
+                  <span>Clicked Searches</span>
+                  <strong>{current7dClickedSearches.toLocaleString("en-US")}</strong>
+                  <small>
+                    {current7dSearches > 0
+                      ? `${Math.max(0, current7dSearches - current7dClickedSearches)} no click`
+                      : "No activity"}
+                  </small>
+                </div>
+
+                <div className="vip-impact-kpi">
+                  <span>CTR Rate</span>
+                  <strong>{fmtPct(current7dCtr)}</strong>
+                  <small>Prior 7d: {fmtPct(previous7dCtr)}</small>
+                </div>
+
+                <div className="vip-impact-kpi">
+                  <span>Anomalies</span>
+                  <strong>{current7dAbnormalSearches.toLocaleString("en-US")}</strong>
+                  <small>Zero results or low similarity</small>
+                </div>
               </div>
 
-              <div className="vip-impact-kpi">
-                <span>CTR · 7 days</span>
-                <strong>{fmtPct(current7dCtr)}</strong>
-                <small>7 days prior: {fmtPct(previous7dCtr)}</small>
-              </div>
-
-              <div className="vip-impact-kpi">
-                <span>Search anomalies · 7 days</span>
-                <strong>{current7dAbnormalSearches.toLocaleString("en-US")}</strong>
-                <small>NO_RESULTS, LOW_SIMILARITY, or HIGH_SIMILARITY_NO_CLICK</small>
-              </div>
-            </div>
-
-            <SearchPerformanceChart series={impact.series} />
-
-            <div className="vip-baseline-note">
-              <strong>7-day view:</strong>
-              <span>
-                All three trend lines use the same daily SearchLog. "Search anomalies"
-                represent queries flagged with NO_RESULTS, LOW_SIMILARITY, or
-                HIGH_SIMILARITY_NO_CLICK. Search Alerts highlight recurring issues over a {impact.windowDays}-day window.
-              </span>
+              <SearchPerformanceChart series={impact.series} />
             </div>
           </div>
 
+          {/* CỘT PHẢI: SEARCH ALERTS */}
           <aside className="vip-panel vip-alerts">
-            <h3>Search alerts</h3>
-            <div className="vip-alerts__intro">
-              Highlights recurring search anomalies; isolated query spikes are filtered to avoid alert fatigue.
+            <div>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <h3>Search Alerts</h3>
+                <StatusPill state={impact.alerts.length > 0 ? "warning" : "success"}>
+                  {impact.alerts.length > 0 ? `${impact.alerts.length} Issues` : "Healthy"}
+                </StatusPill>
+              </div>
+              <div style={{ fontSize: 13, color: "#5c6270", marginTop: 4 }}>
+                Highlights recurring search anomalies across your store.
+              </div>
+
+              {impact.alerts.length ? (
+                <div className="vip-alert-list">
+                  {impact.alerts.map((alert, index) => (
+                    <div
+                      className={`vip-alert vip-alert--${alert.severity.toLowerCase()}`}
+                      key={`${alert.type}-${alert.query ?? "global"}-${index}`}
+                    >
+                      <span className="vip-alert__dot" />
+                      <div>
+                        <div className="vip-alert__title">
+                          <span>{AlertTypeLabel(alert.type)}</span>
+                          <span
+                            className={`vip-pill vip-pill--${
+                              alert.severity === "HIGH" ? "critical" : "warning"
+                            }`}
+                          >
+                            {alert.severity}
+                          </span>
+                        </div>
+                        {alert.query ? (
+                          <div className="vip-alert__query">“{alert.query}”</div>
+                        ) : null}
+                        <div className="vip-alert__detail">{alert.detail}</div>
+                      </div>
+                      <div className="vip-alert__count">
+                        {alert.count.toLocaleString("en-US")}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="vip-alerts-healthy-box">
+                  <div style={{ fontWeight: 800, fontSize: 14, marginBottom: 6 }}>
+                    ✓ No recurring search anomalies detected in the last {impact.windowDays} days.
+                  </div>
+                  <p style={{ margin: 0, fontSize: 12, fontWeight: 400, color: "#006e52" }}>
+                    Your store search experience is running smooth. Zero-result and low-similarity queries are monitored automatically.
+                  </p>
+                </div>
+              )}
             </div>
 
-            {impact.alerts.length ? (
-              <div className="vip-alert-list">
-                {impact.alerts.map((alert, index) => (
-                  <div
-                    className={`vip-alert vip-alert--${alert.severity.toLowerCase()}`}
-                    key={`${alert.type}-${alert.query ?? "global"}-${index}`}
-                  >
-                    <span className="vip-alert__dot" />
-                    <div>
-                      <div className="vip-alert__title">
-                        <span>{AlertTypeLabel(alert.type)}</span>
-                        <span
-                          className={`vip-pill vip-pill--${
-                            alert.severity === "HIGH" ? "critical" : "warning"
-                          }`}
-                        >
-                          {alert.severity}
-                        </span>
-                      </div>
-                      {alert.query ? (
-                        <div className="vip-alert__query">“{alert.query}”</div>
-                      ) : null}
-                      <div className="vip-alert__detail">{alert.detail}</div>
-                    </div>
-                    <div className="vip-alert__count">
-                      {alert.count.toLocaleString("en-US")}
-                    </div>
-                  </div>
-                ))}
+            <div style={{ borderTop: "1px solid #f0f0f4", paddingTop: 16, marginTop: 20 }}>
+              <div style={{ fontSize: 11, fontWeight: 800, color: "#5c6270", textTransform: "uppercase", marginBottom: 10 }}>
+                📊 Search Quality Health Monitor
               </div>
-            ) : (
-              <div className="vip-alert-empty">
-                No recurring search anomalies detected within the {impact.windowDays}-day window.
+              <div className="vip-alert-check-item">
+                <span style={{ color: "#008060", fontWeight: "bold" }}>✓</span>
+                <span>Zero-Result Query Prevention</span>
               </div>
-            )}
-
-            <div style={{ marginTop: 16 }}>
-              <Link to="/app/search-analytics">Open Search Analytics →</Link>
+              <div className="vip-alert-check-item">
+                <span style={{ color: "#008060", fontWeight: "bold" }}>✓</span>
+                <span>Low-Similarity AI Fallback</span>
+              </div>
+              <div className="vip-alert-check-item">
+                <span style={{ color: "#008060", fontWeight: "bold" }}>✓</span>
+                <span>Click-Through Rate (CTR) Tracking</span>
+              </div>
             </div>
           </aside>
         </section>
 
-        <section className="vip-grid">
-          <div className="vip-panel">
-            <div className="vip-panel__head">
-              <div>
-                <h3>Production readiness</h3>
-                <p>5 essential layers required before accepting live traffic.</p>
-              </div>
-              <StatusPill state={readinessPercent === 100 ? "success" : "warning"}>
-                {readinessPercent === 100 ? "Ready to launch" : `${readinessDone}/5 complete`}
-              </StatusPill>
-            </div>
-            <div className="vip-panel__body">
-              <ReadinessItem
-                index={1}
-                title="Subscription"
-                state={entitlement.active ? "success" : "warning"}
-                status={entitlement.active ? "Active" : "Needs activation"}
-                detail={`${entitlement.planLabel} · ${entitlement.subscriptionStatus}`}
-                action={
-                  data.pricingUrl
-                    ? { label: "Manage plan", href: data.pricingUrl, targetTop: true }
-                    : undefined
-                }
-              />
-              <ReadinessItem
-                index={2}
-                title="Catalog & vector index"
-                state={
-                  catalogFailed
-                    ? "critical"
-                    : catalogReady
-                      ? "success"
-                      : catalogBusy
-                        ? "warning"
-                        : "neutral"
-                }
-                status={
-                  catalogFailed
-                    ? "Error"
-                    : catalogReady
-                      ? "Synced"
-                      : catalogBusy
-                        ? "Syncing"
-                        : "Not started"
-                }
-                detail={
-                  data.catalogJob
-                    ? `Processed ${data.catalogJob.productsProcessed.toLocaleString("en-US")} · Indexed ${data.catalogJob.productsIndexed.toLocaleString("en-US")} · Skipped ${data.catalogJob.productsSkipped.toLocaleString("en-US")} · Failed ${data.catalogJob.productsFailed.toLocaleString("en-US")}`
-                    : "No catalog sync job recorded."
-                }
-                action={{ label: "Open settings", href: "/app/settings" }}
-              />
-              <ReadinessItem
-                index={3}
-                title="AI Search settings"
-                state={searchSettingReady ? "success" : "neutral"}
-                status={searchSettingReady ? "Enabled" : "Disabled"}
-                detail={`Language ${data.settings.searchLanguage ?? "not configured"}${data.settings.resultLimit ? ` · ${data.settings.resultLimit} results/search` : ""}`}
-                action={{ label: "Configure", href: "/app/settings" }}
-              />
-              <ReadinessItem
-                index={4}
-                title="Theme App Embed"
-                state={embedReady ? "success" : "warning"}
-                status={
-                  data.theme.appEmbedEnabled === true
-                    ? "Enabled"
-                    : data.theme.appEmbedEnabled === false
-                      ? "Disabled"
-                      : "Unknown"
-                }
-                detail={
-                  data.theme.themeName
-                    ? `Published theme: ${data.theme.themeName}`
-                    : "App Embed must be enabled on your active theme."
-                }
-                action={
-                  data.appEmbedUrl
-                    ? { label: "Open theme editor", href: data.appEmbedUrl, targetTop: true }
-                    : { label: "Open settings", href: "/app/settings" }
-                }
-              />
-              <ReadinessItem
-                index={5}
-                title="Theme rendering"
-                state={
-                  themeSyncFetcher.data?.success === false
-                    ? "critical"
-                    : themeReady
-                      ? "success"
-                      : "warning"
-                }
-                status={
-                  themeSyncing
-                    ? "Syncing"
-                    : themeSyncFetcher.data?.success === false
-                      ? "Sync failed"
-                      : themeReady
-                        ? "Ready"
-                        : "Needs check"
-                }
-                detail={
-                  themeSyncFetcher.data?.message
-                    ? themeSyncFetcher.data.message
-                    : `Integration: ${data.theme.integrationStatus}${
-                        data.theme.renderStrategy ? ` · ${data.theme.renderStrategy}` : ""
-                      }`
-                }
-                actionNode={
-                  <themeSyncFetcher.Form method="post" action="/app/settings">
-                    <input type="hidden" name="intent" value="sync_theme_map" />
-                    <button
-                      type="submit"
-                      className="vip-check-button"
-                      disabled={themeSyncing}
-                    >
-                      {themeSyncing
-                        ? "Syncing theme..."
-                        : themeReady
-                          ? "Resync theme"
-                          : "Sync theme"}
-                    </button>
-                  </themeSyncFetcher.Form>
-                }
-              />
-            </div>
+        {/* KHỐI DƯỚI CÙNG: QUICK LINKS VÀ SYSTEM HEALTH */}
+        <section className="vip-bottom-grid">
+          <div className="vip-quick-grid">
+            <QuickLink
+              title="Catalog"
+              detail="Monitor catalog sync jobs and vector index."
+              href="/app/catalog-sync"
+            />
+            <QuickLink
+              title="Search Analytics"
+              detail="Track CTR, clicks, and query quality."
+              href="/app/search-analytics"
+            />
+            <QuickLink
+              title="Usage"
+              detail="Monitor quotas and usage logs."
+              href="/app/usage"
+            />
+            <QuickLink
+              title="Plans & Billing"
+              detail="Manage AI Search subscription plans."
+              href="/app/billing"
+            />
+            <QuickLink
+              title="Settings"
+              detail="Configure search language and AI limits."
+              href="/app/settings"
+            />
+            <QuickLink
+              title="Theme Integration"
+              detail={
+                data.theme.themeName
+                  ? `Active theme · ${data.theme.themeName}`
+                  : "Check App Embed status."
+              }
+              href={data.appEmbedUrl ?? "/app/settings"}
+              targetTop={Boolean(data.appEmbedUrl)}
+            />
           </div>
 
-          <div className="vip-side-stack">
-            <div className="vip-panel vip-health">
-              <h3>System health</h3>
-              <p>Live status of critical layers affecting storefront search.</p>
-              <HealthRow
-                label="AI Search"
-                value={entitlement.searchAllowed && searchSettingReady ? "Online" : "Standby"}
-                state={entitlement.searchAllowed && searchSettingReady ? "success" : "warning"}
-              />
-              <HealthRow
-                label="Catalog"
-                value={catalogReady ? "Synced" : catalogBusy ? "Syncing" : catalogStatus}
-                state={catalogFailed ? "critical" : catalogReady ? "success" : "warning"}
-              />
-              <HealthRow
-                label="Theme"
-                value={themeReady ? "Compatible" : "Check required"}
-                state={themeReady ? "success" : "warning"}
-              />
-              <HealthRow
-                label="App Embed"
-                value={embedReady ? "Enabled" : "Disabled"}
-                state={embedReady ? "success" : "warning"}
-              />
-              <HealthRow
-                label="Background queue"
-                value={`${data.queue.pending} pending · ${data.queue.processing} active`}
-                state={queueState}
-              />
-            </div>
-
-            <div className="vip-panel vip-intel">
-              <div className="vip-intel__icon">AI</div>
-              <h3>Search Analytics</h3>
-              <p>
-                Track NO_RESULTS, LOW_SIMILARITY, and HIGH_SIMILARITY_NO_CLICK anomalies to understand what shoppers are searching for and optimize product discovery.
-              </p>
-              <Link to="/app/search-analytics">Open analytics →</Link>
-            </div>
+          <div className="vip-panel vip-health">
+            <h3>System Health</h3>
+            <HealthRow
+              label="AI Search"
+              value={entitlement.searchAllowed && searchSettingReady ? "Online" : "Standby"}
+              state={entitlement.searchAllowed && searchSettingReady ? "success" : "warning"}
+            />
+            <HealthRow
+              label="Catalog"
+              value={catalogReady ? "Synced" : catalogStatus}
+              state={catalogFailed ? "critical" : catalogReady ? "success" : "warning"}
+            />
+            <HealthRow
+              label="Theme Map"
+              value={themeReady ? "Compatible" : "Check Needed"}
+              state={themeReady ? "success" : "warning"}
+            />
+            <HealthRow
+              label="App Embed"
+              value={embedReady ? "Enabled" : "Disabled"}
+              state={embedReady ? "success" : "warning"}
+            />
+            <HealthRow
+              label="Queue Status"
+              value={`${data.queue.pending} pending · ${data.queue.processing} active`}
+              state={queueState}
+            />
           </div>
-        </section>
-
-        <section className="vip-quick-grid">
-          <QuickLink
-            title="Catalog"
-            detail="Monitor product catalog sync jobs, vector indexes, and status."
-            href="/app/catalog-sync"
-          />
-          <QuickLink
-            title="Search Analytics"
-            detail="Track CTR, clicks, abnormal queries, and result quality."
-            href="/app/search-analytics"
-          />
-          <QuickLink
-            title="Usage"
-            detail="Monitor search quotas, embeddings, fallbacks, and usage logs."
-            href="/app/usage"
-          />
-          <QuickLink
-            title="Plans & Billing"
-            detail="Manage AI Search subscription plans and commercial quotas."
-            href="/app/billing"
-          />
-          <QuickLink
-            title="Settings"
-            detail="Configure search language, result limits, AI status, and storefront options."
-            href="/app/settings"
-          />
-          <QuickLink
-            title="Theme integration"
-            detail={
-              data.theme.themeName
-                ? `Current theme · ${data.theme.themeName}`
-                : "Check App Embed and theme integration status."
-            }
-            href={data.appEmbedUrl ?? "/app/settings"}
-            targetTop={Boolean(data.appEmbedUrl)}
-          />
         </section>
       </div>
     </div>
