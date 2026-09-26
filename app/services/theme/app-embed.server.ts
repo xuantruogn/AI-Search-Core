@@ -33,9 +33,13 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function findAppEmbedBlock(value: unknown): {
+function findAppEmbedBlock(
+  value: unknown,
+  expectedAppHandle: string,
+): {
   found: boolean;
   enabled: boolean;
+  staleOtherAppMatch: boolean;
 } {
   // `settings_data.json` should contain a single app-embed entry, but themes
   // can carry stale/duplicated settings while being edited or migrated. Scan
@@ -43,6 +47,7 @@ function findAppEmbedBlock(value: unknown): {
   // enabled instead of trusting whichever duplicate happens to appear first.
   let found = false;
   let enabled = false;
+  let staleOtherAppMatch = false;
 
   const visit = (node: unknown) => {
     if (enabled) return;
@@ -55,9 +60,21 @@ function findAppEmbedBlock(value: unknown): {
     if (!isObject(node)) return;
 
     const type = typeof node.type === "string" ? node.type : "";
-    const reference = type.match(/^shopify:\/\/apps\/[^/]+\/blocks\/([^/]+)\/([^/]+)$/);
+    const reference = type.match(
+      /^shopify:\/\/apps\/([^/]+)\/blocks\/([^/]+)\/([^/]+)$/,
+    );
     const extensionId = process.env.AI_SEARCH_APP_EMBED_EXTENSION_ID?.trim();
-    if (reference?.[1] === getAiSearchAppEmbedBlockHandle() && (!extensionId || reference[2] === extensionId)) {
+    const sameBlockHandle = reference?.[2] === getAiSearchAppEmbedBlockHandle();
+
+    if (sameBlockHandle && reference?.[1] !== expectedAppHandle) {
+      staleOtherAppMatch = true;
+    }
+
+    if (
+      reference?.[1] === expectedAppHandle &&
+      sameBlockHandle &&
+      (!extensionId || reference[3] === extensionId)
+    ) {
       found = true;
       if (node.disabled !== true) {
         enabled = true;
@@ -69,7 +86,39 @@ function findAppEmbedBlock(value: unknown): {
   };
 
   visit(value);
-  return { found, enabled };
+  return { found, enabled, staleOtherAppMatch };
+}
+
+async function getCurrentAppHandle(admin: AdminGraphqlClient) {
+  const response = await admin.graphql(`#graphql
+    query AiSearchCurrentAppHandle {
+      currentAppInstallation {
+        app {
+          handle
+        }
+      }
+    }
+  `);
+
+  const json = (await response.json()) as {
+    data?: {
+      currentAppInstallation?: {
+        app?: { handle?: string | null } | null;
+      } | null;
+    };
+    errors?: Array<{ message?: string }>;
+  };
+
+  if (!response.ok || json.errors?.length) {
+    throw new Error(
+      json.errors?.map((error) => error.message).filter(Boolean).join("; ") ||
+        `Unable to read current app handle (${response.status})`,
+    );
+  }
+
+  const handle = json.data?.currentAppInstallation?.app?.handle?.trim();
+  if (!handle) throw new Error("Current app handle is unavailable");
+  return handle;
 }
 
 
@@ -96,11 +145,14 @@ export async function getAiSearchAppEmbedStatusForTheme(
   theme: ActiveTheme,
 ) {
   try {
-    const settingsFile = await getThemeFile(
-      admin,
-      theme.id,
-      "config/settings_data.json",
-    );
+    const [settingsFile, currentAppHandle] = await Promise.all([
+      getThemeFile(
+        admin,
+        theme.id,
+        "config/settings_data.json",
+      ),
+      getCurrentAppHandle(admin),
+    ]);
 
     if (!settingsFile) {
       return {
@@ -118,7 +170,7 @@ export async function getAiSearchAppEmbedStatusForTheme(
     // Only saved app embeds in current.blocks are live. Presets, draft
     // section blocks and arbitrary nested strings must not enable the proxy.
     const current = isObject(parsed.current) ? parsed.current : null;
-    const match = findAppEmbedBlock(current?.blocks);
+    const match = findAppEmbedBlock(current?.blocks, currentAppHandle);
 
     return {
       enabled: match.found ? match.enabled : false,
@@ -129,7 +181,9 @@ export async function getAiSearchAppEmbedStatusForTheme(
         ? match.enabled
           ? "ENABLED"
           : "DISABLED"
-        : "NOT_INSTALLED_IN_THEME_SETTINGS",
+        : match.staleOtherAppMatch
+          ? "STALE_OTHER_APP_EMBED_ONLY"
+          : "NOT_INSTALLED_IN_THEME_SETTINGS",
     };
   } catch (error) {
     console.error("[AI Search] App embed status check failed:", {

@@ -15,9 +15,9 @@ type UiState = "success" | "warning" | "critical" | "neutral";
 
 type ThemeSummary = {
   integrationStatus: string;
-  integrationReady: boolean;
   themeMapReady: boolean;
   appEmbedEnabled: boolean | null;
+  appEmbedReason: string | null;
   themeName: string | null;
   renderStrategy: string | null;
 };
@@ -36,30 +36,6 @@ function booleanValue(value: unknown): boolean | null {
   return typeof value === "boolean" ? value : null;
 }
 
-function isThemeExecutionReady(args: {
-  status: string;
-  themeMapReady: boolean;
-  renderStrategy: string | null;
-}) {
-  if (args.themeMapReady) return true;
-
-  const status = args.status.toUpperCase();
-  const strategy = (args.renderStrategy ?? "").toUpperCase();
-
-  if (
-    strategy.includes("THEME_CONTEXT_REQUIRED") ||
-    strategy.includes("TRANSPORT") ||
-    status.includes("THEME_CONTEXT_REQUIRED") ||
-    status.includes("TRANSPORT")
-  ) {
-    return true;
-  }
-
-  return ["READY", "ACTIVE", "VERIFIED", "SUPPORTED"].some((token) =>
-    status.includes(token),
-  );
-}
-
 function normalizeThemeIntegration(value: unknown): ThemeSummary {
   const integration = objectValue(value);
   const appEmbed = objectValue(integration.appEmbed);
@@ -70,10 +46,9 @@ function normalizeThemeIntegration(value: unknown): ThemeSummary {
     stringValue(integration.reason) ??
     "UNKNOWN";
 
-  const themeMapReady =
-    integration.themeMapReady === true ||
-    themeMap.status === "VERIFIED" ||
-    integration.ready === true;
+  // The backend already applies the Theme Map V4 capability rules.
+  // Do not re-infer readiness from loose status strings in the UI.
+  const themeMapReady = integration.themeMapReady === true;
 
   const renderStrategy =
     stringValue(integration.renderStrategy) ??
@@ -83,13 +58,9 @@ function normalizeThemeIntegration(value: unknown): ThemeSummary {
 
   return {
     integrationStatus: status,
-    integrationReady: isThemeExecutionReady({
-      status,
-      themeMapReady,
-      renderStrategy,
-    }),
     themeMapReady,
     appEmbedEnabled: booleanValue(appEmbed.enabled),
+    appEmbedReason: stringValue(appEmbed.reason),
     themeName:
       stringValue(appEmbed.themeName) ??
       stringValue(integration.themeName) ??
@@ -1132,15 +1103,20 @@ export default function Dashboard() {
   const catalogStatus = (data.catalogJob?.status ?? "NOT_STARTED").toUpperCase();
   const catalogReady = catalogStatus === "DONE";
   const catalogBusy = ["PENDING", "PROCESSING", "RUNNING"].includes(catalogStatus);
-  const catalogFailed = catalogStatus === "FAILED" || Boolean(data.catalogJob?.lastError);
+  const catalogFailed =
+    catalogStatus === "FAILED" ||
+    Boolean(data.catalogJob?.lastError) ||
+    (data.catalogJob?.productsFailed ?? 0) > 0;
   const queueHasFailures = data.queue.failed > 0;
+  const subscriptionReady =
+    entitlement.subscriptionStatus === "ACTIVE" && entitlement.plan !== "NONE";
   const embedReady = data.theme.appEmbedEnabled === true;
-  const themeReady = data.theme.integrationReady;
+  const rendererReady = data.theme.themeMapReady;
   const searchSettingReady = data.settings.aiSearchEnabled;
 
   let overall: { state: UiState; title: string; detail: string };
 
-  if (!entitlement.active) {
+  if (!subscriptionReady) {
     overall = {
       state: "warning",
       title: "Activate Plan to Launch AI Search",
@@ -1170,7 +1146,7 @@ export default function Dashboard() {
       title: "One More Step: Enable App Embed",
       detail: "Backend is ready. Enable App Embed in Theme Editor to display AI search on storefront.",
     };
-  } else if (!themeReady) {
+  } else if (!rendererReady) {
     overall = {
       state: "warning",
       title: "Pending Theme Integration Check",
@@ -1193,11 +1169,11 @@ export default function Dashboard() {
   }
 
   const readinessSteps = [
-    entitlement.active,
+    subscriptionReady,
     catalogReady && !catalogFailed && !queueHasFailures,
     searchSettingReady,
     embedReady,
-    themeReady,
+    rendererReady,
   ];
   const readinessDone = readinessSteps.filter(Boolean).length;
   const readinessPercent = Math.round((readinessDone / readinessSteps.length) * 100);
@@ -1493,8 +1469,8 @@ export default function Dashboard() {
               <ReadinessItem
                 index={1}
                 title="Subscription"
-                state={entitlement.active ? "success" : "warning"}
-                status={entitlement.active ? "Active" : "Needs activation"}
+                state={subscriptionReady ? "success" : "warning"}
+                status={subscriptionReady ? "Active" : "Needs activation"}
                 detail={`${entitlement.planLabel} · ${entitlement.subscriptionStatus}`}
                 action={
                   data.pricingUrl
@@ -1550,9 +1526,11 @@ export default function Dashboard() {
                       : "Unknown"
                 }
                 detail={
-                  data.theme.themeName
-                    ? `Published theme: ${data.theme.themeName}`
-                    : "App Embed must be enabled on your active theme."
+                  data.theme.appEmbedEnabled === true
+                    ? `Published theme: ${data.theme.themeName ?? "unknown"} · Current app embed is active.`
+                    : data.theme.appEmbedReason === "STALE_OTHER_APP_EMBED_ONLY"
+                      ? `Published theme: ${data.theme.themeName ?? "unknown"} · A stale embed from another AI-Buyense app installation exists, but this app's embed is not enabled.`
+                      : `Published theme: ${data.theme.themeName ?? "unknown"} · Enable this app's embed in Theme Editor.`
                 }
                 action={
                   data.appEmbedUrl
@@ -1566,7 +1544,7 @@ export default function Dashboard() {
                 state={
                   themeSyncFetcher.data?.success === false
                     ? "critical"
-                    : themeReady
+                    : rendererReady
                       ? "success"
                       : "warning"
                 }
@@ -1575,16 +1553,18 @@ export default function Dashboard() {
                     ? "Syncing"
                     : themeSyncFetcher.data?.success === false
                       ? "Sync failed"
-                      : themeReady
-                        ? "Ready"
+                      : rendererReady
+                        ? "Renderer ready"
                         : "Needs check"
                 }
                 detail={
                   themeSyncFetcher.data?.message
                     ? themeSyncFetcher.data.message
-                    : `Integration: ${data.theme.integrationStatus}${
-                        data.theme.renderStrategy ? ` · ${data.theme.renderStrategy}` : ""
-                      }`
+                    : rendererReady
+                      ? `Published theme renderer is available${
+                          data.theme.renderStrategy ? ` · ${data.theme.renderStrategy}` : ""
+                        }.`
+                      : `Theme renderer unavailable · ${data.theme.integrationStatus}`
                 }
                 actionNode={
                   <themeSyncFetcher.Form method="post" action="/app/settings">
@@ -1596,7 +1576,7 @@ export default function Dashboard() {
                     >
                       {themeSyncing
                         ? "Syncing theme..."
-                        : themeReady
+                        : rendererReady
                           ? "Resync theme"
                           : "Sync theme"}
                     </button>
@@ -1622,8 +1602,8 @@ export default function Dashboard() {
               />
               <HealthRow
                 label="Theme"
-                value={themeReady ? "Compatible" : "Check required"}
-                state={themeReady ? "success" : "warning"}
+                value={rendererReady ? "Compatible" : "Check required"}
+                state={rendererReady ? "success" : "warning"}
               />
               <HealthRow
                 label="App Embed"
