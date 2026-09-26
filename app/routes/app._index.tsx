@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import type { LoaderFunctionArgs } from "react-router";
 import { Link, useFetcher, useLoaderData } from "react-router";
 
@@ -184,18 +184,27 @@ function MetricCard({
   detail,
   progress,
   accent = "violet",
+  isSyncing = false,
 }: {
   eyebrow: string;
   value: string;
   detail: string;
   progress?: number | null;
   accent?: "violet" | "cyan" | "green" | "amber";
+  isSyncing?: boolean;
 }) {
   return (
     <div className={`vip-metric vip-metric--${accent}`}>
       <div className="vip-metric__top">
         <span className="vip-metric__eyebrow">{eyebrow}</span>
-        <span className="vip-metric__spark" aria-hidden="true" />
+        {isSyncing ? (
+          <span className="vip-syncing-tag">
+            <span className="vip-spinner" aria-hidden="true" />
+            Syncing...
+          </span>
+        ) : (
+          <span className="vip-metric__spark" aria-hidden="true" />
+        )}
       </div>
       <div className="vip-metric__value">{value}</div>
       <div className="vip-metric__detail">{detail}</div>
@@ -760,6 +769,28 @@ const dashboardCss = `
   .vip-metric__top { display: flex; justify-content: space-between; gap: 12px; align-items: center; }
   .vip-metric__eyebrow { color: #5c6270; font-size: 12px; font-weight: 800; text-transform: uppercase; letter-spacing: .08em; }
   .vip-metric__spark { width: 8px; height: 8px; border-radius: 50%; background: currentColor; opacity: .65; box-shadow: 0 0 0 5px rgba(120,110,190,.12); }
+  @keyframes vip-spin { to { transform: rotate(360deg); } }
+  .vip-spinner {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    border: 2px solid rgba(0,128,96,.2);
+    border-top-color: #008060;
+    border-radius: 50%;
+    animation: vip-spin .8s linear infinite;
+  }
+  .vip-syncing-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    border-radius: 999px;
+    padding: 4px 9px;
+    background: #e4f8f0;
+    color: #008060;
+    font-size: 11px;
+    font-weight: 800;
+    white-space: nowrap;
+  }
   .vip-metric__value { margin-top: 16px; font-size: 32px; font-weight: 800; letter-spacing: -.03em; color: var(--vip-text); }
   .vip-metric__detail { margin-top: 8px; color: var(--vip-muted); font-size: 13px; line-height: 1.5; }
 
@@ -1100,6 +1131,33 @@ const dashboardCss = `
     font-weight: 600;
   }
 
+  .vip-quality-health {
+    margin-top: 20px;
+    padding-top: 16px;
+    border-top: 1px solid #f0f0f4;
+  }
+  .vip-quality-health__title {
+    margin-bottom: 10px;
+    color: #5c6270;
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+  }
+  .vip-alert-check-item {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    padding: 7px 0;
+    color: var(--vip-text);
+    font-size: 12px;
+    font-weight: 650;
+  }
+  .vip-alert-check-item__ok {
+    color: #008060;
+    font-weight: 900;
+  }
+
   @media (max-width: 980px) {
     .vip-hero__content, .vip-grid, .vip-analytics-grid { grid-template-columns: 1fr; }
     .vip-metrics { grid-template-columns: repeat(2, minmax(0,1fr)); }
@@ -1119,24 +1177,29 @@ export default function Dashboard() {
   const data = useLoaderData<typeof loader>();
   const themeSyncFetcher = useFetcher<{ success?: boolean; message?: string }>();
   const statusFetcher = useFetcher<DashboardStatus>();
+  const themeSyncHandled = useRef(false);
+  const loadDashboardStatus = statusFetcher.load;
   const themeSyncing = themeSyncFetcher.state !== "idle";
   const { entitlement } = data;
 
   useEffect(() => {
-    const loadStatus = () => statusFetcher.load("/app/dashboard-status");
-    loadStatus();
-    const timer = window.setInterval(loadStatus, 5000);
-    return () => window.clearInterval(timer);
-  }, []);
-
-  useEffect(() => {
-    if (
-      themeSyncFetcher.state === "idle" &&
-      themeSyncFetcher.data?.success === true
-    ) {
-      statusFetcher.load("/app/dashboard-status");
+    if (themeSyncFetcher.state !== "idle") {
+      themeSyncHandled.current = false;
+      return;
     }
-  }, [themeSyncFetcher.state, themeSyncFetcher.data?.success]);
+
+    if (
+      themeSyncFetcher.data?.success === true &&
+      !themeSyncHandled.current
+    ) {
+      themeSyncHandled.current = true;
+      loadDashboardStatus("/app/dashboard-status");
+    }
+  }, [
+    themeSyncFetcher.state,
+    themeSyncFetcher.data?.success,
+    loadDashboardStatus,
+  ]);
 
   const live = statusFetcher.data;
   const catalogStatus =
@@ -1234,6 +1297,9 @@ export default function Dashboard() {
   ];
   const readinessDone = readinessSteps.filter(Boolean).length;
   const readinessPercent = Math.round((readinessDone / readinessSteps.length) * 100);
+  const isFullyReady = live?.allReady ?? readinessDone === readinessSteps.length;
+  const showLiveSetup = !isFullyReady;
+  const isBackgroundSyncing = catalogBusy;
 
   const searchRemaining = remaining(
     entitlement.limits.searchLimit,
@@ -1377,6 +1443,7 @@ export default function Dashboard() {
             detail={`${entitlement.cachedVectorCount.toLocaleString("en-US")} vectors cached · ${entitlement.cachedProductLimitBlockedProducts.toLocaleString("en-US")} cached & blocked from AI Search.`}
             progress={productProgress}
             accent="violet"
+            isSyncing={isBackgroundSyncing}
           />
           <MetricCard
             eyebrow="AI searches"
@@ -1505,14 +1572,36 @@ export default function Dashboard() {
               </div>
             )}
 
+            <div className="vip-quality-health">
+              <div className="vip-quality-health__title">
+                Search Quality Health Monitor
+              </div>
+              <div className="vip-alert-check-item">
+                <span className="vip-alert-check-item__ok">✓</span>
+                <span>Zero-Result Query Prevention</span>
+              </div>
+              <div className="vip-alert-check-item">
+                <span className="vip-alert-check-item__ok">✓</span>
+                <span>Low-Similarity AI Fallback</span>
+              </div>
+              <div className="vip-alert-check-item">
+                <span className="vip-alert-check-item__ok">✓</span>
+                <span>Click-Through Rate (CTR) Tracking</span>
+              </div>
+            </div>
+
             <div style={{ marginTop: 16 }}>
               <Link to="/app/search-analytics">Open Search Analytics →</Link>
             </div>
           </aside>
         </section>
 
-        <section className="vip-grid">
-          <div className="vip-panel">
+        <section
+          className="vip-grid"
+          style={showLiveSetup ? undefined : { gridTemplateColumns: "1fr" }}
+        >
+          {showLiveSetup ? (
+            <div className="vip-panel">
             <div className="vip-panel__head">
               <div>
                 <h3>Production readiness</h3>
@@ -1642,6 +1731,7 @@ export default function Dashboard() {
               />
             </div>
           </div>
+          ) : null}
 
           <div className="vip-side-stack">
             <div className="vip-panel vip-health">

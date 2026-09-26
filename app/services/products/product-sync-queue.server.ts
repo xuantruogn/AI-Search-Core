@@ -40,7 +40,7 @@ function readPositiveInteger(name: string, fallback: number) {
 
 const QUEUE_POLL_MS = readPositiveInteger(
   "AI_SEARCH_SYNC_QUEUE_POLL_MS",
-  10_000,
+  60_000,
 );
 
 const QUEUE_MAX_JOBS_PER_DRAIN = readPositiveInteger(

@@ -5,7 +5,6 @@ import { getShopEntitlement } from "../services/commerce/entitlement.server";
 import { getProductSyncQueueStats } from "../services/products/product-sync-job.server";
 import { getLatestCatalogSyncJob } from "../services/catalog/catalog-sync-job.server";
 import { getThemeIntegrationStatus } from "../services/theme/theme-integration.server";
-import { getShopSettings } from "../services/commerce/shop-registry.server";
 
 function objectValue(value: unknown): Record<string, unknown> {
   return value && typeof value === "object"
@@ -50,22 +49,16 @@ function normalizeThemeIntegration(value: unknown) {
 export async function loader({ request }: LoaderFunctionArgs) {
   const { admin, session } = await authenticate.admin(request);
 
-  const [
-    entitlement,
-    queue,
-    catalogJob,
-    themeIntegration,
-    settings,
-  ] = await Promise.all([
-    getShopEntitlement(session.shop),
-    getProductSyncQueueStats(session.shop),
-    getLatestCatalogSyncJob(session.shop),
-    getThemeIntegrationStatus({
-      admin,
-      shop: session.shop,
-    }),
-    getShopSettings(session.shop),
-  ]);
+  const [entitlement, queue, catalogJob, themeIntegration] =
+    await Promise.all([
+      getShopEntitlement(session.shop),
+      getProductSyncQueueStats(session.shop),
+      getLatestCatalogSyncJob(session.shop),
+      getThemeIntegrationStatus({
+        admin,
+        shop: session.shop,
+      }),
+    ]);
 
   const catalogStatus =
     (catalogJob?.status ?? "NOT_STARTED").toUpperCase();
@@ -90,12 +83,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     !queueBusy &&
     queue.failed === 0;
 
-  const normalizedSettings = objectValue(settings);
-
-  const aiSearchEnabled =
-    typeof normalizedSettings.aiSearchEnabled === "boolean"
-      ? normalizedSettings.aiSearchEnabled
-      : true;
+  const aiSearchEnabled = entitlement.aiSearchEnabled;
 
   const theme = normalizeThemeIntegration(themeIntegration);
 

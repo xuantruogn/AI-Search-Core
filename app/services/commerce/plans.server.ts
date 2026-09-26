@@ -133,12 +133,14 @@ export function hasExplicitDevPlanOverride() {
 
 export function getDevPlanOverride(): AiSearchPlan | null {
 
-   console.log(
-  "[BILLING DEBUG] AI_SEARCH_DEV_PLAN =",
-  process.env.AI_SEARCH_DEV_PLAN,
-  "NODE_ENV =",
-  process.env.NODE_ENV,
-);
+  if (process.env.AI_SEARCH_BILLING_DEBUG === "true") {
+    console.log(
+      "[BILLING DEBUG] AI_SEARCH_DEV_PLAN =",
+      process.env.AI_SEARCH_DEV_PLAN,
+      "NODE_ENV =",
+      process.env.NODE_ENV,
+    );
+  }
 
   const value = process.env.AI_SEARCH_DEV_PLAN?.trim();
 

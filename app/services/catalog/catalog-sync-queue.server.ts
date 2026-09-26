@@ -977,7 +977,7 @@ export function startCatalogSyncQueueWorker() {
 
       readPositiveInteger(
         "AI_SEARCH_CATALOG_QUEUE_POLL_MS",
-        30_000,
+        60_000,
       ),
     );
 

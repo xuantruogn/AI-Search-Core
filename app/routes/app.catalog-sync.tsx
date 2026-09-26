@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { useFetcher, useLoaderData } from "react-router";
 
@@ -357,6 +357,8 @@ export default function CatalogSyncPage() {
   const statusFetcher = useFetcher<{
     job: typeof initialData.job;
   }>();
+  const statusRequestInFlight = useRef(false);
+  const loadCatalogStatus = statusFetcher.load;
 
   const [activeTab, setActiveTab] = useState<"indexed" | "unindexed">("indexed");
   const [currentPage, setCurrentPage] = useState(1);
@@ -381,18 +383,23 @@ export default function CatalogSyncPage() {
   };
 
   useEffect(() => {
-  if (!isProcessing) return;
+    statusRequestInFlight.current = statusFetcher.state !== "idle";
+  }, [statusFetcher.state]);
 
-  const loadStatus = () => {
-    statusFetcher.load("/app/catalog-status");
-  };
+  useEffect(() => {
+    if (!isProcessing) return;
 
-  loadStatus();
+    const loadStatus = () => {
+      if (document.hidden || statusRequestInFlight.current) return;
 
-  const timer = window.setInterval(loadStatus, 3000);
+      statusRequestInFlight.current = true;
+      loadCatalogStatus("/app/catalog-status");
+    };
 
-  return () => window.clearInterval(timer);
-}, [isProcessing]);
+    const timer = window.setInterval(loadStatus, 3000);
+
+    return () => window.clearInterval(timer);
+  }, [isProcessing, loadCatalogStatus]);
 
   // HÀM TÍNH TOÁN CÁC NÚT SỐ TRANG HIỂN THỊ (VD: 1, 2, 3, 4, 5...)
   const getPageNumbers = (current: number, total: number) => {
