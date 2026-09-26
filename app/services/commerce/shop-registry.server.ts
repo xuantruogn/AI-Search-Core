@@ -9,6 +9,10 @@ import type {
   ShopSettingsSnapshot,
   SubscriptionSnapshot,
 } from "./types.server";
+import {
+  getBillingSubscriptionSnapshot,
+  recordBillingEvent,
+} from "./billing-state.server";
 
 type AdminGraphqlClient = {
   graphql: (
@@ -347,44 +351,9 @@ export async function getSubscriptionSnapshot(
 ): Promise<SubscriptionSnapshot> {
   if (options?.ensure !== false) await ensureShopRecord({ shop });
 
-  const rows = await db.$queryRaw<SubscriptionRow[]>`
-    SELECT
-      \`shop\`,
-      \`plan\`,
-      \`status\`,
-      \`planHandle\`,
-      \`shopifySubscriptionId\`,
-      \`billingPeriodStart\`,
-      \`billingPeriodEnd\`,
-      \`source\`,
-      \`lastSyncedAt\`
-    FROM \`AiSearchSubscription\`
-    WHERE \`shop\` = ${shop}
-    LIMIT 1
-  `;
+  const snapshot = await getBillingSubscriptionSnapshot(shop);
 
-  const row = rows[0];
-
-  if (!row) {
-    throw new Error(`AI Search subscription missing for ${shop}`);
-  }
-
-  const plan =
-    row.plan === AI_SEARCH_PLAN.basic || row.plan === AI_SEARCH_PLAN.pro
-      ? row.plan
-      : AI_SEARCH_PLAN.none;
-
-  return {
-    shop: row.shop,
-    plan,
-    status: row.status,
-    planHandle: row.planHandle,
-    shopifySubscriptionId: row.shopifySubscriptionId,
-    billingPeriodStart: asDate(row.billingPeriodStart),
-    billingPeriodEnd: asDate(row.billingPeriodEnd),
-    source: row.source,
-    lastSyncedAt: asDate(row.lastSyncedAt),
-  };
+  return snapshot;
 }
 
 export async function getShopSettings(
@@ -461,12 +430,25 @@ export async function updateShopSettings({
 export async function markShopUninstalled(shop: string) {
   // Never bootstrap a missing tenant during uninstall. A delayed/retried
   // webhook after shop/redact must not recreate data that was already erased.
+  const activeBillingSubscriptions = await db.billingSubscription.findMany({
+    where: {
+      shop,
+      status: { in: ["ACTIVE", "PENDING", "FROZEN"] },
+    },
+    select: {
+      id: true,
+      shopifySubscriptionGid: true,
+    },
+  });
+
   await db.$transaction([
     db.$executeRaw`
       UPDATE \`AiSearchShop\`
       SET
         \`status\` = 'UNINSTALLED',
         \`uninstalledAt\` = UTC_TIMESTAMP(3),
+        \`currentPlanHandle\` = NULL,
+        \`currentSubscriptionGid\` = NULL,
         \`updatedAt\` = UTC_TIMESTAMP(3)
       WHERE \`shop\` = ${shop}
     `,
@@ -477,6 +459,16 @@ export async function markShopUninstalled(shop: string) {
         \`updatedAt\` = UTC_TIMESTAMP(3)
       WHERE \`shop\` = ${shop}
     `,
+    db.billingSubscription.updateMany({
+      where: {
+        shop,
+        status: { in: ["ACTIVE", "PENDING", "FROZEN"] },
+      },
+      data: {
+        status: "CANCELLED",
+        cancelledAt: new Date(),
+      },
+    }),
     db.$executeRaw`
       UPDATE \`AiSearchSyncJob\`
       SET
@@ -496,6 +488,16 @@ export async function markShopUninstalled(shop: string) {
       WHERE \`shop\` = ${shop} AND \`status\` IN ('PENDING', 'PROCESSING', 'FAILED')
     `,
   ]);
+
+  for (const subscription of activeBillingSubscriptions) {
+    await recordBillingEvent({
+      shop,
+      subscriptionGid: subscription.shopifySubscriptionGid,
+      type: "APP_UNINSTALLED",
+      source: "WEBHOOK",
+      idempotencyKey: `app-uninstalled:${shop}:${subscription.shopifySubscriptionGid ?? subscription.id}`,
+    });
+  }
 }
 
 export async function deleteShopCommercialData(shop: string) {

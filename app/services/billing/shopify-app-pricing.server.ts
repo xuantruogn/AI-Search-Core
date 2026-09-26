@@ -9,6 +9,11 @@ import {
   fetchShopIdentity,
   getSubscriptionSnapshot,
 } from "../commerce/shop-registry.server";
+import {
+  ensureBillingV2State,
+  mirrorBillingStateToLegacy,
+  recordBillingEvent,
+} from "../commerce/billing-state.server";
 import { withDistributedLease } from "../commerce/lease-lock.server";
 
 type AdminGraphqlClient = {
@@ -160,9 +165,9 @@ function inferPlan({
   itemHandles: string[];
 }) {
   // `plan_handle` is browser-controlled and is only a refresh/UI hint. The
-  // Partner API active items are canonical. If a transition briefly exposes
-  // more than one recognized item, grant the highest verified tier rather
-  // than depending on provider array order or a user-editable query string.
+  // Partner API active items are canonical. Basic/Pro are mapped explicitly.
+  // Any other active handle is treated as CUSTOM only after a matching
+  // shop-specific Plan record is found by the Billing V2 resolver.
   const recognized = itemHandles
     .map((handle) => ({ handle, plan: planFromHandle(handle) }))
     .filter((item) => item.plan !== AI_SEARCH_PLAN.none);
@@ -173,11 +178,9 @@ function inferPlan({
   const basic = recognized.find((item) => item.plan === AI_SEARCH_PLAN.basic);
   if (basic) return { plan: basic.plan, planHandle: basic.handle };
 
-  // Preserve the provider handle for diagnostics only; it never grants an
-  // entitlement when the mapping is unknown.
   const preferred = preferredPlanHandle?.trim();
   return {
-    plan: AI_SEARCH_PLAN.none,
+    plan: itemHandles.length > 0 ? AI_SEARCH_PLAN.custom : AI_SEARCH_PLAN.none,
     planHandle: itemHandles[0] ?? preferred ?? null,
   };
 }
@@ -218,23 +221,49 @@ export async function refreshShopifyAppPricingSubscription({
     };
   }
 
+  await ensureBillingV2State(shop);
+
   if (!result.subscription) {
+    const active = await db.billingSubscription.findFirst({
+      where: {
+        shop,
+        status: { in: ["ACTIVE", "PENDING", "FROZEN"] },
+      },
+      orderBy: { updatedAt: "desc" },
+    });
+
+    if (active) {
+      await db.billingSubscription.update({
+        where: { id: active.id },
+        data: {
+          status: "CANCELLED",
+          cancelledAt: new Date(),
+        },
+      });
+
+      await recordBillingEvent({
+        shop,
+        subscriptionGid: active.shopifySubscriptionGid,
+        type: "SUBSCRIPTION_CANCELLED",
+        source: "API",
+        idempotencyKey: `subscription-cancelled:${active.shopifySubscriptionGid ?? active.id}`,
+        payload: {
+          reason: "SHOPIFY_ACTIVE_SUBSCRIPTION_NOT_FOUND",
+        },
+      });
+    }
+
     await db.$executeRaw`
-      UPDATE \`AiSearchSubscription\`
+      UPDATE \`AiSearchShop\`
       SET
-        \`plan\` = 'NONE',
-        \`status\` = 'INACTIVE',
-        \`planHandle\` = NULL,
-        \`shopifySubscriptionId\` = NULL,
-        \`billingPeriodStart\` = NULL,
-        \`billingPeriodEnd\` = NULL,
-        \`source\` = 'SHOPIFY_APP_PRICING',
-        \`lastSyncedAt\` = UTC_TIMESTAMP(3),
+        \`currentPlanHandle\` = NULL,
+        \`currentSubscriptionGid\` = NULL,
         \`updatedAt\` = UTC_TIMESTAMP(3)
       WHERE \`shop\` = ${shop}
     `;
 
     const subscription = await getSubscriptionSnapshot(shop);
+    await mirrorBillingStateToLegacy(subscription);
 
     return {
       configured: true as const,
@@ -247,10 +276,6 @@ export async function refreshShopifyAppPricingSubscription({
     };
   }
 
-  // Managed Pricing can retain historical item prices after a plan price
-  // changes. Shopify marks those old prices as `active: false`; never let an
-  // inactive price grant an entitlement. Only current active pricing items
-  // are eligible for Basic/Pro mapping.
   const itemHandles = (result.subscription.items ?? [])
     .filter((item) => item.price?.active === true)
     .map((item) => item.handle?.trim())
@@ -261,27 +286,65 @@ export async function refreshShopifyAppPricingSubscription({
     itemHandles,
   });
 
-  if (inferred.plan === AI_SEARCH_PLAN.none) {
-    // Partner API responded successfully, so an unrecognized active item must
-    // fail closed. Keeping the previous local PRO/BASIC row would allow stale
-    // paid entitlement indefinitely after a pricing configuration change.
+  if (inferred.plan === AI_SEARCH_PLAN.none || !inferred.planHandle) {
+    throw new Error(
+      "Active Shopify App Pricing subscription has no active pricing item.",
+    );
+  }
+
+  let plan = null;
+
+  if (
+    inferred.plan === AI_SEARCH_PLAN.basic ||
+    inferred.plan === AI_SEARCH_PLAN.pro
+  ) {
+    plan = await db.plan.findUnique({
+      where: { handle: inferred.plan.toLowerCase() },
+    });
+  } else {
+    plan = await db.plan.findFirst({
+      where: {
+        OR: [
+          { handle: inferred.planHandle },
+          { shopifyPlanHandle: inferred.planHandle },
+        ],
+      },
+    });
+
+    if (!plan) {
+      const assignment = await db.planAssignment.findFirst({
+        where: {
+          shop,
+          isActive: true,
+          plan: {
+            OR: [
+              { handle: inferred.planHandle },
+              { shopifyPlanHandle: inferred.planHandle },
+            ],
+          },
+        },
+        include: { plan: true },
+        orderBy: { createdAt: "desc" },
+      });
+      plan = assignment?.plan ?? null;
+    }
+  }
+
+  if (!plan) {
+    // Unknown Shopify handles are not granted an implicit entitlement. A
+    // CUSTOM plan must first exist in Billing V2 and be associated with this
+    // shop, so limits are always explicit and auditable.
     await db.$executeRaw`
-      UPDATE \`AiSearchSubscription\`
+      UPDATE \`AiSearchShop\`
       SET
-        \`plan\` = 'NONE',
-        \`status\` = 'INACTIVE',
-        \`planHandle\` = ${inferred.planHandle},
-        \`shopifySubscriptionId\` = ${result.subscription.legacySubscriptionId ?? null},
-        \`billingPeriodStart\` = NULL,
-        \`billingPeriodEnd\` = NULL,
-        \`source\` = 'SHOPIFY_APP_PRICING',
-        \`lastSyncedAt\` = UTC_TIMESTAMP(3),
+        \`currentPlanHandle\` = ${inferred.planHandle},
+        \`currentSubscriptionGid\` = ${result.subscription.legacySubscriptionId ?? null},
         \`updatedAt\` = UTC_TIMESTAMP(3)
       WHERE \`shop\` = ${shop}
     `;
 
     throw new Error(
-      `Active Shopify App Pricing subscription found, but its plan could not be mapped. AI Search was disabled until AI_SEARCH_BASIC_PLAN_HANDLES / AI_SEARCH_PRO_PLAN_HANDLES is corrected. Handles: ${itemHandles.join(", ") || "none"}`,
+      `Active Shopify App Pricing plan "${inferred.planHandle}" is not configured in Billing V2. Create/assign its Plan record before activating it.`,
     );
   }
 
@@ -291,30 +354,118 @@ export async function refreshShopifyAppPricingSubscription({
   const end = parsePartnerDate(
     result.subscription.currentBillingCycle?.endTime,
   );
+  const gid = result.subscription.legacySubscriptionId ?? null;
+
+  let current = gid
+    ? await db.billingSubscription.findUnique({
+        where: { shopifySubscriptionGid: gid },
+      })
+    : null;
+
+  if (!current) {
+    current = await db.billingSubscription.findFirst({
+      where: {
+        shop,
+        status: { in: ["ACTIVE", "PENDING", "FROZEN"] },
+      },
+      orderBy: { updatedAt: "desc" },
+    });
+  }
+
+  if (current && current.shopifySubscriptionGid !== gid) {
+    await db.billingSubscription.update({
+      where: { id: current.id },
+      data: {
+        status: "CANCELLED",
+        cancelledAt: new Date(),
+      },
+    });
+
+    await recordBillingEvent({
+      shop,
+      subscriptionGid: current.shopifySubscriptionGid,
+      type: "SUBSCRIPTION_CANCELLED",
+      source: "API",
+      idempotencyKey: `subscription-replaced:${current.shopifySubscriptionGid ?? current.id}:${gid ?? "none"}`,
+      payload: { replacementSubscriptionGid: gid },
+    });
+
+    current = null;
+  }
+
+  const data = {
+    shop,
+    planId: plan.id,
+    shopifySubscriptionGid: gid,
+    shopifyPlanHandle: inferred.planHandle,
+    status: "ACTIVE" as const,
+    planNameSnapshot: plan.name,
+    priceSnapshot: plan.price,
+    currencySnapshot: plan.currencyCode,
+    intervalSnapshot: plan.interval,
+    trialEndsAt: parsePartnerDate(result.subscription.trialEndsAt),
+    currentPeriodStartsAt: start,
+    currentPeriodEndsAt: end,
+    activatedAt: current?.activatedAt ?? new Date(),
+    testMode: process.env.NODE_ENV !== "production",
+    rawResponse: result.subscription as unknown as object,
+  };
+
+  const subscription = current
+    ? await db.billingSubscription.update({
+        where: { id: current.id },
+        data,
+      })
+    : await db.billingSubscription.create({ data });
+
+  const eventType =
+    before.plan !== (plan.handle === "basic"
+      ? AI_SEARCH_PLAN.basic
+      : plan.handle === "pro"
+        ? AI_SEARCH_PLAN.pro
+        : AI_SEARCH_PLAN.custom)
+      ? "BILLING_RECONCILED"
+      : current
+        ? "BILLING_RECONCILED"
+        : "SUBSCRIPTION_CREATED";
+
+  await recordBillingEvent({
+    shop,
+    subscriptionGid: gid,
+    type: eventType,
+    source: "API",
+    idempotencyKey: `billing-reconcile:${gid ?? subscription.id}:${inferred.planHandle}:${start?.toISOString() ?? "none"}:${end?.toISOString() ?? "none"}`,
+    payload: {
+      planId: plan.id,
+      planHandle: inferred.planHandle,
+      billingPeriodStart: start?.toISOString() ?? null,
+      billingPeriodEnd: end?.toISOString() ?? null,
+    },
+  });
 
   await db.$executeRaw`
-    UPDATE \`AiSearchSubscription\`
+    UPDATE \`AiSearchShop\`
     SET
-      \`plan\` = ${inferred.plan},
-      \`status\` = 'ACTIVE',
-      \`planHandle\` = ${inferred.planHandle},
-      \`shopifySubscriptionId\` = ${result.subscription.legacySubscriptionId ?? null},
-      \`billingPeriodStart\` = ${start},
-      \`billingPeriodEnd\` = ${end},
-      \`source\` = 'SHOPIFY_APP_PRICING',
-      \`lastSyncedAt\` = UTC_TIMESTAMP(3),
+      \`currentPlanHandle\` = ${inferred.planHandle},
+      \`currentSubscriptionGid\` = ${gid},
+      \`pendingPlanHandle\` = NULL,
+      \`pendingSubscriptionGid\` = NULL,
+      \`pendingChangeAt\` = NULL,
       \`updatedAt\` = UTC_TIMESTAMP(3)
     WHERE \`shop\` = ${shop}
   `;
 
-  const subscription = await getSubscriptionSnapshot(shop);
+  const snapshot = await getSubscriptionSnapshot(shop);
+  await mirrorBillingStateToLegacy(snapshot);
 
   return {
     configured: true as const,
-    subscription,
+    subscription: snapshot,
     changed:
-      before.plan !== subscription.plan ||
-      before.status !== subscription.status,
+      before.plan !== snapshot.plan ||
+      before.status !== snapshot.status ||
+      before.planHandle !== snapshot.planHandle ||
+      before.shopifySubscriptionId !== snapshot.shopifySubscriptionId,
     previousPlan: before.plan,
     previousStatus: before.status,
   };

@@ -3,6 +3,9 @@ import type { AiSearchPlan, PlanLimits } from "./plans.server";
 export type SubscriptionSnapshot = {
   shop: string;
   plan: AiSearchPlan;
+  planId: string | null;
+  planLabel: string;
+  limits: PlanLimits;
   status: string;
   planHandle: string | null;
   shopifySubscriptionId: string | null;

@@ -1,6 +1,5 @@
 import db from "../../db.server";
 import { getIndexedProductStats } from "./indexed-products.server";
-import { PLAN_DEFINITIONS } from "./plans.server";
 import {
   ensureShopRecord,
   getShopLifecycleStatus,
@@ -56,19 +55,19 @@ export async function getShopEntitlement(
   `;
   const catalogSyncStatus = catalogRows[0]?.status ?? null;
 
-  const definition = PLAN_DEFINITIONS[subscription.plan];
-
+  // Billing V2 is the source of truth for plan limits. Merchant-level
+  // overrides remain an explicit layer above the stored Plan.
   const limits = {
     productLimit: applyOverride(
-      definition.limits.productLimit,
+      subscription.limits.productLimit,
       settings.productLimitOverride,
     ),
     searchLimit: applyOverride(
-      definition.limits.searchLimit,
+      subscription.limits.searchLimit,
       settings.searchLimitOverride,
     ),
     vectorUpdateLimit: applyOverride(
-      definition.limits.vectorUpdateLimit,
+      subscription.limits.vectorUpdateLimit,
       settings.vectorUpdateLimitOverride,
     ),
   };
@@ -115,7 +114,7 @@ export async function getShopEntitlement(
   return {
     shop,
     plan: subscription.plan,
-    planLabel: definition.label,
+    planLabel: subscription.planLabel,
     subscriptionStatus: subscription.status,
     active,
     aiSearchEnabled: settings.aiSearchEnabled,

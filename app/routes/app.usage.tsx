@@ -3,7 +3,8 @@ import { useLoaderData } from "react-router";
 
 import prisma from "../db.server";
 import { authenticate } from "../shopify.server";
-import { PLAN_DEFINITIONS } from "../services/commerce/plans.server";
+import { getShopEntitlement } from "../services/commerce/entitlement.server";
+import { getSubscriptionSnapshot } from "../services/commerce/shop-registry.server";
 
 // ============================================================================
 // 1. BACKEND LOADER: TRUY VẤN CSDL TRỰC TIẾP TỪ PRISMA SCHEMA
@@ -12,95 +13,38 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
   const shop = session.shop;
 
-  const now = new Date();
-
-  // A. Lấy thông tin Shop & Subscription từ CSDL
-  const shopRecord = await prisma.aiSearchShop.findUnique({
-    where: { shop },
-    include: {
-      subscription: true,
-      settings: true,
-    },
-  });
-
-  // B. Lấy Kỳ Usage hiện tại (AiSearchUsagePeriod)
-  let currentPeriod = await prisma.aiSearchUsagePeriod.findFirst({
-    where: {
-      shop,
-      periodStart: { lte: now },
-      periodEnd: { gte: now },
-    },
-    orderBy: { createdAt: "desc" },
-  });
-
-  // Fallback: Nếu chưa tạo Period cho tháng này thì lấy kỳ gần nhất
-  if (!currentPeriod) {
-    currentPeriod = await prisma.aiSearchUsagePeriod.findFirst({
+  const [entitlement, subscription, recentEvents] = await Promise.all([
+    getShopEntitlement(shop),
+    getSubscriptionSnapshot(shop, { ensure: false }),
+    prisma.aiSearchUsageEvent.findMany({
       where: { shop },
       orderBy: { createdAt: "desc" },
-    });
-  }
+      take: 50,
+    }),
+  ]);
 
-  // C. Đếm tổng số sản phẩm đã Index trong Vector Database (AiSearchIndexedProduct)
-  const indexedProductsCount = await prisma.aiSearchIndexedProduct.count({
-    where: {
-      shop,
-      status: "INDEXED",
-    },
-  });
-
-  // D. Lấy 50 Sự kiện Usage gần nhất (AiSearchUsageEvent)
-  const recentEvents = await prisma.aiSearchUsageEvent.findMany({
-    where: { shop },
-    orderBy: { createdAt: "desc" },
-    take: 50,
-  });
-
-  // E. Xác định Giới hạn Hạn ngạch (Limits) dựa trên Gói Subscription (BASIC / PRO)
-  const currentPlanKey = (shopRecord?.subscription?.plan || "BASIC").toUpperCase();
-  const planDef = PLAN_DEFINITIONS[currentPlanKey as keyof typeof PLAN_DEFINITIONS] || PLAN_DEFINITIONS.BASIC;
-
-  const limits = {
-    productLimit: shopRecord?.settings?.productLimitOverride ?? planDef.limits.productLimit,
-    searchLimit: shopRecord?.settings?.searchLimitOverride ?? planDef.limits.searchLimit,
-    vectorUpdateLimit: shopRecord?.settings?.vectorUpdateLimitOverride ?? planDef.limits.vectorUpdateLimit,
-  };
-
-  // F. Đếm số sản phẩm bị vượt trần giới hạn gói cước
-  const totalCatalogProducts = await prisma.aiSearchIndexedProduct.count({ where: { shop } });
-  const productLimitBlocked = limits.productLimit !== null 
-    ? Math.max(0, totalCatalogProducts - limits.productLimit)
-    : 0;
+  const usage = entitlement.usage;
 
   return {
     shop,
     subscription: {
-      plan: currentPlanKey,
-      status: shopRecord?.subscription?.status || "ACTIVE",
-      source: shopRecord?.subscription?.source || "LOCAL",
+      plan: subscription.plan,
+      planLabel: subscription.planLabel,
+      status: subscription.status,
+      source: subscription.source,
     },
-    period: currentPeriod
-      ? {
-          periodStart: currentPeriod.periodStart.toISOString(),
-          periodEnd: currentPeriod.periodEnd.toISOString(),
-          searchCount: currentPeriod.searchCount,
-          vectorUpdateCount: currentPeriod.vectorUpdateCount,
-          fallbackCount: currentPeriod.fallbackCount,
-          blockedSearchCount: currentPeriod.blockedSearchCount,
-          blockedVectorCount: currentPeriod.blockedVectorCount,
-        }
-      : {
-          periodStart: new Date(now.getFullYear(), now.getMonth(), 1).toISOString(),
-          periodEnd: new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString(),
-          searchCount: 0,
-          vectorUpdateCount: 0,
-          fallbackCount: 0,
-          blockedSearchCount: 0,
-          blockedVectorCount: 0,
-        },
-    indexedProductsCount,
-    productLimitBlocked,
-    limits,
+    period: {
+      periodStart: usage.periodStart.toISOString(),
+      periodEnd: usage.periodEnd.toISOString(),
+      searchCount: usage.searchCount,
+      vectorUpdateCount: usage.vectorUpdateCount,
+      fallbackCount: usage.fallbackCount,
+      blockedSearchCount: usage.blockedSearchCount,
+      blockedVectorCount: usage.blockedVectorCount,
+    },
+    indexedProductsCount: entitlement.indexedProducts,
+    productLimitBlocked: entitlement.productLimitBlockedProducts,
+    limits: entitlement.limits,
     events: recentEvents.map((event) => ({
       id: event.id,
       type: event.type,
