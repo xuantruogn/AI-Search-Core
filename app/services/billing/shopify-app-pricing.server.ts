@@ -25,6 +25,7 @@ type AdminGraphqlClient = {
   ) => Promise<Response>;
 };
 
+
 type ActiveSubscriptionResponse = {
   data?: {
     activeSubscription?: {
@@ -51,6 +52,40 @@ type ActiveSubscriptionResponse = {
     };
   }>;
 };
+
+type AdminActiveSubscriptionResponse = {
+  data?: {
+    currentAppInstallation?: {
+      activeSubscriptions?: Array<{
+        id: string;
+        name: string;
+        status: string;
+        createdAt: string;
+        currentPeriodEnd?: string | null;
+        trialDays?: number;
+        test?: boolean;
+        lineItems?: Array<{
+          id: string;
+          plan?: {
+            pricingDetails?: {
+              __typename?: string;
+              planHandle?: string | null;
+              interval?: string | null;
+              price?: {
+                amount?: string | null;
+                currencyCode?: string | null;
+              } | null;
+            } | null;
+          } | null;
+        }>;
+      }>;
+    } | null;
+  };
+  errors?: Array<{
+    message?: string;
+  }>;
+};
+
 
 function getPartnerConfig() {
   const organizationId = process.env.SHOPIFY_PARTNER_ORG_ID?.trim();
@@ -179,10 +214,22 @@ function inferPlan({
   if (basic) return { plan: basic.plan, planHandle: basic.handle };
 
   const preferred = preferredPlanHandle?.trim();
-  return {
-    plan: itemHandles.length > 0 ? AI_SEARCH_PLAN.custom : AI_SEARCH_PLAN.none,
-    planHandle: itemHandles[0] ?? preferred ?? null,
-  };
+
+if (preferred) {
+  const preferredPlan = planFromHandle(preferred);
+
+  if (preferredPlan !== AI_SEARCH_PLAN.none) {
+    return {
+      plan: preferredPlan,
+      planHandle: preferred,
+    };
+  }
+}
+
+return {
+  plan: itemHandles.length > 0 ? AI_SEARCH_PLAN.custom : AI_SEARCH_PLAN.none,
+  planHandle: itemHandles[0] ?? preferred ?? null,
+};
 }
 
 function parsePartnerDate(value: string | null | undefined) {
@@ -191,14 +238,99 @@ function parsePartnerDate(value: string | null | undefined) {
   return Number.isNaN(date.getTime()) ? null : date;
 }
 
+type ReconciledActiveSubscription = NonNullable<
+  NonNullable<ActiveSubscriptionResponse["data"]>["activeSubscription"]
+>;
+
+async function queryAdminActiveSubscription(
+  admin: AdminGraphqlClient,
+  expectedSubscriptionGid?: string | null,
+) {
+  const response = await admin.graphql(
+    `#graphql
+      query GetCurrentAppActiveSubscriptions {
+        currentAppInstallation {
+          activeSubscriptions {
+            id
+            name
+            status
+            createdAt
+            currentPeriodEnd
+            trialDays
+            test
+            lineItems {
+              id
+              plan {
+                pricingDetails {
+                  __typename
+                  ... on AppRecurringPricing {
+                    planHandle
+                    interval
+                    price {
+                      amount
+                      currencyCode
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    `,
+  );
+
+  const body =
+    (await response.json()) as AdminActiveSubscriptionResponse;
+
+  if (!response.ok || body.errors?.length) {
+    const message =
+      body.errors
+        ?.map((error) => error.message)
+        .filter(Boolean)
+        .join("; ") ||
+      "Shopify Admin API request failed.";
+
+    throw new Error(message);
+  }
+
+  const subscriptions =
+    body.data?.currentAppInstallation?.activeSubscriptions ?? [];
+
+  const activeSubscriptions = subscriptions.filter(
+      (subscription) => subscription.status === "ACTIVE",
+    );
+
+    if (expectedSubscriptionGid) {
+      return (
+        activeSubscriptions.find(
+          (subscription) =>
+            subscription.id === expectedSubscriptionGid,
+        ) ?? null
+      );
+    }
+
+    return (
+      [...activeSubscriptions].sort(
+        (a, b) =>
+          new Date(b.createdAt).getTime() -
+          new Date(a.createdAt).getTime(),
+      )[0] ?? null
+    );
+}
+
+
+
 export async function refreshShopifyAppPricingSubscription({
   shop,
   admin,
   preferredPlanHandle,
+  adminSubscription,
 }: {
   shop: string;
   admin: AdminGraphqlClient;
   preferredPlanHandle?: string | null;
+  adminSubscription?: ReconciledActiveSubscription | null;
 }) {
   const identity = await fetchShopIdentity(admin);
 
@@ -209,7 +341,13 @@ export async function refreshShopifyAppPricingSubscription({
   });
 
   const before = await getSubscriptionSnapshot(shop);
-  const result = await queryActiveSubscription(identity.id);
+
+  const result = adminSubscription
+    ? {
+        configured: true as const,
+        subscription: adminSubscription,
+      }
+    : await queryActiveSubscription(identity.id);
 
   if (!result.configured) {
     return {
@@ -468,6 +606,88 @@ export async function refreshShopifyAppPricingSubscription({
       before.shopifySubscriptionId !== snapshot.shopifySubscriptionId,
     previousPlan: before.plan,
     previousStatus: before.status,
+  };
+}
+
+export async function reconcileShopifySubscriptionFromAdmin({
+  shop,
+  admin,
+  expectedSubscriptionGid,
+  preferredPlanHandle,
+}: {
+  shop: string;
+  admin: AdminGraphqlClient;
+  expectedSubscriptionGid: string;
+  preferredPlanHandle?: string | null;
+}) {
+  const activeSubscription = await queryAdminActiveSubscription(
+    admin,
+    expectedSubscriptionGid,
+  );
+
+  if (!activeSubscription) {
+    console.log("[BILLING] Shopify subscription not ACTIVE yet:", {
+      shop,
+      expectedSubscriptionGid,
+    });
+
+    return {
+      configured: true as const,
+      confirmed: false as const,
+      changed: false,
+      subscription: await getSubscriptionSnapshot(shop, {
+        ensure: false,
+      }),
+    };
+  }
+
+  console.log("[BILLING] Shopify ACTIVE subscription verified:", {
+    shop,
+    expectedSubscriptionGid,
+    actualSubscriptionGid: activeSubscription.id,
+    status: activeSubscription.status,
+    name: activeSubscription.name,
+  });
+
+  const adminSubscription: ReconciledActiveSubscription = {
+    billingPeriod:
+      activeSubscription.lineItems?.[0]?.plan?.pricingDetails?.interval ??
+      "EVERY_30_DAYS",
+
+    currentBillingCycle: {
+      startTime: activeSubscription.createdAt,
+      endTime: activeSubscription.currentPeriodEnd ?? null,
+    },
+
+    trialEndsAt: null,
+
+    legacySubscriptionId: activeSubscription.id,
+
+    items:
+      activeSubscription.lineItems?.map((item) => ({
+        handle: item.plan?.pricingDetails?.planHandle ?? null,
+        description: activeSubscription.name,
+        price: {
+          active: true,
+          currency:
+            item.plan?.pricingDetails?.price?.currencyCode ?? "USD",
+          amount:
+            item.plan?.pricingDetails?.price?.amount ?? null,
+        },
+      })) ?? [],
+  };
+
+  const result = await refreshShopifyAppPricingSubscription({
+    shop,
+    admin,
+    preferredPlanHandle,
+    adminSubscription,
+  });
+
+  return {
+    ...result,
+    configured: true as const,
+    confirmed: true as const,
   };
 }
 

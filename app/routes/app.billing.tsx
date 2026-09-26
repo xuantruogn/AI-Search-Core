@@ -1,20 +1,87 @@
 import { useState, useEffect } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { useFetcher, useLoaderData } from "react-router";
-
+import db from "../db.server";
 import { authenticate } from "../shopify.server";
 import {
   getShopifyPricingPlansUrl,
   isShopifyAppPricingConfigured,
   refreshShopifyAppPricingSubscription,
+  reconcileShopifySubscriptionFromAdmin,
 } from "../services/billing/shopify-app-pricing.server";
+
 import { PLAN_DEFINITIONS } from "../services/commerce/plans.server";
 import { getShopEntitlement } from "../services/commerce/entitlement.server";
 import { getSubscriptionSnapshot } from "../services/commerce/shop-registry.server";
 import { reconcileShopCommercialState } from "../services/commerce/reconciliation.server";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
+  const debugUrl = new URL(request.url);
+
+  console.log("[BILLING DEBUG] Loader request BEFORE authenticate:", {
+    url: debugUrl.toString(),
+    pathname: debugUrl.pathname,
+    search: debugUrl.search,
+    chargeId: debugUrl.searchParams.get("charge_id"),
+    shopParam: debugUrl.searchParams.get("shop"),
+    hostParam: debugUrl.searchParams.get("host"),
+    SHOPIFY_APP_URL: process.env.SHOPIFY_APP_URL || null,
+    NODE_ENV: process.env.NODE_ENV || null,
+    referer: request.headers.get("referer"),
+    userAgent: request.headers.get("user-agent"),
+  });
+
+  const { admin, session } = await authenticate.admin(request);
+
+  console.log("[BILLING DEBUG] Admin authentication result:", {
+  url: request.url,
+  chargeId: new URL(request.url).searchParams.get("charge_id"),
+  shop: session.shop,
+  sessionId: session.id,
+  isOnline: session.isOnline,
+});
+
+
+  const url = new URL(request.url);
+const chargeId = url.searchParams.get("charge_id");
+
+if (chargeId) {
+  const shopRecord = await db.aiSearchShop.findUnique({
+    where: {
+      shop: session.shop,
+    },
+    select: {
+      pendingPlanHandle: true,
+      pendingSubscriptionGid: true,
+    },
+  });
+
+  console.log("[BILLING] Shopify billing callback:", {
+    shop: session.shop,
+    chargeId,
+    pendingPlanHandle: shopRecord?.pendingPlanHandle,
+    pendingSubscriptionGid: shopRecord?.pendingSubscriptionGid,
+  });
+
+  if (shopRecord?.pendingSubscriptionGid) {
+    const reconciliation =
+      await reconcileShopifySubscriptionFromAdmin({
+        shop: session.shop,
+        admin,
+        expectedSubscriptionGid:
+          shopRecord.pendingSubscriptionGid,
+        preferredPlanHandle:
+          shopRecord.pendingPlanHandle,
+      });
+
+    console.log("[BILLING] Callback reconciliation:", {
+      confirmed: reconciliation.confirmed,
+      changed: reconciliation.changed,
+      plan: reconciliation.subscription.plan,
+      status: reconciliation.subscription.status,
+    });
+  }
+}
   const entitlement = await getShopEntitlement(session.shop);
   const subscription = await getSubscriptionSnapshot(session.shop, {
     ensure: false,
@@ -120,6 +187,12 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           ) {
             userErrors { field message }
             confirmationUrl
+
+            appSubscription {
+              id
+              status
+              createdAt
+            }
           }
         }`,
         {
@@ -155,7 +228,40 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         };
       }
 
+      const createdSubscription = subscriptionData?.appSubscription;
+
+      console.log("[BILLING] Shopify created subscription:", {
+        id: createdSubscription?.id,
+        status: createdSubscription?.status,
+        createdAt: createdSubscription?.createdAt,
+      });
+
+      if (!createdSubscription?.id) {
+        return {
+          success: false,
+          message: "Shopify did not return the created subscription ID.",
+        };
+      }
+
       const confirmationUrl = subscriptionData?.confirmationUrl;
+
+
+      await db.aiSearchShop.update({
+        where: {
+          shop: session.shop,
+        },
+        data: {
+          pendingPlanHandle: planKey.toLowerCase(),
+          pendingSubscriptionGid: createdSubscription.id,
+        },
+      });
+
+      console.log("[BILLING] Pending subscription saved:", {
+        shop: session.shop,
+        pendingPlanHandle: planKey.toLowerCase(),
+        pendingSubscriptionGid: createdSubscription.id,
+      });
+
 
       if (confirmationUrl) {
         return { success: true, confirmationUrl };
