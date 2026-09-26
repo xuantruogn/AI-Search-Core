@@ -32,10 +32,14 @@ async function enqueueDueStorefrontCatalogReconciliations() {
   const shops = await db.$queryRaw<Array<{ shop: string }>>`
     SELECT s.\`shop\`
     FROM \`AiSearchShop\` s
-    JOIN \`AiSearchSubscription\` sub ON sub.\`shop\` = s.\`shop\`
     WHERE
       s.\`status\` = 'ACTIVE'
-      AND sub.\`status\` = 'ACTIVE'
+      AND EXISTS (
+        SELECT 1
+        FROM \`billing_subscriptions\` sub
+        WHERE sub.\`shop\` = s.\`shop\`
+          AND sub.\`status\` = 'ACTIVE'
+      )
       AND NOT EXISTS (
         SELECT 1 FROM \`AiSearchCatalogSyncJob\` activeJob
         WHERE activeJob.\`shop\` = s.\`shop\`

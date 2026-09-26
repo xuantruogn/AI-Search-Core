@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import type { LoaderFunctionArgs } from "react-router";
 import { Link, useFetcher, useLoaderData } from "react-router";
 
@@ -12,6 +13,26 @@ import { getShopSettings } from "../services/commerce/shop-registry.server";
 import { getSearchImpactSnapshot } from "../services/search/search-impact.server";
 
 type UiState = "success" | "warning" | "critical" | "neutral";
+
+type DashboardStatus = {
+  updatedAt: string;
+  subscription: { ready: boolean; status: string };
+  catalog: {
+    ready: boolean;
+    busy: boolean;
+    failed: boolean;
+    status: string;
+    pending: number;
+    processing: number;
+    failedCount: number;
+    productsProcessed: number;
+    productsIndexed: number;
+  };
+  aiEngine: { ready: boolean; status: string };
+  appEmbed: { ready: boolean; status: string; themeName: string | null };
+  themeMap: { ready: boolean; status: string };
+  allReady: boolean;
+};
 
 type ThemeSummary = {
   integrationStatus: string;
@@ -1097,22 +1118,58 @@ const dashboardCss = `
 export default function Dashboard() {
   const data = useLoaderData<typeof loader>();
   const themeSyncFetcher = useFetcher<{ success?: boolean; message?: string }>();
+  const statusFetcher = useFetcher<DashboardStatus>();
   const themeSyncing = themeSyncFetcher.state !== "idle";
   const { entitlement } = data;
 
-  const catalogStatus = (data.catalogJob?.status ?? "NOT_STARTED").toUpperCase();
-  const catalogReady = catalogStatus === "DONE";
-  const catalogBusy = ["PENDING", "PROCESSING", "RUNNING"].includes(catalogStatus);
+  useEffect(() => {
+    const loadStatus = () => statusFetcher.load("/app/dashboard-status");
+    loadStatus();
+    const timer = window.setInterval(loadStatus, 5000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    if (
+      themeSyncFetcher.state === "idle" &&
+      themeSyncFetcher.data?.success === true
+    ) {
+      statusFetcher.load("/app/dashboard-status");
+    }
+  }, [themeSyncFetcher.state, themeSyncFetcher.data?.success]);
+
+  const live = statusFetcher.data;
+  const catalogStatus =
+    live?.catalog.status ??
+    (data.catalogJob?.status ?? "NOT_STARTED").toUpperCase();
+  const catalogBusy =
+    live?.catalog.busy ??
+    (["PENDING", "PROCESSING", "RUNNING"].includes(catalogStatus) ||
+      data.queue.pending > 0 ||
+      data.queue.processing > 0);
   const catalogFailed =
-    catalogStatus === "FAILED" ||
-    Boolean(data.catalogJob?.lastError) ||
-    (data.catalogJob?.productsFailed ?? 0) > 0;
-  const queueHasFailures = data.queue.failed > 0;
+    live?.catalog.failed ??
+    (catalogStatus === "FAILED" ||
+      Boolean(data.catalogJob?.lastError) ||
+      (data.catalogJob?.productsFailed ?? 0) > 0 ||
+      data.queue.failed > 0);
+  const queueHasFailures = live?.catalog.failed ?? data.queue.failed > 0;
+  const catalogReady =
+    live?.catalog.ready ??
+    (catalogStatus === "DONE" &&
+      !catalogFailed &&
+      data.queue.pending === 0 &&
+      data.queue.processing === 0 &&
+      data.queue.failed === 0);
   const subscriptionReady =
-    entitlement.subscriptionStatus === "ACTIVE" && entitlement.plan !== "NONE";
-  const embedReady = data.theme.appEmbedEnabled === true;
-  const rendererReady = data.theme.themeMapReady;
-  const searchSettingReady = data.settings.aiSearchEnabled;
+    live?.subscription.ready ??
+    (entitlement.subscriptionStatus === "ACTIVE" && entitlement.plan !== "NONE");
+  const embedReady =
+    live?.appEmbed.ready ?? data.theme.appEmbedEnabled === true;
+  const rendererReady =
+    live?.themeMap.ready ?? data.theme.themeMapReady;
+  const searchSettingReady =
+    live?.aiEngine.ready ?? data.settings.aiSearchEnabled;
 
   let overall: { state: UiState; title: string; detail: string };
 

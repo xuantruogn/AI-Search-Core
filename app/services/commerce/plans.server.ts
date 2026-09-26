@@ -2,6 +2,7 @@ export const AI_SEARCH_PLAN = {
   none: "NONE",
   basic: "BASIC",
   pro: "PRO",
+  custom: "CUSTOM",
 } as const;
 
 export type AiSearchPlan = (typeof AI_SEARCH_PLAN)[keyof typeof AI_SEARCH_PLAN];
@@ -36,9 +37,9 @@ export const PLAN_DEFINITIONS: Record<AiSearchPlan, PlanDefinition> = {
     label: "Basic",
     description: "For smaller catalogs with monthly AI usage limits.",
     limits: {
-      productLimit: 500,
+      productLimit: 505,
       searchLimit: 3_000,
-      vectorUpdateLimit: 500,
+      vectorUpdateLimit: 1000,
     },
   },
   PRO: {
@@ -46,6 +47,17 @@ export const PLAN_DEFINITIONS: Record<AiSearchPlan, PlanDefinition> = {
     label: "Pro",
     description:
       "Unlimited catalog, AI searches, and vector updates. Usage is still metered for cost and capacity analytics.",
+    limits: {
+      productLimit: null,
+      searchLimit: null,
+      vectorUpdateLimit: null,
+    },
+  },
+  CUSTOM: {
+    key: AI_SEARCH_PLAN.custom,
+    label: "Custom",
+    description:
+      "A shop-specific plan whose limits and pricing are stored in the Billing V2 plan record.",
     limits: {
       productLimit: null,
       searchLimit: null,
@@ -63,6 +75,10 @@ export function normalizePlan(value: string | null | undefined): AiSearchPlan {
 
   if (normalized === AI_SEARCH_PLAN.pro) {
     return AI_SEARCH_PLAN.pro;
+  }
+
+  if (normalized === AI_SEARCH_PLAN.custom) {
+    return AI_SEARCH_PLAN.custom;
   }
 
   return AI_SEARCH_PLAN.none;
@@ -114,24 +130,20 @@ export function hasExplicitDevPlanOverride() {
   return Boolean(process.env.AI_SEARCH_DEV_PLAN?.trim());
 }
 
-function partnerPricingEnvironmentConfigured() {
-  return Boolean(
-    process.env.SHOPIFY_PARTNER_ORG_ID?.trim() &&
-    process.env.SHOPIFY_PARTNER_API_ACCESS_TOKEN?.trim() &&
-    process.env.SHOPIFY_APP_GID?.trim(),
-  );
-}
 
 export function getDevPlanOverride(): AiSearchPlan | null {
+
+   console.log(
+  "[BILLING DEBUG] AI_SEARCH_DEV_PLAN =",
+  process.env.AI_SEARCH_DEV_PLAN,
+  "NODE_ENV =",
+  process.env.NODE_ENV,
+);
+
   const value = process.env.AI_SEARCH_DEV_PLAN?.trim();
 
   if (!value) {
-    if (process.env.NODE_ENV === "production") return null;
-
-    // Local development is usable out of the box, but do not silently mask a
-    // real Partner API billing configuration. When Partner credentials are
-    // present, the canonical Shopify subscription should be exercised.
-    return partnerPricingEnvironmentConfigured() ? null : AI_SEARCH_PLAN.basic;
+    return null;
   }
 
   const plan = normalizePlan(value);

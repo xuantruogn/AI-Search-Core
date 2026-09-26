@@ -1,7 +1,7 @@
-// AI Buyense - Prisma schema (safe extension of current production schema)
+// AI Search Bridge - Prisma schema
 // Production database: MySQL.
-// Existing AI Search schema is preserved; Billing V2 extends AiSearchShop directly.
-// Newly added shop lifecycle/billing cache fields are nullable to preserve unknown/blank data.
+// DATABASE_URL is supplied through the environment.
+
 generator client {
   provider = "prisma-client-js"
 }
@@ -10,13 +10,6 @@ datasource db {
   provider = "mysql"
   url      = env("DATABASE_URL")
 }
-
-// =====================================================
-// BILLING / COMMERCIAL EXTENSION
-// - AiSearchShop remains the single tenant/shop root.
-// - Existing AI Search models/columns are preserved.
-// - Optional billing fields stay NULL until real data is available.
-// =====================================================
 
 enum PlanVisibility {
   PUBLIC
@@ -70,12 +63,6 @@ enum BillingEventSource {
   RECONCILIATION
 }
 
-enum DevRole {
-  OWNER
-  ADMIN
-  VIEWER
-}
-
 model Plan {
   id                      String          @id @default(cuid()) @db.VarChar(191)
   handle                  String          @unique @db.VarChar(191)
@@ -119,9 +106,9 @@ model PlanAssignment {
   customPriceOverride Decimal?     @db.Decimal(10, 2)
   notes               String?      @db.Text
 
-  startsAt            DateTime? // NULL until an assignment actually starts
+  startsAt            DateTime?
   endsAt              DateTime?
-  isActive            Boolean?  // NULL means not yet established/imported
+  isActive            Boolean?
   createdAt           DateTime     @default(now())
 
   @@unique([shop, planId])
@@ -137,7 +124,6 @@ model BillingSubscription {
   shopRecord             AiSearchShop               @relation(fields: [shop], references: [shop], onDelete: Cascade)
   plan                   Plan?                      @relation(fields: [planId], references: [id])
 
-  // Nullable so legacy/partial data is never filled with invented values.
   shopifySubscriptionGid String?                    @unique @db.VarChar(191)
   shopifyPlanHandle      String?                    @db.VarChar(191)
   status                 BillingSubscriptionStatus?
@@ -189,8 +175,6 @@ model BillingEvent {
   @@map("billing_events")
 }
 
-// Aggregate/cache for billing/dev dashboard only.
-// AiSearchUsagePeriod + AiSearchUsageEvent remain the runtime usage source.
 model UsageCounter {
   id                   String       @id @default(cuid()) @db.VarChar(191)
   shop                 String       @db.VarChar(191)
@@ -265,7 +249,6 @@ model AiSearchSyncJob {
   updatedAt   DateTime  @updatedAt
   startedAt   DateTime?
   processedAt DateTime?
-  policyVersion Int?
 
   @@index([status, createdAt])
   @@index([shop, productId])
@@ -288,27 +271,25 @@ model AiSearchLeaseLock {
 // =====================================================
 
 model AiSearchShop {
-  // Existing identity/state fields - kept unchanged.
   shop          String    @id @db.VarChar(191)
   shopifyShopId String?   @db.VarChar(191)
   status        String    @default("ACTIVE") @db.VarChar(64)
+
   installedAt   DateTime  @default(now())
   uninstalledAt DateTime?
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
 
-  // Billing/lifecycle extension. All newly added scalar fields are nullable so
-  // existing shops remain NULL until Shopify/app logic provides real values.
   frozenAt               DateTime?
   reinstalledAt          DateTime?
-  installCount           Int      @default(1)
+  installCount           Int @default(1)
   currentPlanHandle      String?   @db.VarChar(191)
   currentSubscriptionGid String?   @db.VarChar(191)
   pendingPlanHandle      String?   @db.VarChar(191)
   pendingSubscriptionGid String?   @db.VarChar(191)
   pendingChangeAt        DateTime?
 
-  // Existing AI Search relations - kept unchanged.
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
   subscription      AiSearchSubscription?
   settings          AiSearchShopSettings?
   usagePeriods      AiSearchUsagePeriod[]
@@ -317,11 +298,7 @@ model AiSearchShop {
   queryLogs         AiSearchQueryLog[]
   products          AiSearchIndexedProduct[]
   catalogJobs       AiSearchCatalogSyncJob[]
-  quotaGrants       AiSearchQuotaGrant[]
-  apiUsageEvents    AiSearchApiUsageEvent[]
-  adminAuditLogs    AiSearchAdminAuditLog[]
 
-  // New billing relations. AiSearchShop remains the only shop master.
   billingSubscriptions BillingSubscription[]
   planAssignments      PlanAssignment[]
   billingEvents        BillingEvent[]
@@ -358,9 +335,9 @@ model AiSearchShopSettings {
   searchLimitOverride       Int?
   vectorUpdateLimitOverride Int?
   resultLimit               Int      @default(20)
+  productPolicyVersion Int @default(0)
   createdAt                 DateTime @default(now())
   updatedAt                 DateTime @updatedAt
-  productPolicyVersion      Int      @default(0)
 
   shopRecord AiSearchShop @relation(fields: [shop], references: [shop], onDelete: Cascade)
 }
@@ -489,11 +466,15 @@ model AiSearchIndexedProduct {
   productId                String    @db.VarChar(64)
   handle                   String    @db.VarChar(255)
   title                    String    @db.VarChar(255)
+
   status                   String    @default("INDEXED") @db.VarChar(64)
   hasVector                Boolean   @default(false)
+
+  // Billing / entitlement extension
   vectorStatus             String    @default("MISSING") @db.VarChar(32)
   searchable               Boolean   @default(false)
   blockedReason            String?   @db.VarChar(64)
+
   documentHash             String?   @db.VarChar(64)
   sourceDocumentHash       String?   @db.VarChar(64)
   embeddingPipelineVersion String?   @db.VarChar(64)
@@ -508,8 +489,7 @@ model AiSearchIndexedProduct {
   createdAt                DateTime  @default(now())
   updatedAt                DateTime  @updatedAt
 
-  // Billing V2 compatibility/cache fields. Runtime search eligibility remains
-  // governed by searchable/vectorStatus above.
+  // Existing production fields — MUST be preserved
   isIndexed                Boolean   @default(false)
   isSearchable             Boolean   @default(false)
   excludedReason           String?   @db.VarChar(64)
@@ -523,6 +503,7 @@ model AiSearchIndexedProduct {
   contextTerms AiSearchShopContextTerm[]
 
   @@unique([shop, productId])
+
   @@index([shop, status])
   @@index([shop, isIndexed])
   @@index([shop, isSearchable])
@@ -693,146 +674,4 @@ model AiSearchRenderTransportKey {
    * Lấy toàn bộ candidate key của một AI product.
    */
   @@index([shop, productId])
-}
-
-model AiSearchQuotaGrant {
-  id        String    @id @default(cuid()) @db.VarChar(191)
-  shop      String    @db.VarChar(191)
-  kind      String    @db.VarChar(64)
-  amount    Int
-  reason    String?   @db.Text
-  startsAt  DateTime  @default(now())
-  expiresAt DateTime?
-  revokedAt DateTime?
-  createdBy String    @db.VarChar(191)
-  createdAt DateTime  @default(now())
-
-  shopRecord AiSearchShop @relation(fields: [shop], references: [shop], onDelete: Cascade)
-
-  @@index([shop, kind, startsAt, expiresAt])
-  @@index([shop, revokedAt, createdAt])
-}
-
-model AiSearchAdminAuditLog {
-  id         String   @id @default(cuid()) @db.VarChar(191)
-  actorShop  String   @db.VarChar(191)
-  targetShop String   @db.VarChar(191)
-  action     String   @db.VarChar(64)
-  reason     String?  @db.Text
-  beforeJson String?  @db.LongText
-  afterJson  String?  @db.LongText
-  createdAt  DateTime @default(now())
-
-  targetShopRecord AiSearchShop @relation(fields: [targetShop], references: [shop], onDelete: Cascade)
-
-  @@index([targetShop, createdAt])
-  @@index([actorShop, createdAt])
-}
-
-model AiSearchApiUsageEvent {
-  id                  Int      @id @default(autoincrement())
-  shop                String?  @db.VarChar(191)
-  provider            String   @default("OPENAI") @db.VarChar(64)
-  operation           String   @db.VarChar(64)
-  model               String   @db.VarChar(191)
-  requestId           String?  @db.VarChar(191)
-  inputTokens         Int      @default(0)
-  cachedInputTokens   Int      @default(0)
-  outputTokens        Int      @default(0)
-  totalTokens         Int      @default(0)
-  estimatedCostMicros Int      @default(0)
-  remainingRequests   Int?
-  remainingTokens     Int?
-  resetRequests       String?  @db.VarChar(64)
-  resetTokens         String?  @db.VarChar(64)
-  createdAt           DateTime @default(now())
-
-  shopRecord AiSearchShop? @relation(fields: [shop], references: [shop], onDelete: Cascade)
-
-  @@index([shop, createdAt])
-  @@index([provider, createdAt])
-  @@index([model, createdAt])
-}
-
-model DevUser {
-  id                  String    @id @default(cuid()) @db.VarChar(191)
-  email               String    @unique @db.VarChar(320)
-  passwordHash        String    @db.VarChar(255)
-  role                DevRole
-  isActive            Boolean   @default(true)
-  totpSecretEncrypted String?   @db.Text
-  createdAt           DateTime  @default(now())
-  updatedAt           DateTime  @updatedAt
-  lastLoginAt         DateTime?
-
-  sessions       DevSession[]
-  loginChallenges DevLoginChallenge[]
-  auditLogs      DevAuditLog[]
-
-  @@index([role, isActive])
-}
-
-model DevSession {
-  id               String    @id @default(cuid()) @db.VarChar(191)
-  tokenHash        String    @unique @db.Char(64)
-  userId           String    @db.VarChar(191)
-  createdAt        DateTime  @default(now())
-  lastSeenAt       DateTime  @default(now())
-  expiresAt        DateTime
-  absoluteExpiresAt DateTime
-  lastStrongAuthAt DateTime  @default(now())
-  revokedAt        DateTime?
-  ipHash           String?   @db.Char(64)
-  userAgent        String?   @db.VarChar(512)
-
-  user DevUser @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@index([userId, revokedAt])
-  @@index([expiresAt])
-  @@index([absoluteExpiresAt])
-}
-
-model DevLoginChallenge {
-  id        String   @id @default(cuid()) @db.VarChar(191)
-  tokenHash String   @unique @db.Char(64)
-  userId    String   @db.VarChar(191)
-  createdAt DateTime @default(now())
-  expiresAt DateTime
-  attempts  Int      @default(0)
-  ipHash    String?  @db.Char(64)
-
-  user DevUser @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@index([userId, expiresAt])
-}
-
-model DevAuthThrottle {
-  bucketKey    String   @id @db.Char(64)
-  kind         String   @db.VarChar(32)
-  attemptCount Int      @default(0)
-  windowStart  DateTime @default(now())
-  blockedUntil DateTime?
-  updatedAt    DateTime @updatedAt
-
-  @@index([kind, blockedUntil])
-}
-
-model DevAuditLog {
-  id           String   @id @default(cuid()) @db.VarChar(191)
-  devUserId    String?  @db.VarChar(191)
-  action       String   @db.VarChar(96)
-  resourceType String?  @db.VarChar(96)
-  resourceId   String?  @db.VarChar(191)
-  result       String   @db.VarChar(32)
-  requestId    String?  @db.VarChar(64)
-  ipHash       String?  @db.Char(64)
-  userAgent    String?  @db.VarChar(512)
-  metadata     Json?
-  createdAt    DateTime @default(now())
-
-  devUser DevUser? @relation(fields: [devUserId], references: [id], onDelete: SetNull)
-
-  @@index([devUserId, createdAt])
-  @@index([action, createdAt])
-  @@index([createdAt])
 }

@@ -270,11 +270,13 @@ export async function getThemeIntegrationStatus({
        * status must use the exact same capability rule or a successful sync
        * appears as THEME_MAP_UNAVAILABLE after page reload.
        */
+      const themeMapMatchesActiveTheme =
+        storedMapResult.stored?.themeVersionKey === theme.versionKey;
+
       const themeMapReady =
         map != null &&
-        isStoredThemeMapV4Usable(
-          map,
-        );
+        themeMapMatchesActiveTheme &&
+        isStoredThemeMapV4Usable(map);
 
       let status:
         ThemeIntegrationStatus;

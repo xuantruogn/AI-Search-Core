@@ -1,0 +1,32 @@
+Billing V2 Phase 1 changes
+
+Added:
+- app/services/commerce/billing-state.server.ts
+
+Updated:
+- app/services/commerce/plans.server.ts
+  - Added CUSTOM plan category.
+- app/services/commerce/types.server.ts
+  - SubscriptionSnapshot now carries planId, planLabel, limits.
+- app/services/commerce/shop-registry.server.ts
+  - getSubscriptionSnapshot now resolves from Billing V2.
+  - Legacy AiSearchSubscription remains compatibility/bootstrap/dev override.
+  - Uninstall cancels active BillingSubscription rows and records APP_UNINSTALLED events.
+- app/services/commerce/entitlement.server.ts
+  - Limits now come from Billing V2 Plan, with merchant overrides retained.
+- app/services/billing/shopify-app-pricing.server.ts
+  - Shopify active subscription is persisted to BillingSubscription.
+  - BillingEvent audit records are written.
+  - Custom plans require an explicit Billing V2 Plan record/assignment.
+  - AiSearchSubscription is mirrored for compatibility.
+- app/services/maintenance/housekeeping.server.ts
+  - Active-shop reconciliation eligibility uses billing_subscriptions.
+- app/routes/app.usage.tsx
+  - Uses getShopEntitlement instead of directly deriving limits from legacy subscription.
+
+Not changed:
+- Prisma migration/schema
+- Product records/indexing
+- usage.server.ts
+- query-plan server
+- reconciliation core logic
