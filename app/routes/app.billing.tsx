@@ -145,15 +145,18 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     }
 
     try {
-      const requestUrl = new URL(request.url);
-      const returnUrl = new URL("/app/billing", requestUrl.origin);
+      const shopHandle = session.shop.replace(/\.myshopify\.com$/i, "");
+      const appIdentifier =
+        process.env.SHOPIFY_APP_HANDLE?.trim() ||
+        process.env.SHOPIFY_API_KEY?.trim();
 
-      returnUrl.searchParams.set("shop", session.shop);
-      const host = requestUrl.searchParams.get("host");
-      if (host) {
-        returnUrl.searchParams.set("host", host);
+      if (!appIdentifier) {
+        throw new Error("Shopify app identifier is not configured.");
       }
-      returnUrl.searchParams.set("embedded", "1");
+
+      const returnUrl = new URL(
+        `https://admin.shopify.com/store/${encodeURIComponent(shopHandle)}/apps/${encodeURIComponent(appIdentifier)}/app/billing`,
+      );
       returnUrl.searchParams.set("billing_callback", "1");
 
       const response = await admin.graphql(
@@ -266,27 +269,6 @@ export default function BillingPage() {
   const subscribeFetcher = useFetcher<typeof action>();
 
   if (!data) return null;
-
-  // LOG MONITORING CHI TIẾT PHÍA CLIENT
-  useEffect(() => {
-    const currentUrl = window.location.href;
-    console.log(`[BILLING CLIENT MOUNT] Initial URL: ${currentUrl}`);
-
-    const url = new URL(currentUrl);
-    const hasCallback = url.searchParams.has("billing_callback");
-    const hasChargeId = url.searchParams.has("charge_id");
-
-    console.log(`[BILLING CLIENT PARAMS] billing_callback: ${hasCallback}, charge_id: ${hasChargeId}`);
-
-    if (hasCallback || hasChargeId) {
-      url.searchParams.delete("billing_callback");
-      url.searchParams.delete("charge_id");
-      const cleanUrl = url.toString();
-      console.log(`[BILLING CLIENT CLEANUP] Replacing URL to: ${cleanUrl}`);
-      window.history.replaceState(null, "", cleanUrl);
-      console.log(`[BILLING CLIENT CLEANUP DONE] Final URL: ${window.location.href}`);
-    }
-  }, []);
 
   const [cycle, setCycle] = useState<Cycle>("monthly");
   const [customRequestSent, setCustomRequestSent] = useState(false);
