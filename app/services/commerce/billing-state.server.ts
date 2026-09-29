@@ -281,6 +281,7 @@ export async function getBillingSubscriptionSnapshot(shop: string) {
     shopifySubscriptionId: state.legacy.shopifySubscriptionId,
     billingPeriodStart: state.legacy.billingPeriodStart,
     billingPeriodEnd: state.legacy.billingPeriodEnd,
+    billingInterval: null,
     source: state.legacy.source,
     lastSyncedAt: state.legacy.lastSyncedAt,
   };
@@ -300,6 +301,7 @@ export async function getBillingSubscriptionSnapshot(shop: string) {
       shopifySubscriptionId: null,
       billingPeriodStart: null,
       billingPeriodEnd: null,
+      billingInterval: null,
       source: "BILLING_V2",
       lastSyncedAt: null,
     };
@@ -340,6 +342,7 @@ export async function getBillingSubscriptionSnapshot(shop: string) {
       shopifySubscriptionId: subscription.shopifySubscriptionGid,
       billingPeriodStart: subscription.currentPeriodStartsAt,
       billingPeriodEnd: subscription.currentPeriodEndsAt,
+      billingInterval: subscription.intervalSnapshot,
       source: "BILLING_V2",
       lastSyncedAt: subscription.updatedAt,
     };
