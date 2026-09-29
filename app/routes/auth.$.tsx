@@ -35,12 +35,61 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
     return null;
   } catch (error) {
-    console.error("[AUTH ROUTE AUTHENTICATE ERROR]", {
-      at: new Date().toISOString(),
-      pathname: url.pathname,
-      elapsedMs: Date.now() - startedAt,
-      error: error instanceof Error ? error.message : String(error),
-    });
+    const isResponse =
+      error instanceof Response ||
+      (typeof error === "object" &&
+        error !== null &&
+        "status" in error &&
+        "headers" in error);
+
+    if (isResponse) {
+      const response = error as Response;
+      const location = response.headers.get("location");
+      const locationInfo = location
+        ? (() => {
+            try {
+              const locationUrl = new URL(location, request.url);
+              return {
+                pathname: locationUrl.pathname,
+                searchParams: [...locationUrl.searchParams.keys()],
+              };
+            } catch {
+              return { invalidLocation: true };
+            }
+          })()
+        : null;
+
+      console.error("[AUTH ROUTE AUTHENTICATE RESPONSE]", {
+        at: new Date().toISOString(),
+        method: request.method,
+        pathname: url.pathname,
+        elapsedMs: Date.now() - startedAt,
+        responseStatus: response.status,
+        responseStatusText: response.statusText,
+        responseUrl: response.url || null,
+        responseType: response.type,
+        responseRedirected: response.redirected,
+        location: locationInfo,
+        responseHeaders: {
+          location: locationInfo,
+          contentType: response.headers.get("content-type"),
+          cacheControl: response.headers.get("cache-control"),
+          vary: response.headers.get("vary"),
+          wwwAuthenticate: response.headers.get("www-authenticate"),
+          xRequestId: response.headers.get("x-request-id"),
+          xShopifyRequestId: response.headers.get("x-shopify-request-id"),
+        },
+      });
+    } else {
+      console.error("[AUTH ROUTE AUTHENTICATE ERROR]", {
+        at: new Date().toISOString(),
+        pathname: url.pathname,
+        elapsedMs: Date.now() - startedAt,
+        errorName: error instanceof Error ? error.name : typeof error,
+        errorMessage: error instanceof Error ? error.message : String(error),
+      });
+    }
+
     throw error;
   }
 };
