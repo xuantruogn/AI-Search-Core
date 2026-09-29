@@ -11,6 +11,7 @@ export type SubscriptionSnapshot = {
   shopifySubscriptionId: string | null;
   billingPeriodStart: Date | null;
   billingPeriodEnd: Date | null;
+  billingInterval: "EVERY_30_DAYS" | "ANNUAL" | null;
   source: string;
   lastSyncedAt: Date | null;
 };
