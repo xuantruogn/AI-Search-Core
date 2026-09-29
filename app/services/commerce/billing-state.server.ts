@@ -104,7 +104,9 @@ async function ensurePublicPlans() {
         trialDays: seed.trialDays,
         isActive: true,
       },
-      update: {},
+      update: {
+        trialDays: seed.trialDays,
+      },
       });
     }
   })();
