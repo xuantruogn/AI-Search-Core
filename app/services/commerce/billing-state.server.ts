@@ -200,15 +200,44 @@ export async function ensureBillingV2State(shop: string) {
     } as const;
   }
 
-  let subscription = await db.billingSubscription.findFirst({
-    where: {
-      shop,
-      status: {
-        in: ["ACTIVE", "PENDING", "FROZEN"],
-      },
-    },
-    orderBy: { updatedAt: "desc" },
+  // Current entitlement is anchored by AiSearchShop.currentSubscriptionGid.
+  // A newly-created PENDING subscription must never displace the currently
+  // active/frozen entitlement merely because it has a newer updatedAt.
+  const shopPointer = await db.aiSearchShop.findUnique({
+    where: { shop },
+    select: { currentSubscriptionGid: true },
   });
+
+  let subscription = shopPointer?.currentSubscriptionGid
+    ? await db.billingSubscription.findUnique({
+        where: {
+          shopifySubscriptionGid: shopPointer.currentSubscriptionGid,
+        },
+      })
+    : null;
+
+  // If the pointer is stale/missing, recover from an actual ACTIVE record.
+  // FROZEN is also a current lifecycle state, so allow it as a fallback only
+  // after an ACTIVE lookup has been exhausted.
+  if (
+        !subscription ||
+        (subscription.status !== "ACTIVE" &&
+          subscription.status !== "FROZEN")
+      ) {
+    subscription = await db.billingSubscription.findFirst({
+      where: { shop, status: "ACTIVE" },
+      orderBy: { updatedAt: "desc" },
+    });
+  }
+
+  // A brand-new shop may legitimately have only a PENDING subscription.
+  // Only use PENDING when there is no current ACTIVE/FROZEN entitlement.
+  if (!subscription) {
+    subscription = await db.billingSubscription.findFirst({
+      where: { shop, status: "PENDING" },
+      orderBy: { updatedAt: "desc" },
+    });
+  }
 
   if (
       !subscription &&

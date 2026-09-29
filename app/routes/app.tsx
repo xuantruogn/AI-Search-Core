@@ -6,11 +6,11 @@ import { AppProvider } from "@shopify/shopify-app-react-router/react";
 import { authenticate } from "../shopify.server";
 import { ensureShopFromAdmin } from "../services/commerce/shop-registry.server";
 import { refreshShopifyAppPricingIfStale } from "../services/billing/shopify-app-pricing.server";
-import { reconcileShopCommercialState } from "../services/commerce/reconciliation.server";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { admin, session } = await authenticate.admin(request);
 
+  // 1. Đảm bảo record Shop tồn tại trong DB
   await ensureShopFromAdmin({
     shop: session.shop,
     admin,
@@ -19,15 +19,13 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const url = new URL(request.url);
   const preferredPlanHandle = url.searchParams.get("plan_handle");
 
-  let billingChanged = false;
-
+  // 2. Refresh trạng thái Billing nhẹ từ Shopify (Chỉ dùng để Read/Recovery)
   try {
-    const billing = await refreshShopifyAppPricingIfStale({
+    await refreshShopifyAppPricingIfStale({
       shop: session.shop,
       admin,
       preferredPlanHandle,
     });
-    billingChanged = billing.changed;
   } catch (error) {
     console.error("[AI Search] Shopify App Pricing refresh failed:", {
       shop: session.shop,
@@ -35,32 +33,9 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     });
   }
 
-  try {
-    const reconcile = () =>
-      reconcileShopCommercialState({
-        shop: session.shop,
-        forceCatalogRefresh: billingChanged,
-      });
-
-    if (billingChanged) {
-      // A plan/status change alters product eligibility immediately. Wait for
-      // reconciliation so nested admin loaders never render an old active
-      // product count against the new limit.
-      await reconcile();
-    } else {
-      void reconcile().catch((error) => {
-        console.error("[AI Search] Commercial reconciliation failed:", {
-          shop: session.shop,
-          error: error instanceof Error ? error.message : String(error),
-        });
-      });
-    }
-  } catch (error) {
-    console.error(
-      "[AI Search] Commercial reconciliation scheduling failed:",
-      error,
-    );
-  }
+  // LƯU Ý KIẾN TRÚC: Đã loại bỏ hoàn toàn reconcileShopCommercialState() tại đây.
+  // Nhiệm vụ Reconcile Product Policy (khóa/mở catalog) được chuyển 100% cho Webhook đảm nhận.
+  // Parent Route tuyệt đối không kích hoạt Reconcile để tránh nghẽn Session Token của App Bridge.
 
   return {
     apiKey: process.env.SHOPIFY_API_KEY || "",

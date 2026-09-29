@@ -6,7 +6,7 @@ import { authenticate } from "../shopify.server";
 import { getShopEntitlement } from "../services/commerce/entitlement.server";
 import { getProductSyncQueueStats } from "../services/products/product-sync-job.server";
 import { getLatestCatalogSyncJob } from "../services/catalog/catalog-sync-job.server";
-import { getShopifyPricingPlansUrl } from "../services/billing/shopify-app-pricing.server";
+// import { getShopifyPricingPlansUrl } from "../services/billing/shopify-app-pricing.server";
 import { getThemeAppEmbedDeepLink } from "../services/theme/app-embed.server";
 import { getThemeIntegrationStatus } from "../services/theme/theme-integration.server";
 import { getShopSettings } from "../services/commerce/shop-registry.server";
@@ -135,7 +135,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
           lastError: catalogJob.lastError,
         }
       : null,
-    pricingUrl: getShopifyPricingPlansUrl(session.shop),
+    // pricingUrl: getShopifyPricingPlansUrl(session.shop),
     appEmbedUrl: getThemeAppEmbedDeepLink(session.shop),
   };
 };
@@ -1371,15 +1371,12 @@ export default function Dashboard() {
                 <Link className="vip-action vip-action--ghost" to="/app/search-analytics">
                   Search Analytics
                 </Link>
-                {data.pricingUrl ? (
-                  <a
+                <a
                     className="vip-action vip-action--ghost"
-                    href={data.pricingUrl}
-                    target="_top"
+                    href="/app/billing"
                   >
                     Plan & billing
                   </a>
-                ) : null}
               </div>
 
               <div className="vip-hero__meta" style={{ marginTop: 22 }}>
@@ -1618,11 +1615,11 @@ export default function Dashboard() {
                 state={subscriptionReady ? "success" : "warning"}
                 status={subscriptionReady ? "Active" : "Needs activation"}
                 detail={`${entitlement.planLabel} · ${entitlement.subscriptionStatus}`}
-                action={
-                  data.pricingUrl
-                    ? { label: "Manage plan", href: data.pricingUrl, targetTop: true }
-                    : undefined
-                }
+                action={{
+                  label: "Manage plan",
+                  href: "/app/billing",
+                  targetTop: true,
+                }}
               />
               <ReadinessItem
                 index={2}

@@ -25,60 +25,49 @@ type AdminGraphqlClient = {
   ) => Promise<Response>;
 };
 
+type ShopifySubscriptionStatus =
+  | "PENDING"
+  | "ACTIVE"
+  | "FROZEN"
+  | "CANCELLED"
+  | "DECLINED"
+  | "EXPIRED";
 
-type ActiveSubscriptionResponse = {
-  data?: {
-    activeSubscription?: {
-      billingPeriod?: string | null;
-      currentBillingCycle?: {
-        startTime?: string | null;
-        endTime?: string | null;
-      } | null;
-      trialEndsAt?: string | null;
-      legacySubscriptionId?: string | null;
-      items?: Array<{
-        handle?: string | null;
-        description?: string | null;
+type AdminSubscription = {
+  id: string;
+  name: string;
+  status: ShopifySubscriptionStatus;
+  createdAt: string;
+  currentPeriodEnd?: string | null;
+  trialDays?: number;
+  test?: boolean;
+  lineItems?: Array<{
+    id: string;
+    plan?: {
+      pricingDetails?: {
+        __typename?: string;
+        planHandle?: string | null;
+        interval?: string | null;
         price?: {
-          active?: boolean | null;
+          amount?: string | null;
+          currencyCode?: string | null;
         } | null;
-      }>;
+      } | null;
     } | null;
-  };
-  errors?: Array<{
-    message?: string;
-    extensions?: {
-      code?: string;
-    };
   }>;
 };
 
-type AdminActiveSubscriptionResponse = {
+type AdminSubscriptionsResponse = {
   data?: {
     currentAppInstallation?: {
-      activeSubscriptions?: Array<{
-        id: string;
-        name: string;
-        status: string;
-        createdAt: string;
-        currentPeriodEnd?: string | null;
-        trialDays?: number;
-        test?: boolean;
-        lineItems?: Array<{
-          id: string;
-          plan?: {
-            pricingDetails?: {
-              __typename?: string;
-              planHandle?: string | null;
-              interval?: string | null;
-              price?: {
-                amount?: string | null;
-                currencyCode?: string | null;
-              } | null;
-            } | null;
-          } | null;
-        }>;
-      }>;
+      activeSubscriptions?: AdminSubscription[];
+      allSubscriptions?: {
+        nodes?: AdminSubscription[];
+        pageInfo?: {
+          hasNextPage?: boolean;
+          endCursor?: string | null;
+        };
+      };
     } | null;
   };
   errors?: Array<{
@@ -86,110 +75,44 @@ type AdminActiveSubscriptionResponse = {
   }>;
 };
 
-
-function getPartnerConfig() {
-  const organizationId = process.env.SHOPIFY_PARTNER_ORG_ID?.trim();
-  const accessToken = process.env.SHOPIFY_PARTNER_API_ACCESS_TOKEN?.trim();
-  const appId = process.env.SHOPIFY_APP_GID?.trim();
-  const apiVersion =
-    process.env.SHOPIFY_PARTNER_API_VERSION?.trim() || "2026-07";
-
-  if (!organizationId || !accessToken || !appId) {
-    return null;
-  }
-
-  return {
-    organizationId,
-    accessToken,
-    appId,
-    apiVersion,
-  };
-}
-
-export function isShopifyAppPricingConfigured() {
-  return getPartnerConfig() !== null;
-}
-
-export function getShopifyPricingPlansUrl(shop: string) {
-  const appHandle = process.env.SHOPIFY_APP_HANDLE?.trim();
-
-  if (!appHandle) {
-    return null;
-  }
-
-  const storeHandle = shop.replace(/\.myshopify\.com$/i, "");
-
-  return `https://admin.shopify.com/store/${encodeURIComponent(storeHandle)}/charges/${encodeURIComponent(appHandle)}/pricing_plans`;
-}
-
-async function queryActiveSubscription(shopId: string) {
-  const config = getPartnerConfig();
-
-  if (!config) {
-    return {
-      configured: false as const,
-      subscription: null,
-    };
-  }
-
-  const response = await fetch(
-    `https://partners.shopify.com/${config.organizationId}/api/${config.apiVersion}/graphql.json`,
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Shopify-Access-Token": config.accessToken,
-      },
-      body: JSON.stringify({
-        query: `
-          query AiSearchActiveSubscription($appId: ID!, $shopId: ID!) {
-            activeSubscription(appId: $appId, shopId: $shopId) {
-              billingPeriod
-              trialEndsAt
-              currentBillingCycle {
-                startTime
-                endTime
-              }
-              items {
-                handle
-                description
-                price {
-                  __typename
-                  active
-                  currency
-                  ... on FlatRatePrice {
-                    amount
-                  }
-                }
-              }
-              legacySubscriptionId
-            }
-          }
-        `,
-        variables: {
-          appId: config.appId,
-          shopId,
-        },
-      }),
-    },
+function isShopifySubscriptionStatus(
+  value: string,
+): value is ShopifySubscriptionStatus {
+  return (
+    value === "PENDING" ||
+    value === "ACTIVE" ||
+    value === "FROZEN" ||
+    value === "CANCELLED" ||
+    value === "DECLINED" ||
+    value === "EXPIRED"
   );
+}
 
-  const body = (await response.json()) as ActiveSubscriptionResponse;
+/**
+ * Compatibility export retained because existing routes still import this
+ * helper under the historical App Pricing name.
+ *
+ * The implementation is now Manual Billing / Admin GraphQL. There is no
+ * Shopify Partner API dependency here.
+ */
+export function isShopifyAppPricingConfigured() {
+  return true;
+}
 
-  if (!response.ok || body.errors?.length) {
-    const message =
-      body.errors
-        ?.map((error) => error.message)
-        .filter(Boolean)
-        .join("; ") || `Partner API request failed (${response.status})`;
+/**
+ * Compatibility export retained for the existing Billing UI.
+ * Manual Billing uses appSubscriptionCreate().confirmationUrl instead of a
+ * Partner App Pricing URL.
+ */
+export function getShopifyPricingPlansUrl(_shop: string) {
+  return null;
+}
 
-    throw new Error(message);
-  }
+function parseShopifyDate(value: string | null | undefined) {
+  if (!value) return null;
 
-  return {
-    configured: true as const,
-    subscription: body.data?.activeSubscription ?? null,
-  };
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
 }
 
 function inferPlan({
@@ -199,56 +122,52 @@ function inferPlan({
   preferredPlanHandle?: string | null;
   itemHandles: string[];
 }) {
-  // `plan_handle` is browser-controlled and is only a refresh/UI hint. The
-  // Partner API active items are canonical. Basic/Pro are mapped explicitly.
-  // Any other active handle is treated as CUSTOM only after a matching
-  // shop-specific Plan record is found by the Billing V2 resolver.
+  /**
+   * The Shopify line-item plan handle is authoritative.
+   * preferredPlanHandle is only a local hint used when Shopify's response
+   * does not expose a recognized handle.
+   */
   const recognized = itemHandles
     .map((handle) => ({ handle, plan: planFromHandle(handle) }))
     .filter((item) => item.plan !== AI_SEARCH_PLAN.none);
 
-  const pro = recognized.find((item) => item.plan === AI_SEARCH_PLAN.pro);
+  const pro = recognized.find(
+    (item) => item.plan === AI_SEARCH_PLAN.pro,
+  );
   if (pro) return { plan: pro.plan, planHandle: pro.handle };
 
-  const basic = recognized.find((item) => item.plan === AI_SEARCH_PLAN.basic);
+  const basic = recognized.find(
+    (item) => item.plan === AI_SEARCH_PLAN.basic,
+  );
   if (basic) return { plan: basic.plan, planHandle: basic.handle };
 
   const preferred = preferredPlanHandle?.trim();
-
-if (preferred) {
-  const preferredPlan = planFromHandle(preferred);
-
-  if (preferredPlan !== AI_SEARCH_PLAN.none) {
-    return {
-      plan: preferredPlan,
-      planHandle: preferred,
-    };
+  if (preferred) {
+    const preferredPlan = planFromHandle(preferred);
+    if (preferredPlan !== AI_SEARCH_PLAN.none) {
+      return {
+        plan: preferredPlan,
+        planHandle: preferred,
+      };
+    }
   }
+
+  return {
+    plan:
+      itemHandles.length > 0
+        ? AI_SEARCH_PLAN.custom
+        : AI_SEARCH_PLAN.none,
+    planHandle: itemHandles[0] ?? preferred ?? null,
+  };
 }
 
-return {
-  plan: itemHandles.length > 0 ? AI_SEARCH_PLAN.custom : AI_SEARCH_PLAN.none,
-  planHandle: itemHandles[0] ?? preferred ?? null,
-};
-}
-
-function parsePartnerDate(value: string | null | undefined) {
-  if (!value) return null;
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? null : date;
-}
-
-type ReconciledActiveSubscription = NonNullable<
-  NonNullable<ActiveSubscriptionResponse["data"]>["activeSubscription"]
->;
-
-async function queryAdminActiveSubscription(
+async function queryAdminSubscription(
   admin: AdminGraphqlClient,
   expectedSubscriptionGid?: string | null,
 ) {
   const response = await admin.graphql(
     `#graphql
-      query GetCurrentAppActiveSubscriptions {
+      query GetCurrentAppSubscriptions {
         currentAppInstallation {
           activeSubscriptions {
             id
@@ -275,62 +194,160 @@ async function queryAdminActiveSubscription(
               }
             }
           }
+          allSubscriptions(first: 100) {
+            nodes {
+              id
+              name
+              status
+              createdAt
+              currentPeriodEnd
+              trialDays
+              test
+              lineItems {
+                id
+                plan {
+                  pricingDetails {
+                    __typename
+                    ... on AppRecurringPricing {
+                      planHandle
+                      interval
+                      price {
+                        amount
+                        currencyCode
+                      }
+                    }
+                  }
+                }
+              }
+            }
+            pageInfo {
+              hasNextPage
+              endCursor
+            }
+          }
         }
       }
     `,
   );
 
-  const body =
-    (await response.json()) as AdminActiveSubscriptionResponse;
+  const body = (await response.json()) as AdminSubscriptionsResponse;
 
   if (!response.ok || body.errors?.length) {
     const message =
       body.errors
         ?.map((error) => error.message)
         .filter(Boolean)
-        .join("; ") ||
-      "Shopify Admin API request failed.";
+        .join("; ") || "Shopify Admin API request failed.";
 
     throw new Error(message);
   }
 
-  const subscriptions =
-    body.data?.currentAppInstallation?.activeSubscriptions ?? [];
+  const installation = body.data?.currentAppInstallation;
+  const activeSubscriptions = installation?.activeSubscriptions ?? [];
+  const allSubscriptions = installation?.allSubscriptions?.nodes ?? [];
 
-  const activeSubscriptions = subscriptions.filter(
-      (subscription) => subscription.status === "ACTIVE",
-    );
+  const byId = new Map<string, AdminSubscription>();
 
-    if (expectedSubscriptionGid) {
-      return (
-        activeSubscriptions.find(
-          (subscription) =>
-            subscription.id === expectedSubscriptionGid,
-        ) ?? null
-      );
+  for (const subscription of allSubscriptions) {
+    if (isShopifySubscriptionStatus(subscription.status)) {
+      byId.set(subscription.id, subscription);
     }
+  }
 
+  // activeSubscriptions is kept as a second source for the current ACTIVE
+  // view. allSubscriptions remains the lifecycle source of truth.
+  for (const subscription of activeSubscriptions) {
+    if (isShopifySubscriptionStatus(subscription.status)) {
+      byId.set(subscription.id, subscription);
+    }
+  }
+
+  const subscriptions = [...byId.values()];
+
+  if (expectedSubscriptionGid) {
     return (
-      [...activeSubscriptions].sort(
+      subscriptions.find(
+        (subscription) => subscription.id === expectedSubscriptionGid,
+      ) ?? null
+    );
+  }
+
+  /**
+   * A reconciliation without an expected GID is a current-state sync.
+   * Only an actual ACTIVE subscription may become the current entitlement.
+   * If Shopify has no ACTIVE subscription, return null and DO NOT infer
+   * CANCELLED from absence.
+   */
+  return (
+    subscriptions
+      .filter((subscription) => subscription.status === "ACTIVE")
+      .sort(
         (a, b) =>
           new Date(b.createdAt).getTime() -
           new Date(a.createdAt).getTime(),
       )[0] ?? null
-    );
+  );
 }
 
+async function resolvePlan({
+  shop,
+  planHandle,
+  plan,
+}: {
+  shop: string;
+  planHandle: string;
+  plan: string;
+}) {
+  if (
+    plan === AI_SEARCH_PLAN.basic ||
+    plan === AI_SEARCH_PLAN.pro
+  ) {
+    return db.plan.findUnique({
+      where: { handle: plan.toLowerCase() },
+    });
+  }
 
+  const direct = await db.plan.findFirst({
+    where: {
+      OR: [
+        { handle: planHandle },
+        { shopifyPlanHandle: planHandle },
+      ],
+    },
+  });
 
-export async function refreshShopifyAppPricingSubscription({
+  if (direct) return direct;
+
+  const assignment = await db.planAssignment.findFirst({
+    where: {
+      shop,
+      isActive: true,
+      plan: {
+        OR: [
+          { handle: planHandle },
+          { shopifyPlanHandle: planHandle },
+        ],
+      },
+    },
+    include: { plan: true },
+    orderBy: { createdAt: "desc" },
+  });
+
+  return assignment?.plan ?? null;
+}
+
+async function reconcileManualShopifySubscription({
   shop,
   admin,
   preferredPlanHandle,
+  authoritativePlanHandle,
   adminSubscription,
 }: {
   shop: string;
   admin: AdminGraphqlClient;
   preferredPlanHandle?: string | null;
-  adminSubscription?: ReconciledActiveSubscription | null;
+  authoritativePlanHandle?: string | null;
+  adminSubscription: AdminSubscription;
 }) {
   const identity = await fetchShopIdentity(admin);
 
@@ -342,37 +359,145 @@ export async function refreshShopifyAppPricingSubscription({
 
   const before = await getSubscriptionSnapshot(shop);
 
-  const result = adminSubscription
-    ? {
-        configured: true as const,
-        subscription: adminSubscription,
-      }
-    : await queryActiveSubscription(identity.id);
+  const billingState = await ensureBillingV2State(shop);
 
-  if (!result.configured) {
-    return {
-      configured: false as const,
-      subscription: before,
-      changed: false,
-      previousPlan: before.plan,
-      previousStatus: before.status,
-    };
+  const gid = adminSubscription.id;
+  const status = adminSubscription.status;
+
+  // A subscription GID is immutable. Once CREATE/callback has mapped that
+  // exact GID to a plan, lifecycle webhooks must preserve that mapping even
+  // when Shopify's pricing item does not expose a plan handle.
+  const current = await db.billingSubscription.findUnique({
+    where: { shopifySubscriptionGid: gid },
+  });
+
+  const persistedPlanHandle = current?.shopifyPlanHandle?.trim() || null;
+  const persistedPlan = persistedPlanHandle
+    ? planFromHandle(persistedPlanHandle)
+    : AI_SEARCH_PLAN.none;
+
+ 
+
+  const itemHandles = (adminSubscription.lineItems ?? [])
+    .map(
+      (item) =>
+        item.plan?.pricingDetails?.planHandle?.trim() ?? null,
+    )
+    .filter((value): value is string => Boolean(value));
+
+     console.log("[BILLING DEBUG] Plan mapping inputs:", {
+      gid,
+      status,
+      authoritativePlanHandle,
+      preferredPlanHandle,
+      persistedPlanHandle,
+      persistedPlan,
+      itemHandles,
+    }); 
+
+  // Manual Billing subscriptions created with appSubscriptionCreate may not
+  // expose a planHandle on AppRecurringPricing. In that case, keep Shopify
+  // as the source of truth for the subscription/GID/status and use the
+  // already-persisted plan handle only as the local plan mapping hint.
+        const authoritativeHandle =
+          authoritativePlanHandle?.trim().toLowerCase() || null;
+
+        const planMappingHint =
+          preferredPlanHandle?.trim().toLowerCase() ||
+          billingState.legacy?.planHandle?.trim().toLowerCase() ||
+          null;
+
+        let inferred: ReturnType<typeof inferPlan>;
+
+        const authoritativePlan = authoritativeHandle
+          ? planFromHandle(authoritativeHandle)
+          : AI_SEARCH_PLAN.none;
+
+        if (
+          authoritativeHandle &&
+          authoritativePlan !== AI_SEARCH_PLAN.none
+        ) {
+          inferred = {
+            plan: authoritativePlan,
+            planHandle: authoritativeHandle,
+          };
+        } else if (
+          persistedPlanHandle &&
+          persistedPlan !== AI_SEARCH_PLAN.none
+        ) {
+          inferred = {
+            plan: persistedPlan,
+            planHandle: persistedPlanHandle.toLowerCase(),
+          };
+        } else {
+          inferred = inferPlan({
+            preferredPlanHandle: planMappingHint,
+            itemHandles,
+          });
+        }
+
+  if (!inferred.planHandle) {
+    throw new Error(
+      `Shopify subscription ${adminSubscription.id} has no plan handle.`,
+    );
   }
 
-  await ensureBillingV2State(shop);
+  console.log("[BILLING DEBUG] Plan mapping result:", {
+    gid,
+    inferredPlan: inferred.plan,
+    inferredPlanHandle: inferred.planHandle,
+  });
 
-  if (!result.subscription) {
-    const active = await db.billingSubscription.findFirst({
-      where: {
-        shop,
-        status: { in: ["ACTIVE", "PENDING", "FROZEN"] },
-      },
-      orderBy: { updatedAt: "desc" },
+  const plan = await resolvePlan({
+    shop,
+    planHandle: inferred.planHandle,
+    plan: inferred.plan,
+  });
+
+  if (!plan) {
+    throw new Error(
+      `Shopify Billing plan "${inferred.planHandle}" is not configured in Billing V2.`,
+    );
+  }
+
+  const start = parseShopifyDate(adminSubscription.createdAt);
+  const end = parseShopifyDate(adminSubscription.currentPeriodEnd);
+
+  /**
+   * Replacement handling is anchored to AiSearchShop.currentSubscriptionGid.
+   * Never pick the "latest updated" PENDING subscription as the old/current
+   * subscription: multiple pending replacement flows can legitimately exist
+   * in Billing V2. Only the subscription that was actually the current
+   * entitlement may be closed when Shopify makes the new subscription ACTIVE.
+   */
+  if (!current && status === "ACTIVE") {
+    const shopPointer = await db.aiSearchShop.findUnique({
+      where: { shop },
+      select: { currentSubscriptionGid: true },
     });
 
-    if (active) {
+    const previous = shopPointer?.currentSubscriptionGid
+      ? await db.billingSubscription.findUnique({
+          where: {
+            shopifySubscriptionGid: shopPointer.currentSubscriptionGid,
+          },
+        })
+      : await db.billingSubscription.findFirst({
+          where: {
+            shop,
+            status: { in: ["ACTIVE", "FROZEN"] },
+          },
+          orderBy: { updatedAt: "desc" },
+        });
+
+    if (
+      previous &&
+      previous.shopifySubscriptionGid &&
+      previous.shopifySubscriptionGid !== gid &&
+      (previous.status === "ACTIVE" || previous.status === "FROZEN")
+    ) {
       await db.billingSubscription.update({
-        where: { id: active.id },
+        where: { id: previous.id },
         data: {
           status: "CANCELLED",
           cancelledAt: new Date(),
@@ -381,255 +506,329 @@ export async function refreshShopifyAppPricingSubscription({
 
       await recordBillingEvent({
         shop,
-        subscriptionGid: active.shopifySubscriptionGid,
+        subscriptionGid: previous.shopifySubscriptionGid,
         type: "SUBSCRIPTION_CANCELLED",
         source: "API",
-        idempotencyKey: `subscription-cancelled:${active.shopifySubscriptionGid ?? active.id}`,
+        idempotencyKey:
+          `subscription-replaced:${previous.shopifySubscriptionGid}:${gid}`,
         payload: {
-          reason: "SHOPIFY_ACTIVE_SUBSCRIPTION_NOT_FOUND",
+          reason: "SHOPIFY_SUBSCRIPTION_REPLACED",
+          replacementSubscriptionGid: gid,
         },
       });
     }
-
-    await db.$executeRaw`
-      UPDATE \`AiSearchShop\`
-      SET
-        \`currentPlanHandle\` = NULL,
-        \`currentSubscriptionGid\` = NULL,
-        \`updatedAt\` = UTC_TIMESTAMP(3)
-      WHERE \`shop\` = ${shop}
-    `;
-
-    const subscription = await getSubscriptionSnapshot(shop);
-    await mirrorBillingStateToLegacy(subscription);
-
-    return {
-      configured: true as const,
-      subscription,
-      changed:
-        before.plan !== subscription.plan ||
-        before.status !== subscription.status,
-      previousPlan: before.plan,
-      previousStatus: before.status,
-    };
   }
 
-  const itemHandles = (result.subscription.items ?? [])
-    .filter((item) => item.price?.active === true)
-    .map((item) => item.handle?.trim())
-    .filter((value): value is string => Boolean(value));
-
-  const inferred = inferPlan({
-    preferredPlanHandle,
-    itemHandles,
-  });
-
-  if (inferred.plan === AI_SEARCH_PLAN.none || !inferred.planHandle) {
-    throw new Error(
-      "Active Shopify App Pricing subscription has no active pricing item.",
-    );
-  }
-
-  let plan = null;
-
-  if (
-    inferred.plan === AI_SEARCH_PLAN.basic ||
-    inferred.plan === AI_SEARCH_PLAN.pro
-  ) {
-    plan = await db.plan.findUnique({
-      where: { handle: inferred.plan.toLowerCase() },
-    });
-  } else {
-    plan = await db.plan.findFirst({
-      where: {
-        OR: [
-          { handle: inferred.planHandle },
-          { shopifyPlanHandle: inferred.planHandle },
-        ],
-      },
-    });
-
-    if (!plan) {
-      const assignment = await db.planAssignment.findFirst({
-        where: {
-          shop,
-          isActive: true,
-          plan: {
-            OR: [
-              { handle: inferred.planHandle },
-              { shopifyPlanHandle: inferred.planHandle },
-            ],
-          },
-        },
-        include: { plan: true },
-        orderBy: { createdAt: "desc" },
-      });
-      plan = assignment?.plan ?? null;
-    }
-  }
-
-  if (!plan) {
-    // Unknown Shopify handles are not granted an implicit entitlement. A
-    // CUSTOM plan must first exist in Billing V2 and be associated with this
-    // shop, so limits are always explicit and auditable.
-    await db.$executeRaw`
-      UPDATE \`AiSearchShop\`
-      SET
-        \`currentPlanHandle\` = ${inferred.planHandle},
-        \`currentSubscriptionGid\` = ${result.subscription.legacySubscriptionId ?? null},
-        \`updatedAt\` = UTC_TIMESTAMP(3)
-      WHERE \`shop\` = ${shop}
-    `;
-
-    throw new Error(
-      `Active Shopify App Pricing plan "${inferred.planHandle}" is not configured in Billing V2. Create/assign its Plan record before activating it.`,
-    );
-  }
-
-  const start = parsePartnerDate(
-    result.subscription.currentBillingCycle?.startTime,
-  );
-  const end = parsePartnerDate(
-    result.subscription.currentBillingCycle?.endTime,
-  );
-  const gid = result.subscription.legacySubscriptionId ?? null;
-
-  let current = gid
-    ? await db.billingSubscription.findUnique({
-        where: { shopifySubscriptionGid: gid },
-      })
-    : null;
-
-  if (!current) {
-    current = await db.billingSubscription.findFirst({
-      where: {
-        shop,
-        status: { in: ["ACTIVE", "PENDING", "FROZEN"] },
-      },
-      orderBy: { updatedAt: "desc" },
-    });
-  }
-
-  if (current && current.shopifySubscriptionGid !== gid) {
-    await db.billingSubscription.update({
-      where: { id: current.id },
-      data: {
-        status: "CANCELLED",
-        cancelledAt: new Date(),
-      },
-    });
-
-    await recordBillingEvent({
-      shop,
-      subscriptionGid: current.shopifySubscriptionGid,
-      type: "SUBSCRIPTION_CANCELLED",
-      source: "API",
-      idempotencyKey: `subscription-replaced:${current.shopifySubscriptionGid ?? current.id}:${gid ?? "none"}`,
-      payload: { replacementSubscriptionGid: gid },
-    });
-
-    current = null;
-  }
+  const previousStatus = current?.status ?? null;
 
   const data = {
     shop,
     planId: plan.id,
     shopifySubscriptionGid: gid,
     shopifyPlanHandle: inferred.planHandle,
-    status: "ACTIVE" as const,
+    status,
     planNameSnapshot: plan.name,
     priceSnapshot: plan.price,
     currencySnapshot: plan.currencyCode,
     intervalSnapshot: plan.interval,
-    trialEndsAt: parsePartnerDate(result.subscription.trialEndsAt),
+    trialEndsAt: null,
     currentPeriodStartsAt: start,
     currentPeriodEndsAt: end,
-    activatedAt: current?.activatedAt ?? new Date(),
-    testMode: process.env.NODE_ENV !== "production",
-    rawResponse: result.subscription as unknown as object,
+    activatedAt:
+      status === "ACTIVE"
+        ? current?.activatedAt ?? new Date()
+        : current?.activatedAt ?? null,
+    frozenAt:
+      status === "FROZEN"
+        ? current?.frozenAt ?? new Date()
+        : current?.frozenAt ?? null,
+    cancelledAt:
+      status === "CANCELLED"
+        ? current?.cancelledAt ?? new Date()
+        : current?.cancelledAt ?? null,
+    testMode:
+      adminSubscription.test ?? process.env.NODE_ENV !== "production",
+    rawResponse: adminSubscription as unknown as object,
   };
 
-  const subscription = current
-    ? await db.billingSubscription.update({
-        where: { id: current.id },
-        data,
-      })
-    : await db.billingSubscription.create({ data });
+  // Callback and APP_SUBSCRIPTIONS_UPDATE can reconcile the same exact GID
+  // concurrently. Use the unique Shopify GID as the database identity so the
+  // second reconciler updates the row instead of throwing a unique-constraint
+  // error and turning the billing callback into a white screen.
+  const subscription = await db.billingSubscription.upsert({
+    where: { shopifySubscriptionGid: gid },
+    create: data,
+    update: data,
+  });
 
-  const eventType =
-    before.plan !== (plan.handle === "basic"
-      ? AI_SEARCH_PLAN.basic
-      : plan.handle === "pro"
-        ? AI_SEARCH_PLAN.pro
-        : AI_SEARCH_PLAN.custom)
-      ? "BILLING_RECONCILED"
-      : current
-        ? "BILLING_RECONCILED"
-        : "SUBSCRIPTION_CREATED";
+  /**
+   * Emit lifecycle events only for actual status transitions / creation.
+   * The idempotency key contains the event type so ACTIVE after FROZEN can
+   * produce SUBSCRIPTION_UNFROZEN without colliding with the first ACTIVE.
+   */
+  if (!current && status === "PENDING") {
+    await recordBillingEvent({
+      shop,
+      subscriptionGid: gid,
+      type: "SUBSCRIPTION_CREATED",
+      source: "API",
+      idempotencyKey: `subscription-created:${gid}`,
+      payload: {
+        planHandle: inferred.planHandle,
+        status,
+      },
+    });
+  }
+
+  if (
+    status === "ACTIVE" &&
+    previousStatus !== "ACTIVE"
+  ) {
+    await recordBillingEvent({
+      shop,
+      subscriptionGid: gid,
+      type:
+        previousStatus === "FROZEN"
+          ? "SUBSCRIPTION_UNFROZEN"
+          : "SUBSCRIPTION_ACTIVATED",
+      source: "API",
+      idempotencyKey:
+        `subscription-${previousStatus === "FROZEN" ? "unfrozen" : "activated"}:${gid}`,
+      payload: {
+        planHandle: inferred.planHandle,
+        previousStatus,
+        status,
+      },
+    });
+  }
+
+  if (
+    status === "FROZEN" &&
+    previousStatus !== "FROZEN"
+  ) {
+    await recordBillingEvent({
+      shop,
+      subscriptionGid: gid,
+      type: "SUBSCRIPTION_FROZEN",
+      source: "API",
+      idempotencyKey: `subscription-frozen:${gid}`,
+      payload: {
+        planHandle: inferred.planHandle,
+        previousStatus,
+        status,
+      },
+    });
+  }
+
+  if (
+    status === "CANCELLED" &&
+    previousStatus !== "CANCELLED"
+  ) {
+    await recordBillingEvent({
+      shop,
+      subscriptionGid: gid,
+      type: "SUBSCRIPTION_CANCELLED",
+      source: "API",
+      idempotencyKey: `subscription-cancelled:${gid}`,
+      payload: {
+        planHandle: inferred.planHandle,
+        previousStatus,
+        status,
+      },
+    });
+  }
+
+  if (
+    status === "DECLINED" &&
+    previousStatus !== "DECLINED"
+  ) {
+    await recordBillingEvent({
+      shop,
+      subscriptionGid: gid,
+      type: "BILLING_RECONCILED",
+      source: "API",
+      idempotencyKey: `subscription-declined:${gid}`,
+      payload: {
+        planHandle: inferred.planHandle,
+        previousStatus,
+        status,
+      },
+    });
+  }
+
+  if (
+    status === "EXPIRED" &&
+    previousStatus !== "EXPIRED"
+  ) {
+    await recordBillingEvent({
+      shop,
+      subscriptionGid: gid,
+      type: "BILLING_RECONCILED",
+      source: "API",
+      idempotencyKey: `subscription-expired:${gid}`,
+      payload: {
+        planHandle: inferred.planHandle,
+        previousStatus,
+        status,
+      },
+    });
+  }
 
   await recordBillingEvent({
     shop,
     subscriptionGid: gid,
-    type: eventType,
+    type: "BILLING_RECONCILED",
     source: "API",
-    idempotencyKey: `billing-reconcile:${gid ?? subscription.id}:${inferred.planHandle}:${start?.toISOString() ?? "none"}:${end?.toISOString() ?? "none"}`,
+    idempotencyKey: `billing-reconcile:${gid}:${status}`,
     payload: {
       planId: plan.id,
       planHandle: inferred.planHandle,
+      shopifyStatus: status,
       billingPeriodStart: start?.toISOString() ?? null,
       billingPeriodEnd: end?.toISOString() ?? null,
     },
   });
 
-  await db.$executeRaw`
-    UPDATE \`AiSearchShop\`
-    SET
-      \`currentPlanHandle\` = ${inferred.planHandle},
-      \`currentSubscriptionGid\` = ${gid},
-      \`pendingPlanHandle\` = NULL,
-      \`pendingSubscriptionGid\` = NULL,
-      \`pendingChangeAt\` = NULL,
-      \`updatedAt\` = UTC_TIMESTAMP(3)
-    WHERE \`shop\` = ${shop}
-  `;
+  /**
+   * Current entitlement pointer:
+   * - ACTIVE becomes current.
+   * - PENDING/FROZEN keep their exact BillingSubscription state but do not
+   *   replace the current ACTIVE entitlement pointer.
+   * - terminal states clear the current pointer only when they refer to the
+   *   current subscription.
+   */
+  if (status === "ACTIVE") {
+    // The newly ACTIVE subscription becomes current. Clear the pending
+    // pointer only when it points to this exact GID; do not erase another
+    // pending flow that may have been created after this one.
+    await db.$executeRaw`
+      UPDATE \`AiSearchShop\`
+      SET
+        \`currentPlanHandle\` = ${inferred.planHandle},
+        \`currentSubscriptionGid\` = ${gid},
+        \`pendingPlanHandle\` = CASE
+          WHEN \`pendingSubscriptionGid\` = ${gid} THEN NULL
+          ELSE \`pendingPlanHandle\`
+        END,
+        \`pendingSubscriptionGid\` = CASE
+          WHEN \`pendingSubscriptionGid\` = ${gid} THEN NULL
+          ELSE \`pendingSubscriptionGid\`
+        END,
+        \`pendingChangeAt\` = CASE
+          WHEN \`pendingSubscriptionGid\` = ${gid} THEN NULL
+          ELSE \`pendingChangeAt\`
+        END,
+        \`updatedAt\` = UTC_TIMESTAMP(3)
+      WHERE \`shop\` = ${shop}
+    `;
+  } else if (status === "PENDING") {
+    await db.$executeRaw`
+      UPDATE \`AiSearchShop\`
+      SET
+        \`pendingPlanHandle\` = ${inferred.planHandle},
+        \`pendingSubscriptionGid\` = ${gid},
+        \`pendingChangeAt\` = UTC_TIMESTAMP(3)
+      WHERE \`shop\` = ${shop}
+    `;
+  } else if (
+    status === "CANCELLED" ||
+    status === "DECLINED" ||
+    status === "EXPIRED"
+  ) {
+    // A terminal event for the pending subscription must clear only the
+    // pending pointer. A terminal event for the current subscription clears
+    // the current pointer, but must not manufacture cancellation for any
+    // other GID.
+    await db.$executeRaw`
+      UPDATE \`AiSearchShop\`
+      SET
+        \`currentPlanHandle\` = CASE
+          WHEN \`currentSubscriptionGid\` = ${gid} THEN NULL
+          ELSE \`currentPlanHandle\`
+        END,
+        \`currentSubscriptionGid\` = CASE
+          WHEN \`currentSubscriptionGid\` = ${gid} THEN NULL
+          ELSE \`currentSubscriptionGid\`
+        END,
+        \`pendingPlanHandle\` = CASE
+          WHEN \`pendingSubscriptionGid\` = ${gid} THEN NULL
+          ELSE \`pendingPlanHandle\`
+        END,
+        \`pendingSubscriptionGid\` = CASE
+          WHEN \`pendingSubscriptionGid\` = ${gid} THEN NULL
+          ELSE \`pendingSubscriptionGid\`
+        END,
+        \`pendingChangeAt\` = CASE
+          WHEN \`pendingSubscriptionGid\` = ${gid} THEN NULL
+          ELSE \`pendingChangeAt\`
+        END,
+        \`updatedAt\` = UTC_TIMESTAMP(3)
+      WHERE \`shop\` = ${shop}
+    `;
+  }
 
   const snapshot = await getSubscriptionSnapshot(shop);
-  await mirrorBillingStateToLegacy(snapshot);
+      await mirrorBillingStateToLegacy(snapshot);
 
-  return {
-    configured: true as const,
-    subscription: snapshot,
-    changed:
-      before.plan !== snapshot.plan ||
-      before.status !== snapshot.status ||
-      before.planHandle !== snapshot.planHandle ||
-      before.shopifySubscriptionId !== snapshot.shopifySubscriptionId,
-    previousPlan: before.plan,
-    previousStatus: before.status,
-  };
+      return {
+        configured: true as const,
+
+        // Entitlement hiện tại của shop.
+        // Ví dụ: BASIC ACTIVE trong lúc PRO mới đang PENDING.
+        subscription: snapshot,
+
+        // Subscription/GID vừa được Shopify reconcile.
+        // Đây mới là trạng thái mà callback cần theo dõi.
+        reconciledSubscription: {
+          gid,
+          plan: inferred.plan,
+          planHandle: inferred.planHandle,
+          status,
+        },
+
+        changed:
+          before.plan !== snapshot.plan ||
+          before.status !== snapshot.status ||
+          before.planHandle !== snapshot.planHandle ||
+          before.shopifySubscriptionId !== snapshot.shopifySubscriptionId,
+
+        previousPlan: before.plan,
+        previousStatus: before.status,
+      };
 }
 
+/**
+ * Main Manual Billing reconciliation entry point.
+ *
+ * Shopify Admin GraphQL is the source of truth. The expected GID is used
+ * when callback/webhook reconciliation identifies a specific subscription.
+ */
 export async function reconcileShopifySubscriptionFromAdmin({
   shop,
   admin,
   expectedSubscriptionGid,
   preferredPlanHandle,
+  authoritativePlanHandle,
 }: {
   shop: string;
   admin: AdminGraphqlClient;
-  expectedSubscriptionGid: string;
+  expectedSubscriptionGid?: string | null;
   preferredPlanHandle?: string | null;
+  authoritativePlanHandle?: string | null;
 }) {
-  const activeSubscription = await queryAdminActiveSubscription(
+  const subscription = await queryAdminSubscription(
     admin,
     expectedSubscriptionGid,
   );
 
-  if (!activeSubscription) {
-    console.log("[BILLING] Shopify subscription not ACTIVE yet:", {
-      shop,
-      expectedSubscriptionGid,
-    });
+  if (!subscription) {
+    console.log(
+      "[BILLING] Shopify subscription not found for reconciliation; local state unchanged:",
+      {
+        shop,
+        expectedSubscriptionGid: expectedSubscriptionGid ?? null,
+      },
+    );
 
     return {
       configured: true as const,
@@ -638,50 +837,24 @@ export async function reconcileShopifySubscriptionFromAdmin({
       subscription: await getSubscriptionSnapshot(shop, {
         ensure: false,
       }),
+      reconciledSubscription: null,
     };
   }
 
-  console.log("[BILLING] Shopify ACTIVE subscription verified:", {
+  console.log("[BILLING] Shopify subscription verified:", {
     shop,
-    expectedSubscriptionGid,
-    actualSubscriptionGid: activeSubscription.id,
-    status: activeSubscription.status,
-    name: activeSubscription.name,
+    expectedSubscriptionGid: expectedSubscriptionGid ?? null,
+    actualSubscriptionGid: subscription.id,
+    status: subscription.status,
+    name: subscription.name,
   });
 
-  const adminSubscription: ReconciledActiveSubscription = {
-    billingPeriod:
-      activeSubscription.lineItems?.[0]?.plan?.pricingDetails?.interval ??
-      "EVERY_30_DAYS",
-
-    currentBillingCycle: {
-      startTime: activeSubscription.createdAt,
-      endTime: activeSubscription.currentPeriodEnd ?? null,
-    },
-
-    trialEndsAt: null,
-
-    legacySubscriptionId: activeSubscription.id,
-
-    items:
-      activeSubscription.lineItems?.map((item) => ({
-        handle: item.plan?.pricingDetails?.planHandle ?? null,
-        description: activeSubscription.name,
-        price: {
-          active: true,
-          currency:
-            item.plan?.pricingDetails?.price?.currencyCode ?? "USD",
-          amount:
-            item.plan?.pricingDetails?.price?.amount ?? null,
-        },
-      })) ?? [],
-  };
-
-  const result = await refreshShopifyAppPricingSubscription({
+  const result = await reconcileManualShopifySubscription({
     shop,
     admin,
     preferredPlanHandle,
-    adminSubscription,
+    authoritativePlanHandle,
+    adminSubscription: subscription,
   });
 
   return {
@@ -689,6 +862,38 @@ export async function reconcileShopifySubscriptionFromAdmin({
     configured: true as const,
     confirmed: true as const,
   };
+}
+
+/**
+ * Compatibility wrapper retained for existing callers. The implementation
+ * is Manual Billing and does not call Shopify Partner API.
+ */
+export async function refreshShopifyAppPricingSubscription({
+  shop,
+  admin,
+  preferredPlanHandle,
+  adminSubscription,
+}: {
+  shop: string;
+  admin: AdminGraphqlClient;
+  preferredPlanHandle?: string | null;
+  adminSubscription?: AdminSubscription | null;
+}) {
+  if (adminSubscription) {
+    return reconcileManualShopifySubscription({
+      shop,
+      admin,
+      preferredPlanHandle,
+      adminSubscription,
+    });
+  }
+
+  return reconcileShopifySubscriptionFromAdmin({
+    shop,
+    admin,
+    expectedSubscriptionGid: null,
+    preferredPlanHandle,
+  });
 }
 
 export async function refreshShopifyAppPricingIfStale({
@@ -715,17 +920,6 @@ export async function refreshShopifyAppPricingIfStale({
     };
   }
 
-  if (!isShopifyAppPricingConfigured()) {
-    return {
-      configured: false as const,
-      subscription: current,
-      skipped: true,
-      changed: false,
-      previousPlan: current.plan,
-      previousStatus: current.status,
-    };
-  }
-
   const isStale = (snapshot: typeof current) =>
     !snapshot.lastSyncedAt ||
     Date.now() - snapshot.lastSyncedAt.getTime() >= maxAgeMs;
@@ -741,9 +935,6 @@ export async function refreshShopifyAppPricingIfStale({
     };
   }
 
-  // Storefront traffic can create many concurrent requests at the exact cache
-  // boundary. Serialize Partner API refreshes per shop, then re-check staleness
-  // after acquiring the lease so only one request pays the external API call.
   return withDistributedLease({
     shop,
     resource: "billing:refresh",
@@ -752,6 +943,7 @@ export async function refreshShopifyAppPricingIfStale({
     pollMs: 100,
     task: async () => {
       const latest = await getSubscriptionSnapshot(shop);
+
       if (!preferredPlanHandle && !isStale(latest)) {
         return {
           configured: true as const,
@@ -763,9 +955,11 @@ export async function refreshShopifyAppPricingIfStale({
         };
       }
 
-      const refreshed = await refreshShopifyAppPricingSubscription({
+      const refreshed = await reconcileShopifySubscriptionFromAdmin({
         shop,
         admin,
+        expectedSubscriptionGid:
+          latest.shopifySubscriptionId ?? null,
         preferredPlanHandle,
       });
 

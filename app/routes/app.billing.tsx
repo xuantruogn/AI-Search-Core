@@ -16,78 +16,50 @@ import { getSubscriptionSnapshot } from "../services/commerce/shop-registry.serv
 import { reconcileShopCommercialState } from "../services/commerce/reconciliation.server";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  const debugUrl = new URL(request.url);
-
-  console.log("[BILLING DEBUG] Loader request BEFORE authenticate:", {
-    url: debugUrl.toString(),
-    pathname: debugUrl.pathname,
-    search: debugUrl.search,
-    chargeId: debugUrl.searchParams.get("charge_id"),
-    shopParam: debugUrl.searchParams.get("shop"),
-    hostParam: debugUrl.searchParams.get("host"),
-    SHOPIFY_APP_URL: process.env.SHOPIFY_APP_URL || null,
-    NODE_ENV: process.env.NODE_ENV || null,
-    referer: request.headers.get("referer"),
-    userAgent: request.headers.get("user-agent"),
-  });
+  const timestamp = new Date().toISOString();
+  console.log(`[BILLING LOADER START] [${timestamp}] Request URL: ${request.url}`);
 
   const { admin, session } = await authenticate.admin(request);
-
-  console.log("[BILLING DEBUG] Admin authentication result:", {
-  url: request.url,
-  chargeId: new URL(request.url).searchParams.get("charge_id"),
-  shop: session.shop,
-  sessionId: session.id,
-  isOnline: session.isOnline,
-});
-
-
   const url = new URL(request.url);
-const chargeId = url.searchParams.get("charge_id");
+  const chargeId = url.searchParams.get("charge_id");
+  const isBillingCallback = url.searchParams.get("billing_callback") === "1";
 
-if (chargeId) {
-  const shopRecord = await db.aiSearchShop.findUnique({
-    where: {
-      shop: session.shop,
-    },
-    select: {
-      pendingPlanHandle: true,
-      pendingSubscriptionGid: true,
-    },
-  });
+  console.log(`[BILLING LOADER AUTH] Authenticated shop: ${session.shop}, isCallback: ${isBillingCallback}, chargeId: ${chargeId}`);
 
-  console.log("[BILLING] Shopify billing callback:", {
-    shop: session.shop,
-    chargeId,
-    pendingPlanHandle: shopRecord?.pendingPlanHandle,
-    pendingSubscriptionGid: shopRecord?.pendingSubscriptionGid,
-  });
+  if (chargeId || isBillingCallback) {
+    const shopRecord = await db.aiSearchShop.findUnique({
+      where: { shop: session.shop },
+      select: {
+        pendingPlanHandle: true,
+        pendingSubscriptionGid: true,
+      },
+    });
 
-  if (shopRecord?.pendingSubscriptionGid) {
-    const reconciliation =
+    const targetGid =
+      shopRecord?.pendingSubscriptionGid ||
+      (chargeId?.startsWith("gid://")
+        ? chargeId
+        : chargeId
+          ? `gid://shopify/AppSubscription/${chargeId}`
+          : null);
+
+    console.log(`[BILLING LOADER RECONCILE START] targetGid: ${targetGid}`);
+
+    if (targetGid) {
       await reconcileShopifySubscriptionFromAdmin({
         shop: session.shop,
         admin,
-        expectedSubscriptionGid:
-          shopRecord.pendingSubscriptionGid,
-        preferredPlanHandle:
-          shopRecord.pendingPlanHandle,
+        expectedSubscriptionGid: targetGid,
+        preferredPlanHandle: shopRecord?.pendingPlanHandle,
+        authoritativePlanHandle: shopRecord?.pendingPlanHandle,
       });
-
-    console.log("[BILLING] Callback reconciliation:", {
-      confirmed: reconciliation.confirmed,
-      changed: reconciliation.changed,
-      plan: reconciliation.subscription.plan,
-      status: reconciliation.subscription.status,
-    });
+    }
+    console.log(`[BILLING LOADER RECONCILE DONE] Completed sync for ${targetGid}`);
   }
-}
-  const entitlement = await getShopEntitlement(session.shop);
-  const subscription = await getSubscriptionSnapshot(session.shop, {
-    ensure: false,
-  });
 
-  // Calculate days remaining in current billing cycle
+  const entitlement = await getShopEntitlement(session.shop);
+  const subscription = await getSubscriptionSnapshot(session.shop, { ensure: false });
+
   let daysRemaining: number | null = null;
   let formattedPeriodEnd: string | null = null;
 
@@ -103,13 +75,14 @@ if (chargeId) {
     });
   }
 
+  console.log(`[BILLING LOADER RETURN] Status: ${entitlement.subscriptionStatus}, Plan: ${entitlement.planLabel}`);
+
   return {
     shop: session.shop,
     entitlement,
     subscription: {
       ...subscription,
-      billingPeriodStart:
-        subscription.billingPeriodStart?.toISOString() ?? null,
+      billingPeriodStart: subscription.billingPeriodStart?.toISOString() ?? null,
       billingPeriodEnd: subscription.billingPeriodEnd?.toISOString() ?? null,
       lastSyncedAt: subscription.lastSyncedAt?.toISOString() ?? null,
       daysRemaining,
@@ -126,7 +99,6 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const form = await request.formData();
   const intent = String(form.get("intent") || "");
 
-  // 1. Sync billing status directly from Shopify
   if (intent === "refresh") {
     try {
       const result = await refreshShopifyAppPricingSubscription({
@@ -153,34 +125,57 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     }
   }
 
-  // 2. Create subscription payment link via Shopify Billing API
   if (intent === "subscribe") {
     const planKey = String(form.get("planKey") || "");
     const cycle = String(form.get("cycle") || "monthly");
 
-    let price = planKey === "PRO" ? 29.9 : 9.9;
-    if (cycle === "yearly") price = price * 0.8;
-    if (cycle === "biyearly") price = price * 0.6;
-
-    // Tự động nhận diện môi trường: Dev hay Production
+    const baseMonthlyPrice = planKey === "PRO" ? 29.9 : 9.9;
     const isProduction = process.env.NODE_ENV === "production";
+
+    let finalPrice = baseMonthlyPrice;
+    let billingInterval = "EVERY_30_DAYS";
+    let planName = `AI Search ${planKey} Plan (${cycle})`;
+
+    if (cycle === "yearly") {
+      finalPrice = baseMonthlyPrice * 0.8 * 12;
+      billingInterval = "ANNUAL";
+    } else if (cycle === "biyearly") {
+      finalPrice = baseMonthlyPrice * 0.6 * 12;
+      billingInterval = "ANNUAL";
+    }
 
     try {
       const requestUrl = new URL(request.url);
-      const returnUrl = `${requestUrl.origin}/app/billing`;
+      const returnUrl = new URL("/app/billing", requestUrl.origin);
+
+      returnUrl.searchParams.set("shop", session.shop);
+      const host = requestUrl.searchParams.get("host");
+      if (host) {
+        returnUrl.searchParams.set("host", host);
+      }
+      returnUrl.searchParams.set("embedded", "1");
+      returnUrl.searchParams.set("billing_callback", "1");
 
       const response = await admin.graphql(
         `#graphql
-        mutation createPaymentLink($name: String!, $price: Decimal!, $returnUrl: URL!, $test: Boolean) {
+        mutation createPaymentLink(
+          $name: String!, 
+          $price: Decimal!, 
+          $returnUrl: URL!, 
+          $test: Boolean, 
+          $interval: AppPricingInterval!,
+          $replacementBehavior: AppSubscriptionReplacementBehavior
+        ) {
           appSubscriptionCreate(
             name: $name
             returnUrl: $returnUrl
             test: $test
+            replacementBehavior: $replacementBehavior
             lineItems: [{
               plan: {
                 appRecurringPricingDetails: {
                   price: { amount: $price, currencyCode: USD }
-                  interval: EVERY_30_DAYS
+                  interval: $interval
                 }
               }
             }]
@@ -197,12 +192,12 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         }`,
         {
           variables: {
-            name: `AI Search ${planKey} Plan (${cycle})`,
-            price: price.toFixed(2),
-            returnUrl: returnUrl,
-            // 🟢 TỰ ĐỘNG: Ở máy Local (Dev) -> test = true (Test miễn phí)
-            // Deploy lên Server Production -> test = false (Thu tiền thật)
+            name: planName,
+            price: finalPrice.toFixed(2),
+            returnUrl: returnUrl.toString(),
             test: !isProduction,
+            interval: billingInterval,
+            replacementBehavior: "APPLY_IMMEDIATELY",
           },
         }
       );
@@ -212,70 +207,45 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
       if (subscriptionData?.userErrors && subscriptionData.userErrors.length > 0) {
         const errorMsg = subscriptionData.userErrors.map((e: any) => e.message).join(", ");
-
-        // Cơ chế Fallback mượt mà cho Dev khi chưa bật Public Distribution
         if (errorMsg.includes("public distribution")) {
           return {
             success: true,
             devFallback: true,
-            message: "App currently in Dev/Custom mode (No Public Distribution). Billing API simulated successfully!",
+            message: "App currently in Dev/Custom mode. Billing API simulated successfully!",
           };
         }
-
-        return {
-          success: false,
-          message: `Shopify Error: ${errorMsg}`,
-        };
+        return { success: false, message: `Shopify Error: ${errorMsg}` };
       }
 
       const createdSubscription = subscriptionData?.appSubscription;
-
-      console.log("[BILLING] Shopify created subscription:", {
-        id: createdSubscription?.id,
-        status: createdSubscription?.status,
-        createdAt: createdSubscription?.createdAt,
-      });
-
       if (!createdSubscription?.id) {
-        return {
-          success: false,
-          message: "Shopify did not return the created subscription ID.",
-        };
+        return { success: false, message: "Shopify did not return subscription ID." };
       }
 
-      const confirmationUrl = subscriptionData?.confirmationUrl;
-
-
       await db.aiSearchShop.update({
-        where: {
-          shop: session.shop,
-        },
+        where: { shop: session.shop },
         data: {
           pendingPlanHandle: planKey.toLowerCase(),
           pendingSubscriptionGid: createdSubscription.id,
         },
       });
 
-      console.log("[BILLING] Pending subscription saved:", {
+      await reconcileShopifySubscriptionFromAdmin({
         shop: session.shop,
-        pendingPlanHandle: planKey.toLowerCase(),
-        pendingSubscriptionGid: createdSubscription.id,
+        admin,
+        expectedSubscriptionGid: createdSubscription.id,
+        preferredPlanHandle: planKey.toLowerCase(),
+        authoritativePlanHandle: planKey.toLowerCase(),
       });
 
-
+      const confirmationUrl = subscriptionData?.confirmationUrl;
       if (confirmationUrl) {
         return { success: true, confirmationUrl };
       }
 
-      return {
-        success: false,
-        message: "Failed to create subscription charge link from Shopify.",
-      };
+      return { success: false, message: "Failed to create payment link." };
     } catch (error) {
-      return {
-        success: false,
-        message: error instanceof Error ? error.message : String(error),
-      };
+      return { success: false, message: error instanceof Error ? error.message : String(error) };
     }
   }
 
@@ -295,13 +265,36 @@ export default function BillingPage() {
   const fetcher = useFetcher<typeof action>();
   const subscribeFetcher = useFetcher<typeof action>();
 
+  if (!data) return null;
+
+  // LOG MONITORING CHI TIẾT PHÍA CLIENT
+  useEffect(() => {
+    const currentUrl = window.location.href;
+    console.log(`[BILLING CLIENT MOUNT] Initial URL: ${currentUrl}`);
+
+    const url = new URL(currentUrl);
+    const hasCallback = url.searchParams.has("billing_callback");
+    const hasChargeId = url.searchParams.has("charge_id");
+
+    console.log(`[BILLING CLIENT PARAMS] billing_callback: ${hasCallback}, charge_id: ${hasChargeId}`);
+
+    if (hasCallback || hasChargeId) {
+      url.searchParams.delete("billing_callback");
+      url.searchParams.delete("charge_id");
+      const cleanUrl = url.toString();
+      console.log(`[BILLING CLIENT CLEANUP] Replacing URL to: ${cleanUrl}`);
+      window.history.replaceState(null, "", cleanUrl);
+      console.log(`[BILLING CLIENT CLEANUP DONE] Final URL: ${window.location.href}`);
+    }
+  }, []);
+
   const [cycle, setCycle] = useState<Cycle>("monthly");
   const [customRequestSent, setCustomRequestSent] = useState(false);
   const [customShowForm, setCustomShowForm] = useState(false);
 
-  // Top-level redirect when confirmationUrl is generated by Shopify
   useEffect(() => {
     if (subscribeFetcher.data?.confirmationUrl) {
+      console.log(`[BILLING CLIENT REDIRECT] Redirecting top location to confirmationUrl`);
       window.top!.location.href = subscribeFetcher.data.confirmationUrl;
     }
   }, [subscribeFetcher.data]);
@@ -532,14 +525,14 @@ export default function BillingPage() {
             </div>
           </div>
 
-          {/* Active AI Products */}
+          {/* AI Indexed Products */}
           <div style={{ border: "1px solid #f1f2f3", borderRadius: 8, padding: 14, background: "#fafafa" }}>
-            <div style={{ fontSize: 12, color: "#616161", marginBottom: 4 }}>Active AI Products</div>
+            <div style={{ fontSize: 12, color: "#616161", marginBottom: 4 }}>AI Indexed Products</div>
             <div style={{ fontSize: 18, fontWeight: 700, color: "#1a1a1a" }}>
-              {data.entitlement.activeProductSlotsUsed.toLocaleString("en-US")} / {limitText(data.entitlement.limits.productLimit, "")}
+              {data.entitlement.indexedProducts.toLocaleString("en-US")} / {limitText(data.entitlement.limits.productLimit, "")}
             </div>
             <div style={{ fontSize: 11, color: "#616161", marginTop: 4 }}>
-              {data.entitlement.cachedVectorCount.toLocaleString("en-US")} vectors cached · {data.entitlement.cachedProductLimitBlockedProducts.toLocaleString("en-US")} cached & blocked
+              Products ready for AI ranking
             </div>
           </div>
 
@@ -1195,8 +1188,6 @@ export default function BillingPage() {
                 the agreed offer here together with a Shopify payment button.
               </p>
 
-              {/* Future backend-controlled offer state. Keep hidden until the
-                  backend provides the agreed price and Shopify confirmation URL. */}
               <div
                 style={{
                   padding: 14,
@@ -1238,4 +1229,3 @@ export default function BillingPage() {
     </div>
   );
 }
-

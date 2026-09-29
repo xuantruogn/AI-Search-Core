@@ -78,7 +78,8 @@ export async function hashDevPassword(password: string) {
 
 export async function verifyDevPassword(hash: string, password: string) {
   try {
-    return await argon2.verify(hash, password, { type: argon2.argon2id });
+    // return await argon2.verify(hash, password, { type: argon2.argon2id });
+    return await argon2.verify(hash, password);
   } catch {
     return false;
   }
