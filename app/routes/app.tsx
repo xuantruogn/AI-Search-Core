@@ -1,4 +1,3 @@
-import { useEffect } from "react";
 import type { HeadersFunction, LoaderFunctionArgs } from "react-router";
 import { NavLink, Outlet, useLoaderData, useRouteError } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
@@ -74,22 +73,6 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
 export default function App() {
   const { apiKey } = useLoaderData<typeof loader>();
-
-  useEffect(() => {
-    console.log("[APP ROUTE CLIENT MOUNT]", {
-      at: new Date().toISOString(),
-      href: window.location.href,
-      topHref: window.top === window ? window.location.href : "embedded-frame",
-      apiKeyPresent: Boolean(apiKey),
-    });
-
-    return () => {
-      console.log("[APP ROUTE CLIENT UNMOUNT]", {
-        at: new Date().toISOString(),
-        href: window.location.href,
-      });
-    };
-  }, [apiKey]);
 
   const navItems = [
     { label: "Dashboard", to: "/app", end: true },
