@@ -749,13 +749,13 @@ async function reconcileManualShopifySubscription({
           WHEN \`pendingSubscriptionGid\` = ${gid} THEN NULL
           ELSE \`pendingPlanHandle\`
         END,
-        \`pendingSubscriptionGid\` = CASE
-          WHEN \`pendingSubscriptionGid\` = ${gid} THEN NULL
-          ELSE \`pendingSubscriptionGid\`
-        END,
         \`pendingChangeAt\` = CASE
           WHEN \`pendingSubscriptionGid\` = ${gid} THEN NULL
           ELSE \`pendingChangeAt\`
+        END,
+        \`pendingSubscriptionGid\` = CASE
+          WHEN \`pendingSubscriptionGid\` = ${gid} THEN NULL
+          ELSE \`pendingSubscriptionGid\`
         END,
         \`updatedAt\` = UTC_TIMESTAMP(3)
       WHERE \`shop\` = ${shop}
@@ -793,13 +793,13 @@ async function reconcileManualShopifySubscription({
           WHEN \`pendingSubscriptionGid\` = ${gid} THEN NULL
           ELSE \`pendingPlanHandle\`
         END,
-        \`pendingSubscriptionGid\` = CASE
-          WHEN \`pendingSubscriptionGid\` = ${gid} THEN NULL
-          ELSE \`pendingSubscriptionGid\`
-        END,
         \`pendingChangeAt\` = CASE
           WHEN \`pendingSubscriptionGid\` = ${gid} THEN NULL
           ELSE \`pendingChangeAt\`
+        END,
+        \`pendingSubscriptionGid\` = CASE
+          WHEN \`pendingSubscriptionGid\` = ${gid} THEN NULL
+          ELSE \`pendingSubscriptionGid\`
         END,
         \`updatedAt\` = UTC_TIMESTAMP(3)
       WHERE \`shop\` = ${shop}
