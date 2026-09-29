@@ -376,7 +376,26 @@ async function reconcileManualShopifySubscription({
     ? planFromHandle(persistedPlanHandle)
     : AI_SEARCH_PLAN.none;
 
- 
+  // Manual Billing can briefly return no exact subscription from the Admin
+  // API immediately after approval. If the webhook arrives in that window,
+  // plan_handle may also be null. Resolve the plan by the exact subscription
+  // GID pointer before falling back to legacy/current state.
+  const shopPointer = await db.aiSearchShop.findUnique({
+    where: { shop },
+    select: {
+      currentPlanHandle: true,
+      currentSubscriptionGid: true,
+      pendingPlanHandle: true,
+      pendingSubscriptionGid: true,
+    },
+  });
+
+  const exactPointerPlanHandle =
+    shopPointer?.pendingSubscriptionGid === gid
+      ? shopPointer.pendingPlanHandle?.trim().toLowerCase() || null
+      : shopPointer?.currentSubscriptionGid === gid
+        ? shopPointer.currentPlanHandle?.trim().toLowerCase() || null
+        : null;
 
   const itemHandles = (adminSubscription.lineItems ?? [])
     .map(
@@ -392,6 +411,9 @@ async function reconcileManualShopifySubscription({
       preferredPlanHandle,
       persistedPlanHandle,
       persistedPlan,
+      exactPointerPlanHandle,
+      currentSubscriptionGid: shopPointer?.currentSubscriptionGid ?? null,
+      pendingSubscriptionGid: shopPointer?.pendingSubscriptionGid ?? null,
       itemHandles,
     }); 
 
@@ -429,6 +451,19 @@ async function reconcileManualShopifySubscription({
             plan: persistedPlan,
             planHandle: persistedPlanHandle.toLowerCase(),
           };
+        } else if (exactPointerPlanHandle) {
+          const pointerPlan = planFromHandle(exactPointerPlanHandle);
+          if (pointerPlan !== AI_SEARCH_PLAN.none) {
+            inferred = {
+              plan: pointerPlan,
+              planHandle: exactPointerPlanHandle,
+            };
+          } else {
+            inferred = inferPlan({
+              preferredPlanHandle: planMappingHint,
+              itemHandles,
+            });
+          }
         } else {
           inferred = inferPlan({
             preferredPlanHandle: planMappingHint,
