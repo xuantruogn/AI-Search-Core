@@ -20,6 +20,10 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   const entitlement = await getShopEntitlement(session.shop);
   const subscription = await getSubscriptionSnapshot(session.shop, { ensure: false });
+  const billingPlans = await db.plan.findMany({
+    where: { handle: { in: ["basic", "pro"] } },
+    select: { handle: true, trialDays: true },
+  });
 
   let daysRemaining: number | null = null;
   let formattedPeriodEnd: string | null = null;
@@ -49,7 +53,12 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     },
     pricingUrl: getShopifyPricingPlansUrl(session.shop),
     partnerApiConfigured: isShopifyAppPricingConfigured(),
-    plans: [PLAN_DEFINITIONS.BASIC, PLAN_DEFINITIONS.PRO],
+    plans: [PLAN_DEFINITIONS.BASIC, PLAN_DEFINITIONS.PRO].map((plan) => ({
+      ...plan,
+      trialDays:
+        billingPlans.find((billingPlan) => billingPlan.handle === plan.key.toLowerCase())
+          ?.trialDays ?? 0,
+    })),
   };
 };
 
@@ -89,6 +98,11 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const cycle = String(form.get("cycle") || "monthly");
 
     const baseMonthlyPrice = planKey === "PRO" ? 29.9 : 9.9;
+    const billingPlan = await db.plan.findUnique({
+      where: { handle: planKey.toLowerCase() },
+      select: { trialDays: true },
+    });
+    const trialDays = Math.max(0, billingPlan?.trialDays ?? 0);
     const isProduction = process.env.NODE_ENV === "production";
 
     let finalPrice = baseMonthlyPrice;
@@ -121,7 +135,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           $name: String!, 
           $price: Decimal!, 
           $returnUrl: URL!, 
-          $test: Boolean, 
+          $test: Boolean,
+          $trialDays: Int,
           $interval: AppPricingInterval!,
           $replacementBehavior: AppSubscriptionReplacementBehavior
         ) {
@@ -129,6 +144,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
             name: $name
             returnUrl: $returnUrl
             test: $test
+            trialDays: $trialDays
             replacementBehavior: $replacementBehavior
             lineItems: [{
               plan: {
@@ -155,6 +171,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
             price: finalPrice.toFixed(2),
             returnUrl: returnUrl.toString(),
             test: !isProduction,
+            trialDays: trialDays > 0 ? trialDays : null,
             interval: billingInterval,
             replacementBehavior: "APPLY_IMMEDIATELY",
           },
@@ -681,6 +698,18 @@ export default function BillingPage() {
                   >
                     Regular: {config.originalPrice}
                   </div>
+                  {plan.trialDays > 0 && (
+                    <div
+                      style={{
+                        fontSize: 12,
+                        color: "#008060",
+                        fontWeight: 700,
+                        marginTop: 6,
+                      }}
+                    >
+                      {plan.trialDays}-day free trial
+                    </div>
+                  )}
                   <div
                     style={{
                       fontSize: 12,
