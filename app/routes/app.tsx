@@ -41,7 +41,6 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     admin,
   });
 
-  const url = new URL(request.url);
   const preferredPlanHandle = url.searchParams.get("plan_handle");
 
   // 2. Refresh trạng thái Billing nhẹ từ Shopify (Chỉ dùng để Read/Recovery)
