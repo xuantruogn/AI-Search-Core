@@ -16,6 +16,7 @@ const BILLING_PLAN_SEEDS = [
     maxMonthlySearches: 3_000,
     maxMonthlyVectorUpdates: 1_000,
     sortOrder: 10,
+    trialDays: 7,
   },
   {
     handle: "pro",
@@ -25,6 +26,7 @@ const BILLING_PLAN_SEEDS = [
     maxMonthlySearches: null,
     maxMonthlyVectorUpdates: null,
     sortOrder: 20,
+    trialDays: 7,
   },
 ] as const;
 
@@ -52,6 +54,15 @@ function mapPlanHandleToKey(handle: string | null | undefined): AiSearchPlan {
   }
 
   return AI_SEARCH_PLAN.custom;
+}
+
+function getTrialStatus(
+  trialStartsAt: Date | null,
+  trialEndsAt: Date | null,
+  now = new Date(),
+): "NONE" | "ACTIVE" | "ENDED" {
+  if (!trialStartsAt || !trialEndsAt) return "NONE";
+  return now < trialEndsAt ? "ACTIVE" : "ENDED";
 }
 
 function limitsFromPlan(plan: {
@@ -90,6 +101,7 @@ async function ensurePublicPlans() {
         maxMonthlySearches: seed.maxMonthlySearches,
         maxMonthlyVectorUpdates: seed.maxMonthlyVectorUpdates,
         sortOrder: seed.sortOrder,
+        trialDays: seed.trialDays,
         isActive: true,
       },
       update: {},
@@ -282,6 +294,9 @@ export async function getBillingSubscriptionSnapshot(shop: string) {
     billingPeriodStart: state.legacy.billingPeriodStart,
     billingPeriodEnd: state.legacy.billingPeriodEnd,
     billingInterval: null,
+    trialStatus: "NONE",
+    trialStartsAt: null,
+    trialEndsAt: null,
     source: state.legacy.source,
     lastSyncedAt: state.legacy.lastSyncedAt,
   };
@@ -302,6 +317,9 @@ export async function getBillingSubscriptionSnapshot(shop: string) {
       billingPeriodStart: null,
       billingPeriodEnd: null,
       billingInterval: null,
+      trialStatus: "NONE",
+      trialStartsAt: null,
+      trialEndsAt: null,
       source: "BILLING_V2",
       lastSyncedAt: null,
     };
@@ -343,6 +361,12 @@ export async function getBillingSubscriptionSnapshot(shop: string) {
       billingPeriodStart: subscription.currentPeriodStartsAt,
       billingPeriodEnd: subscription.currentPeriodEndsAt,
       billingInterval: subscription.intervalSnapshot,
+      trialStatus: getTrialStatus(
+        subscription.trialStartsAt,
+        subscription.trialEndsAt,
+      ),
+      trialStartsAt: subscription.trialStartsAt,
+      trialEndsAt: subscription.trialEndsAt,
       source: "BILLING_V2",
       lastSyncedAt: subscription.updatedAt,
     };
@@ -362,6 +386,12 @@ export async function getBillingSubscriptionSnapshot(shop: string) {
     billingPeriodStart: subscription.currentPeriodStartsAt,
     billingPeriodEnd: subscription.currentPeriodEndsAt,
     billingInterval: subscription.intervalSnapshot,
+    trialStatus: getTrialStatus(
+      subscription.trialStartsAt,
+      subscription.trialEndsAt,
+    ),
+    trialStartsAt: subscription.trialStartsAt,
+    trialEndsAt: subscription.trialEndsAt,
     source: "BILLING_V2",
     lastSyncedAt: subscription.updatedAt,
   };
