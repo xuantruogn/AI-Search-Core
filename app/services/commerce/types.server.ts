@@ -12,6 +12,9 @@ export type SubscriptionSnapshot = {
   billingPeriodStart: Date | null;
   billingPeriodEnd: Date | null;
   billingInterval: "EVERY_30_DAYS" | "ANNUAL" | null;
+  trialStatus: "NONE" | "ACTIVE" | "ENDED";
+  trialStartsAt: Date | null;
+  trialEndsAt: Date | null;
   source: string;
   lastSyncedAt: Date | null;
 };
