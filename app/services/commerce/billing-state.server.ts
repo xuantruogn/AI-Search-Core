@@ -361,6 +361,7 @@ export async function getBillingSubscriptionSnapshot(shop: string) {
     shopifySubscriptionId: subscription.shopifySubscriptionGid,
     billingPeriodStart: subscription.currentPeriodStartsAt,
     billingPeriodEnd: subscription.currentPeriodEndsAt,
+    billingInterval: subscription.intervalSnapshot,
     source: "BILLING_V2",
     lastSyncedAt: subscription.updatedAt,
   };
