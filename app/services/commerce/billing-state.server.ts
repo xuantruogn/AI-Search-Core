@@ -59,10 +59,63 @@ function mapPlanHandleToKey(handle: string | null | undefined): AiSearchPlan {
 function getTrialStatus(
   trialStartsAt: Date | null,
   trialEndsAt: Date | null,
+  subscriptionStatus: string | null,
   now = new Date(),
-): "NONE" | "ACTIVE" | "ENDED" {
+): "NONE" | "ACTIVE" | "ENDED" | "CANCELLED" {
   if (!trialStartsAt || !trialEndsAt) return "NONE";
+  if (
+    subscriptionStatus === "CANCELLED" ||
+    subscriptionStatus === "DECLINED" ||
+    subscriptionStatus === "EXPIRED"
+  ) {
+    return now < trialEndsAt ? "CANCELLED" : "ENDED";
+  }
   return now < trialEndsAt ? "ACTIVE" : "ENDED";
+}
+
+function getCommercialStatus(
+  status: string | null,
+  trialStatus: "NONE" | "ACTIVE" | "ENDED" | "CANCELLED",
+): "INACTIVE" | "PENDING" | "TRIAL" | "PAID" | "FROZEN" {
+  if (status === "PENDING") return "PENDING";
+  if (status === "FROZEN") return "FROZEN";
+  if (status === "ACTIVE") return trialStatus === "ACTIVE" ? "TRIAL" : "PAID";
+  return "INACTIVE";
+}
+
+function getAccessStatus(
+  status: string | null,
+  plan: AiSearchPlan,
+): "NONE" | "BASIC" | "PRO" | "CUSTOM" | "SUSPENDED" {
+  if (status === "FROZEN") return "SUSPENDED";
+  if (status !== "ACTIVE") return "NONE";
+  if (plan === AI_SEARCH_PLAN.basic) return "BASIC";
+  if (plan === AI_SEARCH_PLAN.pro) return "PRO";
+  if (plan === AI_SEARCH_PLAN.custom) return "CUSTOM";
+  return "NONE";
+}
+
+function getPlanChangeStatus(
+  status: string | null,
+  currentPlanHandle: string | null,
+  pendingPlanHandle: string | null,
+  pendingSubscriptionGid: string | null,
+  currentSubscriptionGid: string | null,
+): "NONE" | "PENDING" | "APPLIED" | "DECLINED" | "EXPIRED" | "DEFERRED" {
+  if (status === "PENDING" && pendingSubscriptionGid) return "PENDING";
+  if (status === "DECLINED") return "DECLINED";
+  if (status === "EXPIRED") return "EXPIRED";
+  if (
+    status === "ACTIVE" &&
+    currentSubscriptionGid &&
+    pendingSubscriptionGid === null &&
+    currentPlanHandle &&
+    pendingPlanHandle &&
+    currentPlanHandle !== pendingPlanHandle
+  ) {
+    return "APPLIED";
+  }
+  return "NONE";
 }
 
 function limitsFromPlan(plan: {
