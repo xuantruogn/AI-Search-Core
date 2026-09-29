@@ -1,7 +1,6 @@
 import { useState, useEffect } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { useFetcher, useLoaderData } from "react-router";
-import db from "../db.server";
 import { authenticate } from "../shopify.server";
 import {
   getShopifyPricingPlansUrl,
@@ -16,47 +15,12 @@ import { getSubscriptionSnapshot } from "../services/commerce/shop-registry.serv
 import { reconcileShopCommercialState } from "../services/commerce/reconciliation.server";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  const timestamp = new Date().toISOString();
-  console.log(`[BILLING LOADER START] [${timestamp}] Request URL: ${request.url}`);
+  const { session } = await authenticate.admin(request);
 
-  const { admin, session } = await authenticate.admin(request);
-  const url = new URL(request.url);
-  const chargeId = url.searchParams.get("charge_id");
-  const isBillingCallback = url.searchParams.get("billing_callback") === "1";
-
-  console.log(`[BILLING LOADER AUTH] Authenticated shop: ${session.shop}, isCallback: ${isBillingCallback}, chargeId: ${chargeId}`);
-
-  if (chargeId || isBillingCallback) {
-    const shopRecord = await db.aiSearchShop.findUnique({
-      where: { shop: session.shop },
-      select: {
-        pendingPlanHandle: true,
-        pendingSubscriptionGid: true,
-      },
-    });
-
-    const targetGid =
-      shopRecord?.pendingSubscriptionGid ||
-      (chargeId?.startsWith("gid://")
-        ? chargeId
-        : chargeId
-          ? `gid://shopify/AppSubscription/${chargeId}`
-          : null);
-
-    console.log(`[BILLING LOADER RECONCILE START] targetGid: ${targetGid}`);
-
-    if (targetGid) {
-      await reconcileShopifySubscriptionFromAdmin({
-        shop: session.shop,
-        admin,
-        expectedSubscriptionGid: targetGid,
-        preferredPlanHandle: shopRecord?.pendingPlanHandle,
-        authoritativePlanHandle: shopRecord?.pendingPlanHandle,
-      });
-    }
-    console.log(`[BILLING LOADER RECONCILE DONE] Completed sync for ${targetGid}`);
-  }
-
+  // The billing return URL is UI-only. APP_SUBSCRIPTIONS_UPDATE is the
+  // authoritative reconciliation path for Shopify subscription state.
+  // Do not reconcile here: callback and webhook can arrive concurrently and
+  // the callback must stay lightweight while Shopify embedded auth completes.
   const entitlement = await getShopEntitlement(session.shop);
   const subscription = await getSubscriptionSnapshot(session.shop, { ensure: false });
 
@@ -74,8 +38,6 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       day: "numeric",
     });
   }
-
-  console.log(`[BILLING LOADER RETURN] Status: ${entitlement.subscriptionStatus}, Plan: ${entitlement.planLabel}`);
 
   return {
     shop: session.shop,
