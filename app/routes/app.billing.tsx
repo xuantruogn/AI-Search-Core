@@ -18,10 +18,6 @@ import { reconcileShopCommercialState } from "../services/commerce/reconciliatio
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
 
-  // The billing return URL is UI-only. APP_SUBSCRIPTIONS_UPDATE is the
-  // authoritative reconciliation path for Shopify subscription state.
-  // Do not reconcile here: callback and webhook can arrive concurrently and
-  // the callback must stay lightweight while Shopify embedded auth completes.
   const entitlement = await getShopEntitlement(session.shop);
   const subscription = await getSubscriptionSnapshot(session.shop, { ensure: false });
 
@@ -102,6 +98,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     if (cycle === "yearly") {
       finalPrice = baseMonthlyPrice * 0.8 * 12;
       billingInterval = "ANNUAL";
+    }
 
     try {
       const shopHandle = session.shop.replace(/\.myshopify\.com$/i, "");
