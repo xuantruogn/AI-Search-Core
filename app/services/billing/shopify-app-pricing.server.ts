@@ -592,7 +592,18 @@ async function reconcileManualShopifySubscription({
     priceSnapshot: shopifyPrice ?? plan.price,
     currencySnapshot: shopifyCurrency ?? plan.currencyCode,
     intervalSnapshot: shopifyInterval ?? plan.interval,
-    trialEndsAt: null,
+    trialStartsAt:
+      status === "ACTIVE" && (adminSubscription.trialDays ?? 0) > 0
+        ? current?.trialStartsAt ?? new Date()
+        : current?.trialStartsAt ?? null,
+    trialEndsAt:
+      status === "ACTIVE" && (adminSubscription.trialDays ?? 0) > 0
+        ? current?.trialEndsAt ??
+          new Date(
+            (current?.trialStartsAt ?? new Date()).getTime() +
+              (adminSubscription.trialDays ?? 0) * 24 * 60 * 60 * 1000,
+          )
+        : current?.trialEndsAt ?? null,
     currentPeriodStartsAt: start,
     currentPeriodEndsAt: end,
     activatedAt:
