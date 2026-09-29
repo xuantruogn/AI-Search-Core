@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { useFetcher, useLoaderData } from "react-router";
+import db from "../db.server";
 import { authenticate } from "../shopify.server";
 import {
   getShopifyPricingPlansUrl,
