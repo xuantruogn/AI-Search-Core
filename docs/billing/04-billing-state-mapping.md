@@ -1,31 +1,44 @@
-# Billing State Mapping
+# Shopify → AI-Buyense State Mapping
 
-## Purpose
+## Principle
 
-Map Shopify technical state and billing facts to AI-Buyense user-facing status.
+Do not implement a simple `shopifyStatus -> userStatus` switch. Some user states require multiple facts.
 
-| User ID | Typical Shopify state/facts | User status |
-|---|---|---|
-| U01 | No active subscription | Chưa đăng ký gói |
-| U02 | PENDING | Đang chờ xác nhận thanh toán |
-| U03 | ACTIVE + trial in progress | Đang dùng thử |
-| U04 | ACTIVE + trial + cancellation scheduled | Đang dùng thử - đã tắt gia hạn |
-| U05 | ACTIVE + paid/active renewal lifecycle | Đang sử dụng - tự động gia hạn |
-| U06 | ACTIVE + cancellation scheduled/end-of-period | Đang sử dụng - đã tắt gia hạn |
-| U07 | Billing attempt failed / payment problem | Thanh toán thất bại - cần xử lý |
-| U08 | FROZEN | Tạm dừng do vấn đề thanh toán |
-| U09 | ACTIVE after recovery | Thanh toán đã khôi phục |
-| U10 | CANCELLED | Đã hủy gói |
-| U11 | EXPIRED or access period ended | Gói đã hết hạn |
-| U12 | DECLINED | Gói/thanh toán bị từ chối |
-| U13 | Replacement operation in progress | Đang chuyển gói |
-| U14 | New subscription ACTIVE after replacement | Đã chuyển sang gói mới |
-| U15 | App uninstalled / subscription cancelled as applicable | Ứng dụng đã bị gỡ |
+| Business state | Shopify evidence / context |
+|---|---|
+| U01 | No active subscription found |
+| U02 | `PENDING` |
+| U03 | `ACTIVE` + trial context |
+| U04 | `ACTIVE` + trial context + scheduled cancellation/non-renewal |
+| U05 | `ACTIVE` + paid context + no scheduled cancellation |
+| U06 | `ACTIVE` + cancellation/non-renewal scheduled, current period not ended |
+| U07 | Failed billing attempt / relevant payment failure information |
+| U08 | `FROZEN` |
+| U09 | Previously frozen/failed, now restored to active state |
+| U10 | `CANCELLED` with cancellation effective |
+| U11 | `EXPIRED` or current subscription period ended with no active replacement |
+| U12 | `DECLINED` |
+| U13 | New subscription created and awaiting approval/replacement |
+| U14 | New subscription active after replacement |
+| U15 | Shopify uninstall event / no longer installed |
 
-## Warning
+## Cancellation rule
 
-This is a business mapping, not a claim that every row maps to exactly one Shopify field.
+Cancellation must be modeled with effective timing.
 
-Some statuses require multiple facts and/or event history.
+A scheduled end-of-cycle cancellation is not equivalent to immediate loss of access.
 
-For every implementation, record the exact API fields, events and timestamps used to derive the status.
+## Replacement rule
+
+For plan changes:
+1. Create new subscription with the intended replacement behavior.
+2. Redirect merchant to Shopify confirmation.
+3. Wait for approval.
+4. Reconcile Shopify state.
+5. Persist the new subscription.
+6. Preserve old subscription history.
+7. Apply access according to the effective subscription and replacement timing.
+
+## Proration / deferral
+
+Shopify documents proration for plan changes and deferral in certain annual/monthly and discount scenarios. AI-Buyense must not independently invent credits that Shopify already applied.

@@ -1,34 +1,36 @@
 # Billing Webhook / Event Matrix
 
-## Purpose
+## Primary subscription webhook
 
-Track lifecycle events used by AI-Buyense.
+`APP_SUBSCRIPTIONS_UPDATE`
 
-For every event, document:
+Use it to react to documented AppSubscription lifecycle changes.
 
-- Shopify event/topic
-- payload/API object
-- handler
-- idempotency key
-- DB changes
-- access changes
-- UI changes
-- test case
-- verification status
+## Handler requirements
 
-## Core lifecycle areas
+1. Verify Shopify webhook authenticity using the app's standard webhook verification mechanism.
+2. Identify the shop/store.
+3. Identify the Shopify subscription.
+4. Record the event or equivalent idempotency key.
+5. Check whether the event has already been processed.
+6. Compare incoming information with current authoritative state.
+7. Update local subscription state transactionally.
+8. Recalculate access.
+9. Keep historical billing events.
+10. Return success only after safe processing.
 
-- Subscription created
-- Subscription updated
-- Subscription cancellation scheduled
-- Subscription cancelled
-- Subscription frozen
-- Subscription unfrozen
-- Recurring billing success
-- Recurring billing failure
-- Credits/adjustments where applicable
-- One-time purchase events if the product later uses them
+## Duplicate delivery
 
-## Idempotency requirement
+Same webhook delivered twice must produce one logical state transition.
 
-Receiving the same event more than once must not create duplicate billing history, duplicate subscriptions, duplicate access grants or duplicate state transitions.
+## Out-of-order delivery
+
+Do not assume events arrive in chronological order. The handler must prevent an older event from overwriting a newer state.
+
+## Reconciliation
+
+Webhooks are signals, not permission to invent state. When necessary, query Shopify and reconcile the actual subscription.
+
+## Future/optional topics
+
+If AI-Buyense later adds usage-based billing, also evaluate the documented billing topics for capped amounts and usage-related events.

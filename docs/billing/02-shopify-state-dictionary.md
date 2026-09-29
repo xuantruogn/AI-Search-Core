@@ -1,22 +1,54 @@
-# Shopify State Dictionary
+# Shopify Manual Billing State Dictionary
 
-| Shopify state | Meaning | User-facing interpretation |
-|---|---|---|
-| PENDING | Subscription is awaiting merchant approval | Waiting for confirmation |
-| ACTIVE | Subscription is active | Plan is active; trial/payment/cancellation context must also be checked |
-| FROZEN | Subscription is frozen because of billing/payment issue | Billing problem / temporarily suspended |
-| CANCELLED | Subscription has been cancelled | Subscription ended; check timing/context |
-| DECLINED | Merchant declined the subscription | Subscription was not accepted |
-| EXPIRED | Pending subscription expired without activation | Subscription request expired |
+## AppSubscriptionStatus
 
-## Important
+Current documented values relevant to Manual Pricing:
 
-`ACTIVE` alone is not enough to determine the user-facing state.
+- `PENDING`: subscription has been created but is awaiting merchant approval.
+- `ACTIVE`: subscription is active.
+- `FROZEN`: subscription is frozen because of billing/payment conditions.
+- `CANCELLED`: subscription has been canceled.
+- `DECLINED`: merchant declined the subscription.
+- `EXPIRED`: subscription expired.
 
-For example, an ACTIVE subscription may represent:
+`ACCEPTED` is a deprecated historical value and must not be treated as a current lifecycle state.
 
-- active trial
-- paid active subscription
-- active subscription scheduled not to renew
+## Related facts
 
-Therefore the application must combine Shopify state with relevant subscription dates, trial information, cancellation lifecycle and payment/billing information.
+Status alone is not sufficient for the complete AI-Buyense business state. Also inspect:
+- subscription ID
+- line items
+- recurring pricing details
+- interval
+- price
+- currency
+- trial information
+- current period end
+- test flag
+- replacement behavior used when creating a new subscription
+- cancellation result/semantics
+- relevant webhook/event timestamps
+
+## State interpretation
+
+### PENDING
+Do not grant paid-plan access merely because a subscription record was created.
+
+### ACTIVE
+The subscription is active. Determine whether it is trialing and whether cancellation/non-renewal has been scheduled using the actual available Shopify data.
+
+### FROZEN
+Keep this distinct from cancellation. Access policy is an AI-Buyense business decision based on the documented billing policy; do not silently convert it to CANCELLED.
+
+### DECLINED
+Merchant did not approve the charge. The pending billing attempt should not be treated as an active paid subscription.
+
+### CANCELLED
+The subscription has been canceled. Historical access and billing period rules must be evaluated separately.
+
+### EXPIRED
+The subscription has reached its end and is no longer active.
+
+## Source-of-truth rule
+
+The Shopify enum is a technical state. AI-Buyense user-facing states are business states and can require multiple Shopify fields/events.

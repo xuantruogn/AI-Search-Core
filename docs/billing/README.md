@@ -1,32 +1,59 @@
-# AI-Buyense Billing Documentation
+# AI-Buyense Billing Documentation — Manual Pricing / Billing API
 
-This directory is the source of truth for Billing implementation and testing.
+Version: 2.0
+Scope: Shopify Manual Pricing / Billing API
+Updated: 2026-09-29
 
 ## Purpose
 
-Use these documents to align:
-Shopify documentation -> Shopify state/events -> business scenario -> user-facing billing status -> database -> access -> UI -> test/verification.
+This directory is the source of truth for AI-Buyense billing when using Shopify Manual Pricing / Billing API.
 
-## Rules
+Do not mix this documentation with Shopify App Pricing / Managed Pricing. Shopify currently describes Manual Pricing as the legacy method, but it remains supported for existing integrations and pricing models not covered by Shopify App Pricing.
 
-1. Do not invent or rename Shopify subscription states.
-2. Keep Shopify technical state separate from AI-Buyense user-facing billing status.
-3. Every important billing scenario must have an implementation and test mapping.
-4. Do not mark a case VERIFIED merely because code executes without an error.
-5. Verification should cover Shopify/API or event -> backend -> database -> access -> UI.
-6. Preserve billing history; do not delete historical subscriptions or payment records just to represent the current state.
-7. For cancellation, distinguish immediate cancellation from cancellation at the end of the current period.
-8. Trial, payment, renewal, cancellation, replacement, frozen, uninstall/reinstall and error cases must be considered separately.
-9. When Shopify behavior is unclear, verify against current Shopify documentation before changing code.
-10. Any AI/developer modifying Billing should read this directory first.
+## Required lifecycle
 
-## Status lifecycle
+For every billing case, track:
 
-- DOCUMENTED: Shopify behavior has been identified and referenced.
-- IMPLEMENTED: application code supports the scenario.
-- TESTED: the scenario has been executed.
-- VERIFIED: observed behavior matches the expected Shopify, DB, access and UI behavior.
+Shopify documentation → GraphQL API state/event → business scenario → AI-Buyense user status → database state → access control → UI → test → verification.
 
-## Scope
+## Progress levels
 
-This directory is the project-level billing specification. It should evolve with the implementation and current Shopify API behavior.
+- DOCUMENTED: rule is documented.
+- IMPLEMENTED: code implements the rule.
+- TESTED: test has been executed.
+- VERIFIED: the complete chain has been checked: Shopify/API or webhook → backend → DB → access → UI.
+
+## Current AI-Buyense scope
+
+Primary scope:
+- Recurring time-based subscriptions.
+- 30-day and annual billing.
+- Free trials.
+- Plan changes / replacement.
+- Cancellation.
+- Shopify subscription lifecycle.
+- APP_SUBSCRIPTIONS_UPDATE webhook.
+- Payment/frozen lifecycle.
+- Idempotent event processing.
+- Correct price, currency, period and user-facing response.
+
+Future/out-of-scope unless enabled:
+- Usage-based billing.
+- Combined recurring + usage billing.
+- One-time purchases.
+- Discounts/credits/refunds beyond the implementation currently used by AI-Buyense.
+
+## Critical rules
+
+1. Shopify is the source of truth for Shopify subscription state.
+2. Do not invent Shopify enum values.
+3. Do not treat trial as a separate Shopify subscription status.
+4. Do not assume an `autoRenew` field exists on `AppSubscription`.
+5. A cancellation scheduled for the end of the billing period must not be treated as an immediate loss of access.
+6. `FROZEN` is not `CANCELLED`.
+7. Preserve billing history; do not delete historical records to represent current state.
+8. Webhook processing must be idempotent and tolerate duplicate delivery.
+9. Do not assume event arrival order is perfect; compare timestamps/state before applying destructive transitions.
+10. A redirect/return URL is not by itself the complete billing verification mechanism; reconcile with Shopify state.
+11. For plan replacement, explicitly account for `AppSubscriptionReplacementBehavior` and Shopify's proration/deferral rules.
+12. Annual subscriptions and 30-day subscriptions have different replacement/deferral behavior; test both.

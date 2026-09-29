@@ -1,59 +1,50 @@
-# Billing Test Matrix
+# Manual Pricing / Billing API Test Matrix
 
-## Test status
+## Core cases
 
-Use:
+| ID | Scenario | Expected result |
+|---|---|---|
+| B01 | No subscription | U01 |
+| B02 | Create recurring subscription | Shopify returns confirmation URL |
+| B03 | Pending subscription | U02; no paid access before approval |
+| B04 | Merchant approves | ACTIVE; correct plan/price/interval persisted |
+| B05 | Merchant declines | U12; no paid access |
+| B06 | Trial starts | U03; trial dates correct |
+| B07 | Trial cancellation scheduled | U04; access remains until effective end |
+| B08 | Paid active | U05 |
+| B09 | Paid cancellation scheduled | U06; access remains through current period |
+| B10 | Cancellation effective | U10/U11 according to exact Shopify state |
+| B11 | Frozen subscription | U08 |
+| B12 | Frozen recovery | U09 then active state |
+| B13 | Payment failure | U07; correct user message and access policy |
+| B14 | Upgrade | U13 → U14; verify Shopify replacement/proration |
+| B15 | Downgrade | U13 → U14; verify proration/deferral |
+| B16 | 30-day plan | Correct interval and period |
+| B17 | Annual plan | Correct interval and period |
+| B18 | Monthly → annual | Correct replacement and effective timing |
+| B19 | Annual → monthly | Correct replacement/deferral |
+| B20 | Uninstall | Shopify cancels subscription; local state reflects uninstall |
+| B21 | Reinstall | Do not revive a canceled subscription automatically; verify actual current Shopify state |
+| B22 | Test subscription | Test billing isolated from production billing assumptions |
+| B23 | Duplicate webhook | No duplicate DB side effects |
+| B24 | Out-of-order webhook | Older event cannot overwrite newer authoritative state |
+| B25 | Wrong price/currency | Reject/flag; do not grant wrong plan |
+| B26 | Return URL without reliable state | Reconcile with Shopify before granting final access |
 
-- NOT DOCUMENTED
-- DOCUMENTED
-- IMPLEMENTED
-- TESTED
-- VERIFIED
-- FAILED
-- BLOCKED
-- OUT OF SCOPE
+## Additional required verification
 
-## Core test cases
-
-| ID | Scenario | Expected user state | Status |
-|---|---|---|---|
-| B01 | No subscription | U01 | NOT TESTED |
-| B02 | Create subscription, waiting approval | U02 | NOT TESTED |
-| B03 | Merchant approves subscription | U03/U05 depending on trial | NOT TESTED |
-| B04 | Merchant declines | U12 | NOT TESTED |
-| B05 | Pending subscription expires | U11 | NOT TESTED |
-| B06 | Trial active | U03 | NOT TESTED |
-| B07 | Trial with renewal cancelled | U04 | NOT TESTED |
-| B08 | Trial ends and billing succeeds | U05 | NOT TESTED |
-| B09 | Recurring renewal succeeds | U05 | NOT TESTED |
-| B10 | Cancel at period end | U06 | NOT TESTED |
-| B11 | Immediate cancellation | U10 | NOT TESTED |
-| B12 | Cancellation with prorated credit | U10 | NOT TESTED |
-| B13 | Billing attempt fails | U07 | NOT TESTED |
-| B14 | Subscription becomes frozen | U08 | NOT TESTED |
-| B15 | Frozen subscription recovers | U09 | NOT TESTED |
-| B16 | Upgrade immediately | U13 -> U14 | NOT TESTED |
-| B17 | Upgrade at next billing cycle | U13 -> U14 | NOT TESTED |
-| B18 | Downgrade immediately | U13 -> U14 | NOT TESTED |
-| B19 | Downgrade at next billing cycle | U13 -> U14 | NOT TESTED |
-| B20 | Monthly to annual | U13 -> U14 | NOT TESTED |
-| B21 | Annual to monthly | U13 -> U14 | NOT TESTED |
-| B22 | Uninstall | U15 | NOT TESTED |
-| B23 | Reinstall after cancellation | U01/U02/U03/U05 depending on flow | NOT TESTED |
-| B24 | Test subscription | Corresponding user state | NOT TESTED |
-| B25 | Duplicate/replayed billing event | State unchanged/idempotent | NOT TESTED |
-| B26 | Event arrives out of expected order | State remains consistent | NOT TESTED |
-
-## Required verification chain
-
-For each applicable test:
-
-Shopify action
--> Shopify API/event
--> backend handler
--> database
--> subscription/access decision
--> UI
--> customer-facing message
-
-A test is VERIFIED only after the complete chain is checked.
+For every passing test record:
+- Shopify subscription ID
+- plan ID/name
+- price
+- currency
+- interval
+- trial
+- current period start/end
+- Shopify status
+- webhook/event ID if applicable
+- local DB state
+- access result
+- UI result
+- timestamp
+- test environment

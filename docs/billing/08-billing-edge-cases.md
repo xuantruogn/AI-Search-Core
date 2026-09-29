@@ -1,71 +1,63 @@
 # Billing Edge Cases
 
-Track these explicitly because they commonly cause production inconsistencies.
+## 1. Cancel at end of period
 
-## Cancellation
+User cancels renewal while current subscription remains active.
 
-- Cancel during trial
-- Cancel during paid period
-- Cancel at period end
-- Immediate cancellation
-- Cancellation with prorated credit
-- Cancellation followed by reinstall
-- Cancellation while a replacement is pending
+Expected:
+- preserve current subscription
+- keep access until effective end
+- clearly show that it will not continue into the next period
+- after effective end, transition to inactive/expired/canceled business state
 
-## Trial
+## 2. Immediate cancellation
 
-- No trial
-- Short trial
-- Trial ending normally
-- Trial cancellation
-- Trial extension
-- Trial extension followed by cancellation
-- Trial ending with payment success
-- Trial ending with payment failure
+If the implemented Shopify cancellation operation makes cancellation effective immediately, access must follow the resulting Shopify state and effective timing.
 
-## Payment
+## 3. Trial cancellation
 
-- Initial approval
-- Recurring success
-- Recurring failure
-- Frozen state
-- Recovery after frozen
-- Duplicate billing event
-- Delayed event
-- Event order mismatch
+Trial cancellation is not a separate Shopify status. Store enough data to determine that the subscription is active trial + cancellation scheduled.
 
-## Plan replacement
+## 4. Frozen
 
-- Monthly -> monthly
-- Annual -> annual
-- Monthly -> annual
-- Annual -> monthly
-- Upgrade
-- Downgrade
-- Immediate replacement
-- Replacement on next billing cycle
-- Old subscription cancellation
-- New subscription activation
+Frozen is a billing/payment suspension. Do not equate it with cancellation.
 
-## Installation
+## 5. Upgrade
 
-- Install
-- Uninstall
-- Reinstall
-- Reinstall after cancelled subscription
-- Reinstall after frozen subscription
+Shopify may prorate the new charge. Do not duplicate credits or calculations already handled by Shopify.
 
-## Test environment
+## 6. Downgrade
 
-- Test subscription
-- Test payment lifecycle
-- Ensure test billing cannot be mistaken for real revenue
+Shopify may issue a prorated credit or defer a new plan depending on billing intervals and replacement rules. Verify actual Shopify result.
 
-## Future/optional billing models
+## 7. Annual → 30-day
 
-If AI-Buyense introduces them later:
+Shopify documents cases where the new plan is deferred until the current annual billing cycle completes.
 
-- One-time purchases
-- Usage-based billing
-- Time + usage billing
-- Credits/adjustments
+## 8. Uninstall
+
+Shopify automatically cancels the subscription on uninstall. Preserve historical billing information.
+
+## 9. Reinstall
+
+Do not assume the previous subscription becomes active again. Reconcile the current Shopify state.
+
+## 10. Return URL manipulation
+
+Never grant a paid plan based solely on a manipulated return URL or client parameters. Verify server-side with Shopify.
+
+## 11. Duplicate webhook
+
+Must be idempotent.
+
+## 12. Webhook arrives before redirect
+
+The webhook may update local state before the merchant reaches the return URL. The return route must be able to handle already-updated state.
+
+## 13. Redirect arrives before webhook
+
+The return route should reconcile Shopify state; later webhook processing must be idempotent.
+
+## 14. Shopify/API version changes
+
+Pin and document the GraphQL Admin API version used by the app. Review this document whenever the API version is upgraded.

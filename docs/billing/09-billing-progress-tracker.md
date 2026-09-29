@@ -1,50 +1,45 @@
 # Billing Progress Tracker
 
-Use this file as the project-level checklist.
+## Documentation baseline
 
-## Documentation
-
-- [ ] Shopify billing reference verified
-- [ ] Shopify states documented
-- [ ] User statuses U01-U15 approved
-- [ ] Mapping reviewed
-- [ ] Access policy reviewed
+- [x] Shopify Manual Pricing flow documented
+- [x] AppSubscription statuses documented
+- [x] Trial semantics documented
+- [x] Cancellation semantics documented
+- [x] Replacement/proration/deferral documented
+- [x] Webhook/idempotency rules documented
+- [x] User-facing U01-U15 states documented
+- [x] Test matrix B01-B26 documented
 
 ## Implementation
 
-- [ ] Subscription creation
-- [ ] Trial
-- [ ] Approval/decline
-- [ ] Renewal
-- [ ] Cancellation
-- [ ] Cancellation at period end
-- [ ] Immediate cancellation
-- [ ] Payment failure
-- [ ] Frozen/recovery
-- [ ] Upgrade/downgrade
-- [ ] Replacement behavior
-- [ ] Uninstall/reinstall
-- [ ] Idempotency
-- [ ] Billing history
+Update these after inspecting actual AI-Buyense code:
 
-## Verification
+- [ ] Shopify API version confirmed
+- [ ] appSubscriptionCreate location confirmed
+- [ ] appSubscriptionCancel location confirmed
+- [ ] subscription query/reconciliation location confirmed
+- [ ] APP_SUBSCRIPTIONS_UPDATE handler confirmed
+- [ ] webhook idempotency storage confirmed
+- [ ] subscription DB model mapped
+- [ ] billing event DB model mapped
+- [ ] access-control code mapped
+- [ ] UI status mapping mapped
+- [ ] monthly plan verified
+- [ ] annual plan verified
+- [ ] trial verified
+- [ ] cancellation verified
+- [ ] frozen/payment failure verified
+- [ ] upgrade verified
+- [ ] downgrade verified
+- [ ] uninstall/reinstall verified
 
-- [ ] U01
-- [ ] U02
-- [ ] U03
-- [ ] U04
-- [ ] U05
-- [ ] U06
-- [ ] U07
-- [ ] U08
-- [ ] U09
-- [ ] U10
-- [ ] U11
-- [ ] U12
-- [ ] U13
-- [ ] U14
-- [ ] U15
+## Status vocabulary
 
-## Rule
+Use only:
+- DOCUMENTED
+- IMPLEMENTED
+- TESTED
+- VERIFIED
 
-Do not mark a case VERIFIED until the real Shopify result, backend behavior, database state, access state and UI have all been checked.
+Do not mark VERIFIED based only on compilation or a successful local page load.
