@@ -443,15 +443,11 @@ async function reconcileManualShopifySubscription({
             plan: authoritativePlan,
             planHandle: authoritativeHandle,
           };
-        } else if (
-          persistedPlanHandle &&
-          persistedPlan !== AI_SEARCH_PLAN.none
-        ) {
-          inferred = {
-            plan: persistedPlan,
-            planHandle: persistedPlanHandle.toLowerCase(),
-          };
         } else if (exactPointerPlanHandle) {
+          // For a transition, the exact GID's pending/current pointer is more
+          // authoritative than a previously persisted row for that GID.
+          // This prevents a stale/wrong row from locking a new BASIC GID to
+          // the previous PRO plan (or vice versa).
           const pointerPlan = planFromHandle(exactPointerPlanHandle);
           if (pointerPlan !== AI_SEARCH_PLAN.none) {
             inferred = {
@@ -464,6 +460,14 @@ async function reconcileManualShopifySubscription({
               itemHandles,
             });
           }
+        } else if (
+          persistedPlanHandle &&
+          persistedPlan !== AI_SEARCH_PLAN.none
+        ) {
+          inferred = {
+            plan: persistedPlan,
+            planHandle: persistedPlanHandle.toLowerCase(),
+          };
         } else {
           inferred = inferPlan({
             preferredPlanHandle: planMappingHint,
