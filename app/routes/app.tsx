@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import type { HeadersFunction, LoaderFunctionArgs } from "react-router";
 import { NavLink, Outlet, useLoaderData, useRouteError } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
@@ -8,7 +9,31 @@ import { ensureShopFromAdmin } from "../services/commerce/shop-registry.server";
 import { refreshShopifyAppPricingIfStale } from "../services/billing/shopify-app-pricing.server";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
+  const startedAt = Date.now();
+  const url = new URL(request.url);
+
+  console.log("[APP ROUTE LOADER START]", {
+    at: new Date().toISOString(),
+    method: request.method,
+    url: request.url,
+    pathname: url.pathname,
+    searchParams: [...url.searchParams.keys()],
+    referer: request.headers.get("referer"),
+    secFetchDest: request.headers.get("sec-fetch-dest"),
+    secFetchMode: request.headers.get("sec-fetch-mode"),
+  });
+
+  console.log("[APP ROUTE AUTHENTICATE START]", {
+    at: new Date().toISOString(),
+    pathname: url.pathname,
+  });
   const { admin, session } = await authenticate.admin(request);
+
+  console.log("[APP ROUTE AUTHENTICATE DONE]", {
+    at: new Date().toISOString(),
+    shop: session.shop,
+    elapsedMs: Date.now() - startedAt,
+  });
 
   // 1. Đảm bảo record Shop tồn tại trong DB
   await ensureShopFromAdmin({
@@ -37,6 +62,12 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   // Nhiệm vụ Reconcile Product Policy (khóa/mở catalog) được chuyển 100% cho Webhook đảm nhận.
   // Parent Route tuyệt đối không kích hoạt Reconcile để tránh nghẽn Session Token của App Bridge.
 
+  console.log("[APP ROUTE LOADER RETURN]", {
+    at: new Date().toISOString(),
+    shop: session.shop,
+    elapsedMs: Date.now() - startedAt,
+  });
+
   return {
     apiKey: process.env.SHOPIFY_API_KEY || "",
   };
@@ -44,6 +75,22 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
 export default function App() {
   const { apiKey } = useLoaderData<typeof loader>();
+
+  useEffect(() => {
+    console.log("[APP ROUTE CLIENT MOUNT]", {
+      at: new Date().toISOString(),
+      href: window.location.href,
+      topHref: window.top === window ? window.location.href : "embedded-frame",
+      apiKeyPresent: Boolean(apiKey),
+    });
+
+    return () => {
+      console.log("[APP ROUTE CLIENT UNMOUNT]", {
+        at: new Date().toISOString(),
+        href: window.location.href,
+      });
+    };
+  }, [apiKey]);
 
   const navItems = [
     { label: "Dashboard", to: "/app", end: true },
