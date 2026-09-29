@@ -102,10 +102,6 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     if (cycle === "yearly") {
       finalPrice = baseMonthlyPrice * 0.8 * 12;
       billingInterval = "ANNUAL";
-    } else if (cycle === "biyearly") {
-      finalPrice = baseMonthlyPrice * 0.6 * 12;
-      billingInterval = "ANNUAL";
-    }
 
     try {
       const shopHandle = session.shop.replace(/\.myshopify\.com$/i, "");
@@ -224,7 +220,7 @@ function limitText(value: number | null, suffix: string) {
     : `${value.toLocaleString("en-US")} ${suffix}`;
 }
 
-type Cycle = "monthly" | "yearly" | "biyearly";
+type Cycle = "monthly" | "yearly";
 
 export default function BillingPage() {
   const data = useLoaderData<typeof loader>();
@@ -247,13 +243,11 @@ export default function BillingPage() {
   const cycleDiscount = {
     monthly: 0,
     yearly: 0.2,
-    biyearly: 0.4,
   };
 
   const cycleText = {
     monthly: "/month",
     yearly: "/month (billed annually)",
-    biyearly: "/month (billed 2-yearly)",
   };
 
   const currentPlanKey = data.entitlement.planLabel?.toUpperCase() || "NONE";
@@ -379,8 +373,8 @@ export default function BillingPage() {
           <div>
             <strong>Billing Cycle:</strong>{" "}
             {data.subscription.formattedPeriodEnd
-              ? `${data.subscription.formattedPeriodEnd} (${data.subscription.daysRemaining} days left)`
-              : "Monthly (Auto-renew)"}
+              ? `${data.subscription.billingInterval === "ANNUAL" ? "Annual" : "Monthly"} — ${data.subscription.formattedPeriodEnd} (${data.subscription.daysRemaining} days left)`
+              : "No active billing period"}
           </div>
           <div>
             <strong>Source:</strong> {data.subscription.source}
@@ -555,24 +549,6 @@ export default function BillingPage() {
           >
             Yearly <span style={{ color: "#008060", fontSize: 11 }}>(Save 20%)</span>
           </button>
-          <button
-            type="button"
-            onClick={() => setCycle("biyearly")}
-            style={{
-              padding: "8px 20px",
-              borderRadius: 8,
-              border: "none",
-              background: cycle === "biyearly" ? "#fff" : "transparent",
-              fontWeight: 600,
-              fontSize: 13,
-              color: cycle === "biyearly" ? "#1a1a1a" : "#616161",
-              cursor: "pointer",
-              boxShadow:
-                cycle === "biyearly" ? "0 1px 3px rgba(0,0,0,0.1)" : "none",
-            }}
-          >
-            2-Year <span style={{ color: "#e51c00", fontSize: 11 }}>(Save 40%)</span>
-          </button>
         </div>
       </div>
 
@@ -594,6 +570,10 @@ export default function BillingPage() {
             config.priceBase *
             (1 - cycleDiscount[cycle])
           ).toFixed(2);
+          const billedAmount =
+            cycle === "yearly"
+              ? (config.priceBase * 0.8 * 12).toFixed(2)
+              : config.priceBase.toFixed(2);
 
           const isCurrentPlan = isActive && currentPlanKey.includes(plan.key);
 
@@ -703,6 +683,17 @@ export default function BillingPage() {
                     }}
                   >
                     Regular: {config.originalPrice}
+                  </div>
+                  <div
+                    style={{
+                      fontSize: 12,
+                      color: "#616161",
+                      marginTop: 6,
+                    }}
+                  >
+                    {cycle === "yearly"
+                      ? "Billed $" + billedAmount + " annually"
+                      : "Billed $" + billedAmount + " monthly"}
                   </div>
                 </div>
 
