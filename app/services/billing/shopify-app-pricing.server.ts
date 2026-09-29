@@ -502,6 +502,28 @@ async function reconcileManualShopifySubscription({
   const start = parseShopifyDate(adminSubscription.createdAt);
   const end = parseShopifyDate(adminSubscription.currentPeriodEnd);
 
+  // Shopify's exact recurring pricing details are authoritative for the
+  // purchased cycle and charge amount. The local Plan row remains the
+  // entitlement/limits definition and must not overwrite the actual
+  // Shopify charge with its default monthly values.
+  const recurringPricing = (adminSubscription.lineItems ?? [])
+    .map((item) => item.plan?.pricingDetails)
+    .find(
+      (details) =>
+        details?.interval === "EVERY_30_DAYS" ||
+        details?.interval === "ANNUAL",
+    );
+
+  const shopifyInterval =
+    recurringPricing?.interval === "ANNUAL"
+      ? "ANNUAL"
+      : recurringPricing?.interval === "EVERY_30_DAYS"
+        ? "EVERY_30_DAYS"
+        : null;
+
+  const shopifyPrice = recurringPricing?.price?.amount ?? null;
+  const shopifyCurrency = recurringPricing?.price?.currencyCode ?? null;
+
   /**
    * Replacement handling is anchored to AiSearchShop.currentSubscriptionGid.
    * Never pick the "latest updated" PENDING subscription as the old/current
@@ -567,9 +589,9 @@ async function reconcileManualShopifySubscription({
     shopifyPlanHandle: inferred.planHandle,
     status,
     planNameSnapshot: plan.name,
-    priceSnapshot: plan.price,
-    currencySnapshot: plan.currencyCode,
-    intervalSnapshot: plan.interval,
+    priceSnapshot: shopifyPrice ?? plan.price,
+    currencySnapshot: shopifyCurrency ?? plan.currencyCode,
+    intervalSnapshot: shopifyInterval ?? plan.interval,
     trialEndsAt: null,
     currentPeriodStartsAt: start,
     currentPeriodEndsAt: end,
