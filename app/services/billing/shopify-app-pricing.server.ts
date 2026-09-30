@@ -12,6 +12,7 @@ import {
 import {
   ensureBillingV2State,
   mirrorBillingStateToLegacy,
+  emitBillingBackendContract,
   recordBillingEvent,
   type BillingAccessStatus,
   type BillingCancellationStatus,
@@ -1335,6 +1336,26 @@ async function reconcileManualShopifySubscription({
   const snapshot = await getSubscriptionSnapshot(shop);
       await mirrorBillingStateToLegacy(snapshot);
 
+      const contract = await emitBillingBackendContract({
+        shop,
+        source,
+        eventType: "BILLING_RECONCILED",
+        eventPayload: {
+          subscriptionGid: gid,
+          planHandle: inferred.planHandle,
+          plan: inferred.plan,
+          status,
+          previousStatus,
+          previousPlanHandle: before.planHandle,
+          replacementStatus,
+          trialStatus,
+          cancellationStatus,
+          chargeStatus,
+          paymentStatus,
+          accessStatus,
+        },
+      });
+
       return {
         configured: true as const,
 
@@ -1350,6 +1371,7 @@ async function reconcileManualShopifySubscription({
           planHandle: inferred.planHandle,
           status,
         },
+        backendContract: contract,
 
         changed:
           before.plan !== snapshot.plan ||
@@ -1453,6 +1475,17 @@ export async function reconcileShopifySubscriptionFromAdmin({
       }
     }
 
+    const contract = await emitBillingBackendContract({
+      shop,
+      source,
+      eventType: "DB_SHOPIFY_MISMATCH",
+      eventPayload: {
+        expectedSubscriptionGid: expectedSubscriptionGid ?? null,
+        reason: "SHOPIFY_SUBSCRIPTION_NOT_FOUND",
+        reconciliationStatus: "MISMATCH",
+      },
+    });
+
     return {
       configured: true as const,
       confirmed: false as const,
@@ -1461,6 +1494,7 @@ export async function reconcileShopifySubscriptionFromAdmin({
         ensure: false,
       }),
       reconciledSubscription: null,
+      backendContract: contract,
     };
   }
 
