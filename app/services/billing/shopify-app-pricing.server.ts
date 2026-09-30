@@ -13,6 +13,13 @@ import {
   ensureBillingV2State,
   mirrorBillingStateToLegacy,
   recordBillingEvent,
+  type BillingAccessStatus,
+  type BillingCancellationStatus,
+  type BillingChargeStatus,
+  type BillingPaymentStatus,
+  type BillingPlanChangeStatus,
+  type BillingReconciliationStatus,
+  type BillingRefundStatus,
   type BillingTrialStatus,
 } from "../commerce/billing-state.server";
 import { withDistributedLease } from "../commerce/lease-lock.server";
@@ -635,7 +642,7 @@ async function reconcileManualShopifySubscription({
     Boolean(before.planHandle) &&
     before.planHandle !== inferred.planHandle;
 
-  const replacementStatus: import("@prisma/client").BillingPlanChangeStatus =
+  const replacementStatus: BillingPlanChangeStatus =
     status === "PENDING"
       ? "PENDING"
       : status === "DECLINED"
@@ -646,12 +653,12 @@ async function reconcileManualShopifySubscription({
             ? "APPLIED"
             : (current?.planChangeStatus ?? "NONE");
 
-  const cancellationStatus: import("@prisma/client").BillingCancellationStatus =
+  const cancellationStatus: BillingCancellationStatus =
     status === "CANCELLED"
       ? "EFFECTIVE"
       : (current?.cancellationStatus ?? "NONE");
 
-  const chargeStatus: import("@prisma/client").BillingChargeStatus =
+  const chargeStatus: BillingChargeStatus =
     status === "FROZEN"
       ? "FAILED"
       : status === "PENDING"
@@ -662,7 +669,7 @@ async function reconcileManualShopifySubscription({
             ? "PAID"
             : "NONE";
 
-  const paymentStatus: import("@prisma/client").BillingPaymentStatus =
+  const paymentStatus: BillingPaymentStatus =
     status === "FROZEN"
       ? "FAILED"
       : status === "PENDING"
@@ -675,7 +682,7 @@ async function reconcileManualShopifySubscription({
               ? "PAID"
               : "NONE";
 
-  const accessStatus: import("@prisma/client").BillingAccessStatus =
+  const accessStatus: BillingAccessStatus =
     status === "FROZEN"
       ? "SUSPENDED"
       : status === "ACTIVE"
@@ -728,9 +735,9 @@ async function reconcileManualShopifySubscription({
     planChangeStatus: replacementStatus,
     chargeStatus,
     paymentStatus,
-    refundStatus: (current?.refundStatus ?? "NONE") as import("@prisma/client").BillingRefundStatus,
+    refundStatus: (current?.refundStatus ?? "NONE") as BillingRefundStatus,
     accessStatus,
-    reconciliationStatus: "SYNCED" as import("@prisma/client").BillingReconciliationStatus,
+    reconciliationStatus: "SYNCED" as BillingReconciliationStatus,
     reconciliationCheckedAt: now,
     reconciliationReason,
     repairRequiredAt: null,
