@@ -156,6 +156,13 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     expectedSubscriptionGid: subscriptionGid,
     preferredPlanHandle: subscription?.plan_handle ?? null,
     source: "WEBHOOK",
+    observedShopifyStatus: status as
+      | "PENDING"
+      | "ACTIVE"
+      | "FROZEN"
+      | "CANCELLED"
+      | "DECLINED"
+      | "EXPIRED",
   });
 
   console.log("[BILLING] Shopify subscription webhook reconciled:", {
