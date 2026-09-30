@@ -624,29 +624,73 @@ export default function BillingPage() {
                 : "Automatic renewal is on. Shopify will continue the subscription at the next billing cycle unless you choose to stop renewal."}
             </div>
 
-            {!isNonRenewing ? (
-              <cancelFetcher.Form method="post" style={{ marginTop: 10 }}>
-                <input type="hidden" name="intent" value="cancelRenewal" />
-                <button
-                  type="submit"
-                  disabled={cancelFetcher.state !== "idle"}
+            <cancelFetcher.Form method="post" style={{ marginTop: 12 }}>
+              <input type="hidden" name="intent" value="cancelRenewal" />
+              <fieldset
+                disabled={cancelFetcher.state !== "idle" || isNonRenewing}
+                style={{
+                  margin: 0,
+                  padding: 0,
+                  border: 0,
+                  display: "grid",
+                  gap: 8,
+                }}
+              >
+                <label
                   style={{
-                    padding: "8px 14px",
-                    borderRadius: 8,
-                    border: "1px solid #c9cccf",
-                    background: "#fff",
-                    color: "#8a1c1c",
-                    fontWeight: 700,
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 8,
                     fontSize: 12,
-                    cursor: cancelFetcher.state === "idle" ? "pointer" : "not-allowed",
+                    color: "#1a1a1a",
+                    cursor: cancelFetcher.state === "idle" && !isNonRenewing ? "pointer" : "default",
                   }}
                 >
-                  {cancelFetcher.state !== "idle"
-                    ? "Updating renewal..."
-                    : "Stop renewal after this period"}
-                </button>
-              </cancelFetcher.Form>
-            ) : null}
+                  <input
+                    type="radio"
+                    name="renewalChoice"
+                    value="automatic"
+                    checked={!isNonRenewing}
+                    readOnly
+                  />
+                  <span>
+                    <strong>Automatic renewal</strong>
+                    <span style={{ display: "block", color: "#6b6b6b", marginTop: 2 }}>
+                      Continue this subscription into the next billing cycle.
+                    </span>
+                  </span>
+                </label>
+
+                <label
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 8,
+                    fontSize: 12,
+                    color: isNonRenewing ? "#8a1c1c" : "#1a1a1a",
+                    cursor: cancelFetcher.state === "idle" && !isNonRenewing ? "pointer" : "default",
+                  }}
+                >
+                  <input
+                    type="radio"
+                    name="renewalChoice"
+                    value="stop"
+                    checked={isNonRenewing}
+                    disabled={isNonRenewing}
+                    onChange={(event) => {
+                      if (!event.target.checked || cancelFetcher.state !== "idle") return;
+                      event.currentTarget.form?.requestSubmit();
+                    }}
+                  />
+                  <span>
+                    <strong>Do not renew next period</strong>
+                    <span style={{ display: "block", color: "#6b6b6b", marginTop: 2 }}>
+                      Keep the current plan active until the end of this billing period.
+                    </span>
+                  </span>
+                </label>
+              </fieldset>
+            </cancelFetcher.Form>
 
             {cancelFetcher.data?.message ? (
               <p
