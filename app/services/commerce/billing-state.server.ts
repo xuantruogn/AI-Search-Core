@@ -1,4 +1,5 @@
 import db from "../../db.server";
+import type { SubscriptionSnapshot } from "./types.server";
 import {
   AI_SEARCH_PLAN,
   getDevPlanOverride,
@@ -358,7 +359,9 @@ export async function ensureBillingV2State(shop: string) {
   } as const;
 }
 
-export async function getBillingSubscriptionSnapshot(shop: string) {
+export async function getBillingSubscriptionSnapshot(
+  shop: string,
+): Promise<SubscriptionSnapshot> {
   const state = await ensureBillingV2State(shop);
 
   if (state.devOverride && state.legacy) {
