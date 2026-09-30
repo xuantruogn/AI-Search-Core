@@ -2,6 +2,7 @@ import db from "../../db.server";
 import type {
   BillingAccessStatus,
   BillingCancellationStatus,
+  BillingSubscriptionStatus,
   BillingChargeStatus,
   BillingPaymentStatus,
   BillingPlanChangeStatus,
