@@ -184,7 +184,7 @@ async function ensurePublicPlans() {
         price: seed.price,
         currencyCode: "USD",
         interval: "EVERY_30_DAYS",
-        billingMode: "SHOPIFY_APP_PRICING",
+        billingMode: "MANUAL_BILLING",
         visibility: "PUBLIC",
         maxIndexedProducts: seed.maxIndexedProducts,
         maxMonthlySearches: seed.maxMonthlySearches,
@@ -195,6 +195,7 @@ async function ensurePublicPlans() {
       },
       update: {
         trialDays: seed.trialDays,
+        billingMode: "MANUAL_BILLING",
       },
       });
     }
@@ -385,9 +386,18 @@ export async function getBillingSubscriptionSnapshot(shop: string) {
     billingPeriodStart: state.legacy.billingPeriodStart,
     billingPeriodEnd: state.legacy.billingPeriodEnd,
     billingInterval: null,
+    commercialStatus: getCommercialStatus(state.legacy.status, "NONE"),
     trialStatus: "NONE",
     trialStartsAt: null,
     trialEndsAt: null,
+    cancellationStatus: "NONE",
+    planChangeStatus: "NONE",
+    chargeStatus: "NONE",
+    paymentStatus: "NONE",
+    refundStatus: "NONE",
+    accessStatus: getAccessStatus(state.legacy.status, plan),
+    reconciliationStatus: "SYNCED",
+    reconciliationReason: null,
     source: state.legacy.source,
     lastSyncedAt: state.legacy.lastSyncedAt,
   };
