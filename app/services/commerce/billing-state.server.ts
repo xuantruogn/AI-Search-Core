@@ -748,7 +748,31 @@ export type BillingBackendContract = {
     billingPeriodStart: string | null;
     billingPeriodEnd: string | null;
     billingInterval: string | null;
+    price: number | null;
+    currencyCode: string | null;
+    testMode: boolean | null;
+    activatedAt: string | null;
+    cancelledAt: string | null;
+    frozenAt: string | null;
     lastSyncedAt: string | null;
+    charge: null | {
+      status: BillingChargeStatus;
+      amount: number | null;
+      currency: string | null;
+      billingPeriodStart: string | null;
+      billingPeriodEnd: string | null;
+      acceptedAt: string | null;
+      paidAt: string | null;
+      failedAt: string | null;
+      frozenAt: string | null;
+    };
+    refund: null | {
+      status: BillingRefundStatus;
+      amount: number | null;
+      currency: string | null;
+      requestedAt: string | null;
+      refundedAt: string | null;
+    };
   };
   pending: null | {
     planHandle: string | null;
@@ -799,6 +823,72 @@ export async function emitBillingBackendContract({
     }),
     getBillingSubscriptionSnapshot(shop),
   ]);
+
+  const currentRow = shopRow?.currentSubscriptionGid
+    ? await db.billingSubscription.findUnique({
+        where: {
+          shopifySubscriptionGid: shopRow.currentSubscriptionGid,
+        },
+        select: {
+          priceSnapshot: true,
+          currencySnapshot: true,
+          testMode: true,
+          activatedAt: true,
+          cancelledAt: true,
+          frozenAt: true,
+        },
+      })
+    : null;
+
+  const currentCharge = shopRow?.currentSubscriptionGid
+    ? await db.billingCharge.findFirst({
+        where: {
+          subscriptionGid: shopRow.currentSubscriptionGid,
+        },
+        orderBy: { billingPeriodStart: "desc" },
+        select: {
+          status: true,
+          amount: true,
+          currency: true,
+          billingPeriodStart: true,
+          billingPeriodEnd: true,
+          acceptedAt: true,
+          paidAt: true,
+          failedAt: true,
+          frozenAt: true,
+        },
+      })
+    : null;
+
+  const currentRefund = currentCharge?.status
+    ? await db.billingRefund.findFirst({
+        where: {
+          charge: {
+            subscriptionGid: shopRow?.currentSubscriptionGid ?? undefined,
+          },
+        },
+        orderBy: { createdAt: "desc" },
+        select: {
+          status: true,
+          amount: true,
+          currency: true,
+          requestedAt: true,
+          refundedAt: true,
+        },
+      })
+    : null;
+
+  const recentEvents = await db.billingEvent.findMany({
+    where: { shop },
+    orderBy: { occurredAt: "desc" },
+    take: 5,
+    select: {
+      type: true,
+      source: true,
+      subscriptionGid: true,
+      occurredAt: true,
+    },
+  });
 
   const pendingRow = shopRow?.pendingSubscriptionGid
     ? await db.billingSubscription.findUnique({
@@ -859,7 +949,37 @@ export async function emitBillingBackendContract({
       billingPeriodStart: iso(snapshot.billingPeriodStart),
       billingPeriodEnd: iso(snapshot.billingPeriodEnd),
       billingInterval: snapshot.billingInterval,
+      price: currentRow?.priceSnapshot ? Number(currentRow.priceSnapshot) : null,
+      currencyCode: currentRow?.currencySnapshot ?? null,
+      testMode: currentRow?.testMode ?? null,
+      activatedAt: iso(currentRow?.activatedAt),
+      cancelledAt: iso(currentRow?.cancelledAt),
+      frozenAt: iso(currentRow?.frozenAt),
       lastSyncedAt: iso(snapshot.lastSyncedAt),
+      charge: currentCharge
+        ? {
+            status: currentCharge.status,
+            amount: currentCharge.amount ? Number(currentCharge.amount) : null,
+            currency: currentCharge.currency ?? null,
+            billingPeriodStart: iso(currentCharge.billingPeriodStart),
+            billingPeriodEnd: iso(currentCharge.billingPeriodEnd),
+            acceptedAt: iso(currentCharge.acceptedAt),
+            paidAt: iso(currentCharge.paidAt),
+            failedAt: iso(currentCharge.failedAt),
+            frozenAt: iso(currentCharge.frozenAt),
+          }
+        : null,
+      refund: currentRefund
+        ? {
+            status: currentRefund.status,
+            amount: currentRefund.amount
+              ? Number(currentRefund.amount)
+              : null,
+            currency: currentRefund.currency ?? null,
+            requestedAt: iso(currentRefund.requestedAt),
+            refundedAt: iso(currentRefund.refundedAt),
+          }
+        : null,
     },
     pending: pendingRow
       ? {
@@ -885,6 +1005,12 @@ export async function emitBillingBackendContract({
       occurredAt: new Date().toISOString(),
       payload: eventPayload,
     },
+    recentEvents: recentEvents.map((event) => ({
+      type: event.type as BillingContractEventType,
+      source: event.source as BillingContractSource,
+      subscriptionGid: event.subscriptionGid ?? null,
+      occurredAt: event.occurredAt.toISOString(),
+    })),
   };
 
   console.log(
@@ -909,7 +1035,7 @@ export async function setBillingCancellationState({
 }: {
   shop: string;
   subscriptionGid: string;
-  status: BillingCancellationStatus;
+  status: Exclude<BillingCancellationStatus, "NONE">;
   source?: BillingContractSource;
   reason?: string | null;
 }) {
@@ -965,7 +1091,7 @@ export async function setBillingPlanChangeState({
 }: {
   shop: string;
   subscriptionGid: string;
-  status: BillingPlanChangeStatus;
+  status: Exclude<BillingPlanChangeStatus, "NONE">;
   source?: BillingContractSource;
   reason?: string | null;
 }) {
