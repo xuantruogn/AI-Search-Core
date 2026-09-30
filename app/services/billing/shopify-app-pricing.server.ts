@@ -824,6 +824,26 @@ async function reconcileManualShopifySubscription({
     });
   }
 
+  if (
+    shopPointer?.currentSubscriptionGid &&
+    shopPointer.currentSubscriptionGid !== gid &&
+    (status === "PENDING" || status === "DECLINED" || status === "EXPIRED")
+  ) {
+    await db.billingSubscription.update({
+      where: {
+        shopifySubscriptionGid: shopPointer.currentSubscriptionGid,
+      },
+      data: {
+        planChangeStatus:
+          status === "PENDING"
+            ? "PENDING"
+            : status === "DECLINED"
+              ? "DECLINED"
+              : "EXPIRED",
+      },
+    });
+  }
+
   /**
    * Emit the complete matrix lifecycle. The Admin API state is authoritative;
    * event rows are immutable history and are idempotent by deterministic keys.
