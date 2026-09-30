@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
-import { useFetcher, useLoaderData } from "react-router";
+import { useFetcher, useLoaderData, useRevalidator } from "react-router";
 import db from "../db.server";
 import { authenticate } from "../shopify.server";
 import {
@@ -388,6 +388,7 @@ export default function BillingPage() {
   const fetcher = useFetcher<typeof action>();
   const subscribeFetcher = useFetcher<typeof action>();
   const cancelFetcher = useFetcher<typeof action>();
+  const revalidator = useRevalidator();
 
   if (!data) return null;
 
@@ -404,9 +405,12 @@ export default function BillingPage() {
 
   useEffect(() => {
     if (cancelFetcher.data?.renewalDisabled) {
-      window.location.reload();
+      // Revalidate the route data without performing a full browser reload.
+      // A full reload breaks the embedded Shopify UI and makes the billing
+      // action feel like navigation instead of an in-place state change.
+      revalidator.revalidate();
     }
-  }, [cancelFetcher.data]);
+  }, [cancelFetcher.data, revalidator]);
 
   const cycleDiscount = {
     monthly: 0,
