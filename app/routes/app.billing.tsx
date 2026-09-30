@@ -18,7 +18,7 @@ import { setBillingPlanChangeState } from "../services/commerce/billing-state.se
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const debugId = crypto.randomUUID().slice(0, 8);
-  console.log("[BILLING DEBUG] loader:start", { debugId, method: request.method, url: request.url });
+  console.log("[BILLING TRACE] loader:start", { debugId, method: request.method, url: request.url, referer: request.headers.get("referer"), remixRequest: request.headers.get("x-remix-request"), secFetchMode: request.headers.get("sec-fetch-mode") });
   const { session } = await authenticate.admin(request);
   console.log("[BILLING DEBUG] loader:authenticated", { debugId, shop: session.shop });
 
@@ -420,6 +420,14 @@ export default function BillingPage() {
   const subscribeFetcher = useFetcher<typeof action>();
   const cancelFetcher = useFetcher<typeof action>();
   const revalidator = useRevalidator();
+
+  useEffect(() => {
+    console.log("[BILLING TRACE] cancelFetcher:state", {
+      state: cancelFetcher.state,
+      hasData: Boolean(cancelFetcher.data),
+      renewalDisabled: cancelFetcher.data?.renewalDisabled ?? false,
+    });
+  }, [cancelFetcher.state, cancelFetcher.data]);
 
   if (!data) return null;
 
