@@ -1,4 +1,15 @@
 import type { AiSearchPlan, PlanLimits } from "./plans.server";
+import type {
+  BillingAccessStatus,
+  BillingCancellationStatus,
+  BillingChargeStatus,
+  BillingCommercialStatus,
+  BillingPaymentStatus,
+  BillingPlanChangeStatus,
+  BillingReconciliationStatus,
+  BillingRefundStatus,
+  BillingTrialStatus,
+} from "./billing-state.server";
 
 export type SubscriptionSnapshot = {
   shop: string;
@@ -12,9 +23,18 @@ export type SubscriptionSnapshot = {
   billingPeriodStart: Date | null;
   billingPeriodEnd: Date | null;
   billingInterval: "EVERY_30_DAYS" | "ANNUAL" | null;
-  trialStatus: "NONE" | "ACTIVE" | "ENDED";
+  commercialStatus: BillingCommercialStatus;
+  trialStatus: BillingTrialStatus;
   trialStartsAt: Date | null;
   trialEndsAt: Date | null;
+  cancellationStatus: BillingCancellationStatus;
+  planChangeStatus: BillingPlanChangeStatus;
+  chargeStatus: BillingChargeStatus;
+  paymentStatus: BillingPaymentStatus;
+  refundStatus: BillingRefundStatus;
+  accessStatus: BillingAccessStatus;
+  reconciliationStatus: BillingReconciliationStatus;
+  reconciliationReason: string | null;
   source: string;
   lastSyncedAt: Date | null;
 };
