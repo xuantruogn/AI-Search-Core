@@ -656,3 +656,458 @@ export async function recordBillingEvent({
     throw error;
   }
 }
+
+
+export const BILLING_BACKEND_CONTRACT_VERSION = "1.0.0";
+
+type BillingContractSource =
+  | "CALLBACK"
+  | "WEBHOOK"
+  | "API"
+  | "RECONCILIATION";
+
+type BillingContractEventType =
+  | "SUBSCRIPTION_CREATED"
+  | "SUBSCRIPTION_APPROVED"
+  | "SUBSCRIPTION_ACTIVATED"
+  | "SUBSCRIPTION_UPDATED"
+  | "SUBSCRIPTION_DECLINED"
+  | "SUBSCRIPTION_EXPIRED"
+  | "SUBSCRIPTION_CANCELLED"
+  | "SUBSCRIPTION_FROZEN"
+  | "SUBSCRIPTION_UNFROZEN"
+  | "TRIAL_STARTED"
+  | "TRIAL_EXTENDED"
+  | "TRIAL_ENDED"
+  | "TRIAL_CANCELLED"
+  | "CANCELLATION_REQUESTED"
+  | "CANCELLATION_EFFECTIVE"
+  | "PAYMENT_FAILED"
+  | "PAYMENT_RECOVERED"
+  | "PLAN_CHANGE_REQUESTED"
+  | "PLAN_CHANGE_APPLIED"
+  | "PLAN_CHANGE_DECLINED"
+  | "PLAN_CHANGE_EXPIRED"
+  | "PLAN_CHANGE_DEFERRED"
+  | "REFUND_REQUESTED"
+  | "REFUND_PARTIAL"
+  | "REFUND_FULL"
+  | "PLAN_UPGRADE"
+  | "PLAN_DOWNGRADE"
+  | "APP_UNINSTALLED"
+  | "APP_REINSTALLED"
+  | "BILLING_RECONCILED"
+  | "DB_SHOPIFY_MISMATCH"
+  | "MISSING_SHOPIFY_RECORD";
+
+function iso(value: Date | string | null | undefined) {
+  if (!value) return null;
+  const date = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+}
+
+/**
+ * Backend Contract snapshot.
+ *
+ * This is deliberately emitted before any external backend exists. The log is
+ * the exact transport-shaped representation we use to verify that a future
+ * backend will receive enough data to reconstruct the shop's billing state.
+ */
+export type BillingBackendContract = {
+  contractVersion: string;
+  emittedAt: string;
+  source: BillingContractSource;
+  sourceOfTruth: "SHOPIFY_ADMIN_API";
+  shop: string;
+  shopLifecycleStatus: string;
+  pointers: {
+    currentPlanHandle: string | null;
+    currentSubscriptionGid: string | null;
+    pendingPlanHandle: string | null;
+    pendingSubscriptionGid: string | null;
+    pendingChangeAt: string | null;
+  };
+  current: {
+    plan: AiSearchPlan;
+    planHandle: string | null;
+    subscriptionGid: string | null;
+    status: string;
+    commercialStatus: BillingCommercialStatus;
+    trialStatus: BillingTrialStatus;
+    cancellationStatus: BillingCancellationStatus;
+    planChangeStatus: BillingPlanChangeStatus;
+    chargeStatus: BillingChargeStatus;
+    paymentStatus: BillingPaymentStatus;
+    refundStatus: BillingRefundStatus;
+    accessStatus: BillingAccessStatus;
+    reconciliationStatus: BillingReconciliationStatus;
+    reconciliationReason: string | null;
+    trialStartsAt: string | null;
+    trialEndsAt: string | null;
+    billingPeriodStart: string | null;
+    billingPeriodEnd: string | null;
+    billingInterval: string | null;
+    lastSyncedAt: string | null;
+  };
+  pending: null | {
+    planHandle: string | null;
+    subscriptionGid: string | null;
+    status: BillingSubscriptionStatus | null;
+    trialStatus: BillingTrialStatus;
+    cancellationStatus: BillingCancellationStatus;
+    planChangeStatus: BillingPlanChangeStatus;
+    chargeStatus: BillingChargeStatus;
+    paymentStatus: BillingPaymentStatus;
+    refundStatus: BillingRefundStatus;
+    accessStatus: BillingAccessStatus;
+    reconciliationStatus: BillingReconciliationStatus;
+    trialStartsAt: string | null;
+    trialEndsAt: string | null;
+    billingPeriodStart: string | null;
+    billingPeriodEnd: string | null;
+  };
+  event: {
+    type: BillingContractEventType | null;
+    occurredAt: string;
+    payload: unknown;
+  };
+};
+
+export async function emitBillingBackendContract({
+  shop,
+  source,
+  eventType = null,
+  eventPayload = null,
+}: {
+  shop: string;
+  source: BillingContractSource;
+  eventType?: BillingContractEventType | null;
+  eventPayload?: unknown;
+}): Promise<BillingBackendContract> {
+  const [shopRow, snapshot] = await Promise.all([
+    db.aiSearchShop.findUnique({
+      where: { shop },
+      select: {
+        status: true,
+        currentPlanHandle: true,
+        currentSubscriptionGid: true,
+        pendingPlanHandle: true,
+        pendingSubscriptionGid: true,
+        pendingChangeAt: true,
+      },
+    }),
+    getBillingSubscriptionSnapshot(shop),
+  ]);
+
+  const pendingRow = shopRow?.pendingSubscriptionGid
+    ? await db.billingSubscription.findUnique({
+        where: {
+          shopifySubscriptionGid: shopRow.pendingSubscriptionGid,
+        },
+        select: {
+          shopifySubscriptionGid: true,
+          shopifyPlanHandle: true,
+          status: true,
+          trialStatus: true,
+          cancellationStatus: true,
+          planChangeStatus: true,
+          chargeStatus: true,
+          paymentStatus: true,
+          refundStatus: true,
+          accessStatus: true,
+          reconciliationStatus: true,
+          trialStartsAt: true,
+          trialEndsAt: true,
+          currentPeriodStartsAt: true,
+          currentPeriodEndsAt: true,
+        },
+      })
+    : null;
+
+  const contract: BillingBackendContract = {
+    contractVersion: BILLING_BACKEND_CONTRACT_VERSION,
+    emittedAt: new Date().toISOString(),
+    source,
+    sourceOfTruth: "SHOPIFY_ADMIN_API",
+    shop,
+    shopLifecycleStatus: shopRow?.status ?? "UNKNOWN",
+    pointers: {
+      currentPlanHandle: shopRow?.currentPlanHandle ?? null,
+      currentSubscriptionGid: shopRow?.currentSubscriptionGid ?? null,
+      pendingPlanHandle: shopRow?.pendingPlanHandle ?? null,
+      pendingSubscriptionGid: shopRow?.pendingSubscriptionGid ?? null,
+      pendingChangeAt: iso(shopRow?.pendingChangeAt),
+    },
+    current: {
+      plan: snapshot.plan,
+      planHandle: snapshot.planHandle,
+      subscriptionGid: snapshot.shopifySubscriptionId,
+      status: snapshot.status,
+      commercialStatus: snapshot.commercialStatus,
+      trialStatus: snapshot.trialStatus,
+      cancellationStatus: snapshot.cancellationStatus,
+      planChangeStatus: snapshot.planChangeStatus,
+      chargeStatus: snapshot.chargeStatus,
+      paymentStatus: snapshot.paymentStatus,
+      refundStatus: snapshot.refundStatus,
+      accessStatus: snapshot.accessStatus,
+      reconciliationStatus: snapshot.reconciliationStatus,
+      reconciliationReason: snapshot.reconciliationReason,
+      trialStartsAt: iso(snapshot.trialStartsAt),
+      trialEndsAt: iso(snapshot.trialEndsAt),
+      billingPeriodStart: iso(snapshot.billingPeriodStart),
+      billingPeriodEnd: iso(snapshot.billingPeriodEnd),
+      billingInterval: snapshot.billingInterval,
+      lastSyncedAt: iso(snapshot.lastSyncedAt),
+    },
+    pending: pendingRow
+      ? {
+          planHandle: pendingRow.shopifyPlanHandle,
+          subscriptionGid: pendingRow.shopifySubscriptionGid,
+          status: pendingRow.status,
+          trialStatus: pendingRow.trialStatus,
+          cancellationStatus: pendingRow.cancellationStatus,
+          planChangeStatus: pendingRow.planChangeStatus,
+          chargeStatus: pendingRow.chargeStatus,
+          paymentStatus: pendingRow.paymentStatus,
+          refundStatus: pendingRow.refundStatus,
+          accessStatus: pendingRow.accessStatus,
+          reconciliationStatus: pendingRow.reconciliationStatus,
+          trialStartsAt: iso(pendingRow.trialStartsAt),
+          trialEndsAt: iso(pendingRow.trialEndsAt),
+          billingPeriodStart: iso(pendingRow.currentPeriodStartsAt),
+          billingPeriodEnd: iso(pendingRow.currentPeriodEndsAt),
+        }
+      : null,
+    event: {
+      type: eventType,
+      occurredAt: new Date().toISOString(),
+      payload: eventPayload,
+    },
+  };
+
+  console.log(
+    "[BILLING BACKEND CONTRACT]",
+    JSON.stringify(contract),
+  );
+
+  return contract;
+}
+
+/**
+ * Explicit business-state setter for cancellation workflows that are initiated
+ * by the app or a future backend. Shopify itself only exposes the subscription
+ * lifecycle state; REQUESTED/NON_RENEWING are our internal business states.
+ */
+export async function setBillingCancellationState({
+  shop,
+  subscriptionGid,
+  status,
+  source = "API",
+  reason,
+}: {
+  shop: string;
+  subscriptionGid: string;
+  status: BillingCancellationStatus;
+  source?: BillingContractSource;
+  reason?: string | null;
+}) {
+  const eventType =
+    status === "EFFECTIVE"
+      ? "CANCELLATION_EFFECTIVE"
+      : "CANCELLATION_REQUESTED";
+
+  const updated = await db.billingSubscription.update({
+    where: { shopifySubscriptionGid: subscriptionGid },
+    data: {
+      cancellationStatus: status,
+      cancelledAt: status === "EFFECTIVE" ? new Date() : undefined,
+    },
+  });
+
+  await recordBillingEvent({
+    shop,
+    subscriptionGid,
+    type: eventType,
+    source,
+    idempotencyKey: `cancellation-state:${subscriptionGid}:${status}`,
+    payload: {
+      status,
+      reason: reason ?? null,
+    },
+  });
+
+  await emitBillingBackendContract({
+    shop,
+    source,
+    eventType,
+    eventPayload: {
+      subscriptionGid,
+      status,
+      reason: reason ?? null,
+    },
+  });
+
+  return updated;
+}
+
+/**
+ * Explicit business-state setter for deferred plan changes. The Shopify
+ * subscription may still be PENDING while this internal state is DEFERRED.
+ */
+export async function setBillingPlanChangeState({
+  shop,
+  subscriptionGid,
+  status,
+  source = "API",
+  reason,
+}: {
+  shop: string;
+  subscriptionGid: string;
+  status: BillingPlanChangeStatus;
+  source?: BillingContractSource;
+  reason?: string | null;
+}) {
+  const eventType =
+    status === "DEFERRED"
+      ? "PLAN_CHANGE_DEFERRED"
+      : status === "APPLIED"
+        ? "PLAN_CHANGE_APPLIED"
+        : status === "DECLINED"
+          ? "PLAN_CHANGE_DECLINED"
+          : status === "EXPIRED"
+            ? "PLAN_CHANGE_EXPIRED"
+            : "PLAN_CHANGE_REQUESTED";
+
+  const updated = await db.billingSubscription.update({
+    where: { shopifySubscriptionGid: subscriptionGid },
+    data: {
+      planChangeStatus: status,
+    },
+  });
+
+  await recordBillingEvent({
+    shop,
+    subscriptionGid,
+    type: eventType,
+    source,
+    idempotencyKey: `plan-change-state:${subscriptionGid}:${status}`,
+    payload: {
+      status,
+      reason: reason ?? null,
+    },
+  });
+
+  await emitBillingBackendContract({
+    shop,
+    source,
+    eventType,
+    eventPayload: {
+      subscriptionGid,
+      status,
+      reason: reason ?? null,
+    },
+  });
+
+  return updated;
+}
+
+/**
+ * Refund state is intentionally provider-agnostic at this stage.
+ * The current Shopify subscription object doesn't expose a refund record,
+ * so refund states are stored from a future provider/backend instruction and
+ * surfaced through the same backend contract.
+ */
+export async function recordBillingRefund({
+  shop,
+  chargeId,
+  subscriptionGid,
+  status,
+  amount,
+  currency,
+  source = "API",
+  reason,
+}: {
+  shop: string;
+  chargeId: string;
+  subscriptionGid?: string | null;
+  status: Exclude<BillingRefundStatus, "NONE">;
+  amount?: number | null;
+  currency?: string | null;
+  source?: BillingContractSource;
+  reason?: string | null;
+}) {
+  const refundId = `refund:${chargeId}:${status}`;
+  const eventType =
+    status === "PARTIAL" ? "REFUND_PARTIAL" : "REFUND_FULL";
+
+  const refund = await db.billingRefund.upsert({
+    where: { id: refundId },
+    create: {
+      id: refundId,
+      shop,
+      chargeId,
+      status,
+      amount: amount ?? null,
+      currency: currency ?? null,
+      requestedAt: new Date(),
+      refundedAt: new Date(),
+      rawResponse: {
+        source,
+        reason: reason ?? null,
+      },
+    },
+    update: {
+      status,
+      amount: amount ?? undefined,
+      currency: currency ?? undefined,
+      refundedAt: new Date(),
+      rawResponse: {
+        source,
+        reason: reason ?? null,
+      },
+    },
+  });
+
+  if (subscriptionGid) {
+    await db.billingSubscription.updateMany({
+      where: {
+        shopifySubscriptionGid: subscriptionGid,
+      },
+      data: {
+        refundStatus: status,
+      },
+    });
+  }
+
+  await recordBillingEvent({
+    shop,
+    subscriptionGid: subscriptionGid ?? null,
+    type: eventType,
+    source,
+    idempotencyKey: `refund-state:${chargeId}:${status}`,
+    payload: {
+      chargeId,
+      status,
+      amount: amount ?? null,
+      currency: currency ?? null,
+      reason: reason ?? null,
+    },
+  });
+
+  await emitBillingBackendContract({
+    shop,
+    source,
+    eventType,
+    eventPayload: {
+      chargeId,
+      subscriptionGid: subscriptionGid ?? null,
+      status,
+      amount: amount ?? null,
+      currency: currency ?? null,
+      reason: reason ?? null,
+    },
+  });
+
+  return refund;
+}
