@@ -212,6 +212,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         expectedSubscriptionGid: createdSubscription.id,
         preferredPlanHandle: planKey.toLowerCase(),
         authoritativePlanHandle: planKey.toLowerCase(),
+        source: "CALLBACK",
       });
 
       const confirmationUrl = subscriptionData?.confirmationUrl;
