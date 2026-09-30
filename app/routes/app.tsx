@@ -8,24 +8,31 @@ import { ensureShopFromAdmin } from "../services/commerce/shop-registry.server";
 import { refreshShopifyAppPricingIfStale } from "../services/billing/shopify-app-pricing.server";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
+  const debugId = crypto.randomUUID().slice(0, 8);
   const url = new URL(request.url);
+  console.log("[APP DEBUG] loader:start", { debugId, method: request.method, pathname: url.pathname, search: url.search });
   const { admin, session } = await authenticate.admin(request);
+  console.log("[APP DEBUG] loader:authenticated", { debugId, shop: session.shop, pathname: url.pathname });
 
   // 1. Đảm bảo record Shop tồn tại trong DB
+  console.log("[APP DEBUG] ensureShopFromAdmin:start", { debugId, shop: session.shop });
   await ensureShopFromAdmin({
     shop: session.shop,
     admin,
   });
 
+  console.log("[APP DEBUG] ensureShopFromAdmin:done", { debugId, shop: session.shop });
   const preferredPlanHandle = url.searchParams.get("plan_handle");
 
   // 2. Refresh trạng thái Billing nhẹ từ Shopify (Chỉ dùng để Read/Recovery)
   try {
+    console.log("[APP DEBUG] billingRefresh:start", { debugId, shop: session.shop, preferredPlanHandle });
     await refreshShopifyAppPricingIfStale({
       shop: session.shop,
       admin,
       preferredPlanHandle,
     });
+    console.log("[APP DEBUG] billingRefresh:done", { debugId, shop: session.shop });
   } catch (error) {
     console.error("[AI Search] Shopify App Pricing refresh failed:", {
       shop: session.shop,
