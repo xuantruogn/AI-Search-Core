@@ -125,6 +125,7 @@ export async function getShopEntitlement(
     plan: subscription.plan,
     planLabel: subscription.planLabel,
     subscriptionStatus: subscription.status,
+    cancellationStatus: subscription.cancellationStatus,
     active,
     aiSearchEnabled: settings.aiSearchEnabled,
     fallbackEnabled: settings.fallbackEnabled,
