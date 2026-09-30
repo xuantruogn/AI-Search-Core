@@ -216,7 +216,6 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         cancellationStatus: reconciliation.subscription.cancellationStatus,
         accessStatus: reconciliation.subscription.accessStatus,
         commercialStatus: reconciliation.subscription.commercialStatus,
-        reconciliationStatus: reconciliation.reconciliationStatus,
       });
 
       return {
