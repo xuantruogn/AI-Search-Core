@@ -94,6 +94,114 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     }
   }
 
+  if (intent === "cancelRenewal") {
+    try {
+      const snapshot = await getSubscriptionSnapshot(session.shop, { ensure: false });
+      const subscriptionGid = snapshot.shopifySubscriptionId;
+
+      if (!subscriptionGid) {
+        return {
+          success: false,
+          message: "No active Shopify subscription was found.",
+        };
+      }
+
+      if (snapshot.cancellationStatus === "NON_RENEWING") {
+        return {
+          success: true,
+          message: "This subscription is already set not to renew for the next cycle.",
+        };
+      }
+
+      if (snapshot.status !== "ACTIVE") {
+        return {
+          success: false,
+          message: `This subscription cannot be set to stop renewal from its current status: ${snapshot.status}.`,
+        };
+      }
+
+      // Shopify Admin Billing API: prorate=false stops the next billing cycle
+      // while preserving the merchant's already-paid current period.
+      const response = await admin.graphql(
+        `#graphql
+        mutation CancelAppSubscription($id: ID!, $prorate: Boolean) {
+          appSubscriptionCancel(id: $id, prorate: $prorate) {
+            userErrors { field message }
+            appSubscription {
+              id
+              status
+            }
+          }
+        }`,
+        {
+          variables: {
+            id: subscriptionGid,
+            prorate: false,
+          },
+        },
+      );
+
+      const payload = (await response.json()) as {
+        data?: {
+          appSubscriptionCancel?: {
+            userErrors?: Array<{ field?: string[]; message?: string }>;
+            appSubscription?: {
+              id?: string;
+              status?: string;
+            } | null;
+          };
+        };
+        errors?: Array<{ message?: string }>;
+      };
+
+      const userErrors = payload.data?.appSubscriptionCancel?.userErrors ?? [];
+      const graphQLErrors = payload.errors ?? [];
+
+      if (graphQLErrors.length || userErrors.length) {
+        const message = [
+          ...graphQLErrors.map((error) => error.message).filter(Boolean),
+          ...userErrors.map((error) => error.message).filter(Boolean),
+        ].join("; ");
+
+        return {
+          success: false,
+          message: message || "Shopify could not stop the next subscription renewal.",
+        };
+      }
+
+      const cancelled = payload.data?.appSubscriptionCancel?.appSubscription;
+
+      if (!cancelled?.id) {
+        return {
+          success: false,
+          message: "Shopify did not return the cancelled subscription.",
+        };
+      }
+
+      await reconcileShopifySubscriptionFromAdmin({
+        shop: session.shop,
+        admin,
+        expectedSubscriptionGid: cancelled.id,
+        preferredPlanHandle: snapshot.planHandle,
+        authoritativePlanHandle: snapshot.planHandle,
+        source: "API",
+        observedShopifyStatus: "CANCELLED",
+      });
+
+      return {
+        success: true,
+        renewalDisabled: true,
+        message:
+          "Automatic renewal is off. Your current plan remains available until the end of the paid billing period.",
+      };
+    } catch (error) {
+      return {
+        success: false,
+        message: error instanceof Error ? error.message : String(error),
+      };
+    }
+  }
+
   if (intent === "subscribe") {
     const planKey = String(form.get("planKey") || "");
     const cycle = String(form.get("cycle") || "monthly");
@@ -279,6 +387,7 @@ export default function BillingPage() {
   const data = useLoaderData<typeof loader>();
   const fetcher = useFetcher<typeof action>();
   const subscribeFetcher = useFetcher<typeof action>();
+  const cancelFetcher = useFetcher<typeof action>();
 
   if (!data) return null;
 
@@ -293,6 +402,12 @@ export default function BillingPage() {
     }
   }, [subscribeFetcher.data]);
 
+  useEffect(() => {
+    if (cancelFetcher.data?.renewalDisabled) {
+      window.location.reload();
+    }
+  }, [cancelFetcher.data]);
+
   const cycleDiscount = {
     monthly: 0,
     yearly: 0.2,
@@ -304,7 +419,9 @@ export default function BillingPage() {
   };
 
   const currentPlanKey = data.entitlement.planLabel?.toUpperCase() || "NONE";
-  const isActive = data.entitlement.subscriptionStatus === "ACTIVE";
+  const isNonRenewing = data.entitlement.cancellationStatus === "NON_RENEWING";
+  const isActive =
+    data.entitlement.subscriptionStatus === "ACTIVE" || isNonRenewing;
 
   const planConfigs = {
     BASIC: {
@@ -404,7 +521,11 @@ export default function BillingPage() {
               color: isActive ? "#008060" : "#d32f2f",
             }}
           >
-            {isActive ? "ACTIVE (PAID)" : data.entitlement.subscriptionStatus}
+            {isNonRenewing
+              ? "ACTIVE — NOT RENEWING"
+              : isActive
+                ? "ACTIVE (PAID)"
+                : data.entitlement.subscriptionStatus}
           </span>
         </div>
 
@@ -484,6 +605,63 @@ export default function BillingPage() {
             </a>
           )}
         </div>
+        {isActive ? (
+          <div
+            style={{
+              marginTop: 14,
+              padding: 14,
+              borderRadius: 10,
+              background: isNonRenewing ? "#fff8e6" : "#f3faf7",
+              border: `1px solid ${isNonRenewing ? "#f0d98a" : "#cfe9df"}`,
+            }}
+          >
+            <div style={{ fontWeight: 700, fontSize: 13, color: "#1a1a1a" }}>
+              Renewal
+            </div>
+            <div style={{ fontSize: 12, color: "#4a4a4a", marginTop: 6 }}>
+              {isNonRenewing
+                ? `Automatic renewal is off. Your ${data.entitlement.planLabel} plan remains available until ${data.subscription.formattedPeriodEnd ?? "the end of the current billing period"}.`
+                : "Automatic renewal is on. Shopify will continue the subscription at the next billing cycle unless you choose to stop renewal."}
+            </div>
+
+            {!isNonRenewing ? (
+              <cancelFetcher.Form method="post" style={{ marginTop: 10 }}>
+                <input type="hidden" name="intent" value="cancelRenewal" />
+                <button
+                  type="submit"
+                  disabled={cancelFetcher.state !== "idle"}
+                  style={{
+                    padding: "8px 14px",
+                    borderRadius: 8,
+                    border: "1px solid #c9cccf",
+                    background: "#fff",
+                    color: "#8a1c1c",
+                    fontWeight: 700,
+                    fontSize: 12,
+                    cursor: cancelFetcher.state === "idle" ? "pointer" : "not-allowed",
+                  }}
+                >
+                  {cancelFetcher.state !== "idle"
+                    ? "Updating renewal..."
+                    : "Stop renewal after this period"}
+                </button>
+              </cancelFetcher.Form>
+            ) : null}
+
+            {cancelFetcher.data?.message ? (
+              <p
+                style={{
+                  margin: "8px 0 0 0",
+                  fontSize: 12,
+                  color: cancelFetcher.data.success ? "#008060" : "#d32f2f",
+                }}
+              >
+                {cancelFetcher.data.message}
+              </p>
+            ) : null}
+          </div>
+        ) : null}
+
         {fetcher.data?.message ? (
           <p style={{ margin: "10px 0 0 0", fontSize: 12, color: "#008060" }}>
             {fetcher.data.message}
