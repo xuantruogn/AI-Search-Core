@@ -298,6 +298,7 @@ model BillingCharge {
   refunds              BillingRefund[]
 
   @@index([shop, status, createdAt])
+  @@unique([subscriptionGid, billingPeriodStart], map: "billing_charges_subscription_period_key")
   @@index([subscriptionGid])
   @@map("billing_charges")
 }
