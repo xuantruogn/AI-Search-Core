@@ -1748,7 +1748,26 @@ export async function refreshShopifyAppPricingIfStale({
   maxAgeMs?: number;
   source?: "CALLBACK" | "WEBHOOK" | "API" | "RECONCILIATION";
 }) {
+  const traceId = crypto.randomUUID().slice(0, 8);
+  console.log("[BILLING REFRESH TRACE] start", {
+    traceId,
+    shop,
+    preferredPlanHandle: preferredPlanHandle ?? null,
+    source,
+    maxAgeMs,
+  });
+
   const current = await getSubscriptionSnapshot(shop);
+  console.log("[BILLING REFRESH TRACE] current", {
+    traceId,
+    shop,
+    plan: current.plan,
+    planHandle: current.planHandle,
+    status: current.status,
+    cancellationStatus: current.cancellationStatus,
+    subscriptionGid: current.shopifySubscriptionId,
+    lastSyncedAt: current.lastSyncedAt?.toISOString() ?? null,
+  });
 
   if (current.source === "DEV_OVERRIDE" && hasExplicitDevPlanOverride()) {
     return {
@@ -1765,7 +1784,16 @@ export async function refreshShopifyAppPricingIfStale({
     !snapshot.lastSyncedAt ||
     Date.now() - snapshot.lastSyncedAt.getTime() >= maxAgeMs;
 
-  if (!preferredPlanHandle && !isStale(current)) {
+  const staleCurrent = isStale(current);
+  console.log("[BILLING REFRESH TRACE] decision", {
+    traceId,
+    preferredPlanHandle: preferredPlanHandle ?? null,
+    stale: staleCurrent,
+    willRefresh: Boolean(preferredPlanHandle) || staleCurrent,
+  });
+
+  if (!preferredPlanHandle && !staleCurrent) {
+    console.log("[BILLING REFRESH TRACE] skipped-fresh", { traceId });
     return {
       configured: true as const,
       subscription: current,
@@ -1783,9 +1811,19 @@ export async function refreshShopifyAppPricingIfStale({
     waitTimeoutMs: 10_000,
     pollMs: 100,
     task: async () => {
+      console.log("[BILLING REFRESH TRACE] lease-task:start", { traceId, shop });
       const latest = await getSubscriptionSnapshot(shop);
+      console.log("[BILLING REFRESH TRACE] lease-task:latest", {
+        traceId,
+        plan: latest.plan,
+        status: latest.status,
+        cancellationStatus: latest.cancellationStatus,
+        subscriptionGid: latest.shopifySubscriptionId,
+        lastSyncedAt: latest.lastSyncedAt?.toISOString() ?? null,
+      });
 
       if (!preferredPlanHandle && !isStale(latest)) {
+        console.log("[BILLING REFRESH TRACE] lease-task:skipped-fresh", { traceId });
         return {
           configured: true as const,
           subscription: latest,
@@ -1796,6 +1834,7 @@ export async function refreshShopifyAppPricingIfStale({
         };
       }
 
+      console.log("[BILLING REFRESH TRACE] lease-task:reconcile:start", { traceId, shop });
       const refreshed = await reconcileShopifySubscriptionFromAdmin({
         shop,
         admin,
@@ -1805,6 +1844,14 @@ export async function refreshShopifyAppPricingIfStale({
         source,
       });
 
+      console.log("[BILLING REFRESH TRACE] lease-task:reconcile:done", {
+        traceId,
+        plan: refreshed.subscription.plan,
+        status: refreshed.subscription.status,
+        cancellationStatus: refreshed.subscription.cancellationStatus,
+        subscriptionGid: refreshed.subscription.shopifySubscriptionId,
+        changed: refreshed.changed,
+      });
       return {
         ...refreshed,
         skipped: false,
