@@ -1468,6 +1468,9 @@ export async function reconcileShopifySubscriptionFromAdmin({
           select: {
             id: true,
             status: true,
+            cancellationStatus: true,
+            accessStatus: true,
+            currentPeriodEndsAt: true,
             reconciliationStatus: true,
           },
         }),
@@ -1515,11 +1518,29 @@ export async function reconcileShopifySubscriptionFromAdmin({
         });
       } else if (observedTerminal && local && !localTerminal) {
         const checkedAt = new Date();
+        const cancellationWindowActive =
+          observedTerminalStatus === "CANCELLED" &&
+          local.currentPeriodEndsAt !== null &&
+          local.currentPeriodEndsAt > checkedAt;
+
+        const cancellationStatus =
+          observedTerminalStatus === "CANCELLED"
+            ? cancellationWindowActive
+              ? "NON_RENEWING"
+              : "EFFECTIVE"
+            : local.cancellationStatus;
 
         await db.billingSubscription.update({
           where: { id: local.id },
           data: {
             status: observedTerminalStatus,
+            cancellationStatus,
+            accessStatus:
+              observedTerminalStatus === "CANCELLED" && cancellationWindowActive
+                ? local.accessStatus
+                : observedTerminalStatus === "CANCELLED"
+                  ? "NONE"
+                  : local.accessStatus,
             cancelledAt:
               observedTerminalStatus === "CANCELLED"
                 ? checkedAt
@@ -1547,6 +1568,9 @@ export async function reconcileShopifySubscriptionFromAdmin({
           payload: {
             previousStatus: local.status,
             status: observedShopifyStatus,
+            cancellationStatus,
+            currentPeriodEndsAt:
+              local.currentPeriodEndsAt?.toISOString() ?? null,
             reason: "SHOPIFY_WEBHOOK_TERMINAL_NOT_FOUND_IN_ADMIN",
           },
         });
