@@ -183,7 +183,6 @@ async function queryAdminSubscription(
             name
             status
             createdAt
-            updatedAt
             currentPeriodEnd
             trialDays
             test
@@ -210,7 +209,6 @@ async function queryAdminSubscription(
               name
               status
               createdAt
-              updatedAt
               currentPeriodEnd
               trialDays
               test
