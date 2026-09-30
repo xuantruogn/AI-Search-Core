@@ -660,9 +660,22 @@ async function reconcileManualShopifySubscription({
             ? "APPLIED"
             : (current?.planChangeStatus ?? "NONE");
 
+  // Shopify marks a non-prorated cancellation as CANCELLED immediately,
+  // while the merchant keeps the already-paid access until the cached
+  // currentPeriodEndsAt. Preserve that distinction in Billing V2.
+  const effectivePeriodEnd = end ?? current?.currentPeriodEndsAt ?? null;
+  const cancellationWindowActive =
+    status === "CANCELLED" &&
+    effectivePeriodEnd !== null &&
+    now < effectivePeriodEnd &&
+    (current?.status === "ACTIVE" ||
+      current?.cancellationStatus === "NON_RENEWING");
+
   const cancellationStatus: BillingCancellationStatus =
     status === "CANCELLED"
-      ? "EFFECTIVE"
+      ? cancellationWindowActive
+        ? "NON_RENEWING"
+        : "EFFECTIVE"
       : (current?.cancellationStatus ?? "NONE");
 
   const chargeStatus: BillingChargeStatus =
@@ -692,7 +705,8 @@ async function reconcileManualShopifySubscription({
   const accessStatus: BillingAccessStatus =
     status === "FROZEN"
       ? "SUSPENDED"
-      : status === "ACTIVE"
+      : status === "ACTIVE" ||
+          (cancellationStatus === "NON_RENEWING" && cancellationWindowActive)
         ? inferred.plan === AI_SEARCH_PLAN.basic
           ? "BASIC"
           : inferred.plan === AI_SEARCH_PLAN.pro
@@ -751,8 +765,10 @@ async function reconcileManualShopifySubscription({
     repairRequiredAt: null,
     trialStartsAt,
     trialEndsAt,
-    currentPeriodStartsAt: start,
-    currentPeriodEndsAt: end,
+    currentPeriodStartsAt: start ?? current?.currentPeriodStartsAt ?? null,
+    // Shopify returns currentPeriodEnd=null after cancellation. Keep the
+    // provider period end cached while the subscription was active.
+    currentPeriodEndsAt: effectivePeriodEnd,
     activatedAt:
       status === "ACTIVE"
         ? current?.activatedAt ?? new Date()
@@ -1310,19 +1326,25 @@ async function reconcileManualShopifySubscription({
     status === "DECLINED" ||
     status === "EXPIRED"
   ) {
-    // A terminal event for the pending subscription must clear only the
-    // pending pointer. A terminal event for the current subscription clears
-    // the current pointer, but must not manufacture cancellation for any
-    // other GID.
+    // CANCELLED + NON_RENEWING is a special Shopify lifecycle state:
+    // Shopify has stopped the next renewal, but the merchant keeps the
+    // already-paid entitlement until the cached current period end.
+    const preserveCurrentEntitlement =
+      status === "CANCELLED" &&
+      cancellationStatus === "NON_RENEWING" &&
+      cancellationWindowActive;
+
     await db.$executeRaw`
       UPDATE \`AiSearchShop\`
       SET
         \`currentPlanHandle\` = CASE
-          WHEN \`currentSubscriptionGid\` = ${gid} THEN NULL
+          WHEN \`currentSubscriptionGid\` = ${gid} AND NOT ${preserveCurrentEntitlement}
+            THEN NULL
           ELSE \`currentPlanHandle\`
         END,
         \`currentSubscriptionGid\` = CASE
-          WHEN \`currentSubscriptionGid\` = ${gid} THEN NULL
+          WHEN \`currentSubscriptionGid\` = ${gid} AND NOT ${preserveCurrentEntitlement}
+            THEN NULL
           ELSE \`currentSubscriptionGid\`
         END,
         \`pendingPlanHandle\` = CASE
@@ -1339,7 +1361,7 @@ async function reconcileManualShopifySubscription({
         END,
         \`updatedAt\` = UTC_TIMESTAMP(3)
       WHERE \`shop\` = ${shop}
-    `;
+    \`;
   }
 
   const snapshot = await getSubscriptionSnapshot(shop);
