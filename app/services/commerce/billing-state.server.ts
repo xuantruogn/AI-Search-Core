@@ -581,7 +581,7 @@ export async function getBillingSubscriptionSnapshot(
     billingPeriodStart: subscription.currentPeriodStartsAt,
     billingPeriodEnd: subscription.currentPeriodEndsAt,
     billingInterval: subscription.intervalSnapshot,
-    commercialStatus: getCommercialStatus(subscription.status, trialStatus),
+    commercialStatus: getCommercialStatus(\n      subscription.status,\n      trialStatus,\n      subscription.cancellationStatus,\n      subscription.currentPeriodEndsAt,\n    ),
     trialStatus,
     trialStartsAt: subscription.trialStartsAt,
     trialEndsAt: subscription.trialEndsAt,
