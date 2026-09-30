@@ -353,6 +353,7 @@ async function reconcileManualShopifySubscription({
   authoritativePlanHandle,
   adminSubscription,
   source = "API",
+  observedShopifyStatus,
 }: {
   shop: string;
   admin: AdminGraphqlClient;
