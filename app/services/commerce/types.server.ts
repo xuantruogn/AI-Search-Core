@@ -73,6 +73,7 @@ export type EntitlementSnapshot = {
   plan: AiSearchPlan;
   planLabel: string;
   subscriptionStatus: string;
+  cancellationStatus: BillingCancellationStatus;
   active: boolean;
   aiSearchEnabled: boolean;
   fallbackEnabled: boolean;
