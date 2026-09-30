@@ -592,7 +592,13 @@ async function reconcileManualShopifySubscription({
     }
   }
 
-  const previousStatus = current?.status ?? null;
+  // Two different transitions exist here and must not be conflated:
+  // - previousStatus: the shop entitlement status before this reconciliation.
+  // - subscriptionPreviousStatus: the lifecycle status of this exact Shopify GID.
+  // A replacement GID has no local row yet, so its lifecycle previous status is
+  // null even though the shop entitlement may still be ACTIVE.
+  const previousStatus = before.status;
+  const subscriptionPreviousStatus = current?.status ?? null;
   const shopifyCreatedAt = parseShopifyDate(adminSubscription.createdAt);
   const shopifyUpdatedAt = parseShopifyDate(adminSubscription.updatedAt);
   const now = new Date();
@@ -635,7 +641,7 @@ async function reconcileManualShopifySubscription({
 
   const isReplacementActivation =
     status === "ACTIVE" &&
-    previousStatus !== "ACTIVE" &&
+    subscriptionPreviousStatus !== "ACTIVE" &&
     Boolean(before.shopifySubscriptionId) &&
     before.shopifySubscriptionId !== gid &&
     Boolean(before.planHandle) &&
@@ -673,7 +679,7 @@ async function reconcileManualShopifySubscription({
       ? "FAILED"
       : status === "PENDING"
         ? "PENDING"
-        : status === "ACTIVE" && previousStatus === "FROZEN"
+        : status === "ACTIVE" && subscriptionPreviousStatus === "FROZEN"
           ? "RECOVERED"
           : status === "ACTIVE" && trialStatus === "ACTIVE"
             ? "NONE"
@@ -699,6 +705,7 @@ async function reconcileManualShopifySubscription({
     source,
     gid,
     previousStatus,
+    subscriptionPreviousStatus,
     status,
     previousPlan: previousPlanKey,
     nextPlan: inferred.plan,
@@ -795,7 +802,7 @@ async function reconcileManualShopifySubscription({
         billingPeriodStart: start,
         billingPeriodEnd: end,
         acceptedAt:
-          previousStatus === "PENDING" && status === "ACTIVE"
+          subscriptionPreviousStatus === "PENDING" && status === "ACTIVE"
             ? now
             : null,
         activatedAt: status === "ACTIVE" ? now : null,
@@ -819,7 +826,7 @@ async function reconcileManualShopifySubscription({
         currency: shopifyCurrency ?? plan.currencyCode,
         billingPeriodEnd: end,
         acceptedAt:
-          previousStatus === "PENDING" && status === "ACTIVE"
+          subscriptionPreviousStatus === "PENDING" && status === "ACTIVE"
             ? now
             : undefined,
         activatedAt: status === "ACTIVE" ? now : undefined,
@@ -892,26 +899,26 @@ async function reconcileManualShopifySubscription({
 
   if (
     status === "ACTIVE" &&
-    previousStatus !== "ACTIVE"
+    subscriptionPreviousStatus !== "ACTIVE"
   ) {
     await recordBillingEvent({
       shop,
       subscriptionGid: gid,
       type:
-        previousStatus === "FROZEN"
+        subscriptionPreviousStatus === "FROZEN"
           ? "SUBSCRIPTION_UNFROZEN"
           : "SUBSCRIPTION_ACTIVATED",
       source,
       idempotencyKey:
-        `subscription-${previousStatus === "FROZEN" ? "unfrozen" : "activated"}:${gid}`,
+        `subscription-${subscriptionPreviousStatus === "FROZEN" ? "unfrozen" : "activated"}:${gid}`,
       payload: {
         planHandle: inferred.planHandle,
-        previousStatus,
+        subscriptionPreviousStatus,
         status,
       },
     });
 
-    if (previousStatus === "PENDING") {
+    if (subscriptionPreviousStatus === "PENDING") {
       await recordBillingEvent({
         shop,
         subscriptionGid: gid,
@@ -919,7 +926,7 @@ async function reconcileManualShopifySubscription({
         source,
         idempotencyKey: `subscription-approved:${gid}`,
         payload: {
-          previousStatus,
+          subscriptionPreviousStatus,
           status,
         },
       });
@@ -1065,7 +1072,7 @@ async function reconcileManualShopifySubscription({
 
   if (
     status === "FROZEN" &&
-    previousStatus !== "FROZEN"
+    subscriptionPreviousStatus !== "FROZEN"
   ) {
     await recordBillingEvent({
       shop,
@@ -1075,7 +1082,7 @@ async function reconcileManualShopifySubscription({
       idempotencyKey: `subscription-frozen:${gid}`,
       payload: {
         planHandle: inferred.planHandle,
-        previousStatus,
+        subscriptionPreviousStatus,
         status,
       },
     });
@@ -1095,7 +1102,7 @@ async function reconcileManualShopifySubscription({
 
   if (
     status === "ACTIVE" &&
-    previousStatus === "FROZEN"
+    subscriptionPreviousStatus === "FROZEN"
   ) {
     await recordBillingEvent({
       shop,
@@ -1129,7 +1136,7 @@ async function reconcileManualShopifySubscription({
 
   if (
     status === "DECLINED" &&
-    previousStatus !== "DECLINED"
+    subscriptionPreviousStatus !== "DECLINED"
   ) {
     await recordBillingEvent({
       shop,
@@ -1139,7 +1146,7 @@ async function reconcileManualShopifySubscription({
       idempotencyKey: `subscription-declined:${gid}`,
       payload: {
         planHandle: inferred.planHandle,
-        previousStatus,
+        subscriptionPreviousStatus,
         status,
       },
     });
@@ -1152,7 +1159,7 @@ async function reconcileManualShopifySubscription({
         source,
         idempotencyKey: `plan-change-declined:${gid}`,
         payload: {
-          previousStatus,
+          subscriptionPreviousStatus,
           status,
           planHandle: inferred.planHandle,
         },
@@ -1162,7 +1169,7 @@ async function reconcileManualShopifySubscription({
 
   if (
     status === "EXPIRED" &&
-    previousStatus !== "EXPIRED"
+    subscriptionPreviousStatus !== "EXPIRED"
   ) {
     await recordBillingEvent({
       shop,
@@ -1172,7 +1179,7 @@ async function reconcileManualShopifySubscription({
       idempotencyKey: `subscription-expired:${gid}`,
       payload: {
         planHandle: inferred.planHandle,
-        previousStatus,
+        subscriptionPreviousStatus,
         status,
       },
     });
@@ -1185,7 +1192,7 @@ async function reconcileManualShopifySubscription({
         source,
         idempotencyKey: `plan-change-expired:${gid}`,
         payload: {
-          previousStatus,
+          subscriptionPreviousStatus,
           status,
           planHandle: inferred.planHandle,
         },
@@ -1195,7 +1202,7 @@ async function reconcileManualShopifySubscription({
 
   if (
     status === "CANCELLED" &&
-    previousStatus !== "CANCELLED"
+    subscriptionPreviousStatus !== "CANCELLED"
   ) {
     await recordBillingEvent({
       shop,
@@ -1205,7 +1212,7 @@ async function reconcileManualShopifySubscription({
       idempotencyKey: `subscription-cancelled:${gid}`,
       payload: {
         planHandle: inferred.planHandle,
-        previousStatus,
+        subscriptionPreviousStatus,
         status,
       },
     });
@@ -1223,7 +1230,7 @@ async function reconcileManualShopifySubscription({
     });
   }
 
-  if (previousStatus !== status || before.planHandle !== inferred.planHandle) {
+  if (subscriptionPreviousStatus !== status || before.planHandle !== inferred.planHandle) {
     await recordBillingEvent({
       shop,
       subscriptionGid: gid,
@@ -1346,6 +1353,7 @@ async function reconcileManualShopifySubscription({
           plan: inferred.plan,
           status,
           previousStatus,
+          subscriptionPreviousStatus,
           previousPlanHandle: before.planHandle,
           replacementStatus,
           trialStatus,
@@ -1430,48 +1438,78 @@ export async function reconcileShopifySubscriptionFromAdmin({
       });
 
       if (local) {
-        const checkedAt = new Date();
-        await db.billingSubscription.update({
-          where: { id: local.id },
-          data: {
+        const terminal =
+          local.status === "CANCELLED" ||
+          local.status === "DECLINED" ||
+          local.status === "EXPIRED";
+
+        if (terminal) {
+          console.log(
+            "[BILLING] Shopify terminal subscription is no longer returned; keeping terminal local history without mismatch:",
+            {
+              shop,
+              expectedSubscriptionGid,
+              localStatus: local.status,
+              reason: "SHOPIFY_SUBSCRIPTION_NOT_FOUND_TERMINAL",
+            },
+          );
+
+          await recordBillingEvent({
+            shop,
+            subscriptionGid: expectedSubscriptionGid,
+            type: "BILLING_RECONCILED",
+            source,
+            idempotencyKey: `terminal-missing-shopify-record:${expectedSubscriptionGid}`,
+            payload: {
+              previousStatus: local.status,
+              reason: "SHOPIFY_SUBSCRIPTION_NOT_FOUND_TERMINAL",
+              reconciliationStatus: local.reconciliationStatus,
+            },
+          });
+        } else {
+          const checkedAt = new Date();
+          await db.billingSubscription.update({
+            where: { id: local.id },
+            data: {
+              reconciliationStatus: "MISMATCH",
+              reconciliationCheckedAt: checkedAt,
+              reconciliationReason: "SHOPIFY_SUBSCRIPTION_NOT_FOUND",
+              repairRequiredAt: checkedAt,
+            },
+          });
+
+          await recordBillingEvent({
+            shop,
+            subscriptionGid: expectedSubscriptionGid,
+            type: "MISSING_SHOPIFY_RECORD",
+            source,
+            idempotencyKey: `missing-shopify-record:${expectedSubscriptionGid}`,
+            payload: {
+              previousStatus: local.status,
+              reason: "SHOPIFY_SUBSCRIPTION_NOT_FOUND",
+            },
+          });
+
+          await recordBillingEvent({
+            shop,
+            subscriptionGid: expectedSubscriptionGid,
+            type: "DB_SHOPIFY_MISMATCH",
+            source: "RECONCILIATION",
+            idempotencyKey: `db-shopify-mismatch:${expectedSubscriptionGid}:${checkedAt.getTime()}`,
+            payload: {
+              previousStatus: local.status,
+              reason: "SHOPIFY_SUBSCRIPTION_NOT_FOUND",
+            },
+          });
+
+          console.warn("[BILLING MATRIX MISMATCH]", {
+            shop,
+            expectedSubscriptionGid,
+            reason: "SHOPIFY_SUBSCRIPTION_NOT_FOUND",
             reconciliationStatus: "MISMATCH",
-            reconciliationCheckedAt: checkedAt,
-            reconciliationReason: "SHOPIFY_SUBSCRIPTION_NOT_FOUND",
-            repairRequiredAt: checkedAt,
-          },
-        });
-
-        await recordBillingEvent({
-          shop,
-          subscriptionGid: expectedSubscriptionGid,
-          type: "MISSING_SHOPIFY_RECORD",
-          source,
-          idempotencyKey: `missing-shopify-record:${expectedSubscriptionGid}`,
-          payload: {
-            previousStatus: local.status,
-            reason: "SHOPIFY_SUBSCRIPTION_NOT_FOUND",
-          },
-        });
-
-        await recordBillingEvent({
-          shop,
-          subscriptionGid: expectedSubscriptionGid,
-          type: "DB_SHOPIFY_MISMATCH",
-          source: "RECONCILIATION",
-          idempotencyKey: `db-shopify-mismatch:${expectedSubscriptionGid}:${checkedAt.getTime()}`,
-          payload: {
-            previousStatus: local.status,
-            reason: "SHOPIFY_SUBSCRIPTION_NOT_FOUND",
-          },
-        });
-
-        console.warn("[BILLING MATRIX MISMATCH]", {
-          shop,
-          expectedSubscriptionGid,
-          reason: "SHOPIFY_SUBSCRIPTION_NOT_FOUND",
-          reconciliationStatus: "MISMATCH",
-          repairRequiredAt: checkedAt.toISOString(),
-        });
+            repairRequiredAt: checkedAt.toISOString(),
+          });
+        }
       }
     }
 
