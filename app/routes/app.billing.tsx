@@ -14,6 +14,7 @@ import { PLAN_DEFINITIONS } from "../services/commerce/plans.server";
 import { getShopEntitlement } from "../services/commerce/entitlement.server";
 import { getSubscriptionSnapshot } from "../services/commerce/shop-registry.server";
 import { reconcileShopCommercialState } from "../services/commerce/reconciliation.server";
+import { setBillingPlanChangeState } from "../services/commerce/billing-state.server";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
@@ -97,6 +98,15 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const planKey = String(form.get("planKey") || "");
     const cycle = String(form.get("cycle") || "monthly");
 
+    const requestedReplacementBehavior =
+      String(form.get("replacementBehavior") || "APPLY_IMMEDIATELY");
+    const replacementBehavior =
+      requestedReplacementBehavior === "APPLY_ON_NEXT_BILLING_CYCLE"
+        ? "APPLY_ON_NEXT_BILLING_CYCLE"
+        : requestedReplacementBehavior === "STANDARD"
+          ? "STANDARD"
+          : "APPLY_IMMEDIATELY";
+
     const baseMonthlyPrice = planKey === "PRO" ? 29.9 : 9.9;
     const billingPlan = await db.plan.findUnique({
       where: { handle: planKey.toLowerCase() },
@@ -173,7 +183,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
             test: !isProduction,
             trialDays: trialDays > 0 ? trialDays : null,
             interval: billingInterval,
-            replacementBehavior: "APPLY_IMMEDIATELY",
+            replacementBehavior,
           },
         }
       );
@@ -214,6 +224,16 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         authoritativePlanHandle: planKey.toLowerCase(),
         source: "CALLBACK",
       });
+
+      if (replacementBehavior === "APPLY_ON_NEXT_BILLING_CYCLE") {
+        await setBillingPlanChangeState({
+          shop: session.shop,
+          subscriptionGid: createdSubscription.id,
+          status: "DEFERRED",
+          source: "CALLBACK",
+          reason: "APP_SUBSCRIPTION_REPLACEMENT_BEHAVIOR_APPLY_ON_NEXT_BILLING_CYCLE",
+        });
+      }
 
       const confirmationUrl = subscriptionData?.confirmationUrl;
       if (confirmationUrl) {
