@@ -761,6 +761,69 @@ async function reconcileManualShopifySubscription({
     update: data,
   });
 
+  // One local charge record represents one Shopify billing period. The real
+  // Shopify charge ID can be attached later when/if that provider record is
+  // available; lifecycle state is still derived from the subscription state.
+  if (start) {
+    await db.billingCharge.upsert({
+      where: {
+        subscriptionGid_billingPeriodStart: {
+          subscriptionGid: gid,
+          billingPeriodStart: start,
+        },
+      },
+      create: {
+        shop,
+        subscriptionGid: gid,
+        status: chargeStatus,
+        amount: shopifyPrice ?? plan.price,
+        currency: shopifyCurrency ?? plan.currencyCode,
+        billingPeriodStart: start,
+        billingPeriodEnd: end,
+        acceptedAt:
+          previousStatus === "PENDING" && status === "ACTIVE"
+            ? now
+            : null,
+        activatedAt: status === "ACTIVE" ? now : null,
+        paidAt:
+          status === "ACTIVE" && trialStatus !== "ACTIVE"
+            ? now
+            : null,
+        failedAt: status === "FROZEN" ? now : null,
+        frozenAt: status === "FROZEN" ? now : null,
+        testMode:
+          adminSubscription.test ?? process.env.NODE_ENV !== "production",
+        rawResponse: {
+          subscriptionGid: gid,
+          shopifyUpdatedAt: shopifyUpdatedAt?.toISOString() ?? null,
+          status,
+        },
+      },
+      update: {
+        status: chargeStatus,
+        amount: shopifyPrice ?? plan.price,
+        currency: shopifyCurrency ?? plan.currencyCode,
+        billingPeriodEnd: end,
+        acceptedAt:
+          previousStatus === "PENDING" && status === "ACTIVE"
+            ? now
+            : undefined,
+        activatedAt: status === "ACTIVE" ? now : undefined,
+        paidAt:
+          status === "ACTIVE" && trialStatus !== "ACTIVE"
+            ? now
+            : undefined,
+        failedAt: status === "FROZEN" ? now : undefined,
+        frozenAt: status === "FROZEN" ? now : undefined,
+        rawResponse: {
+          subscriptionGid: gid,
+          shopifyUpdatedAt: shopifyUpdatedAt?.toISOString() ?? null,
+          status,
+        },
+      },
+    });
+  }
+
   /**
    * Emit the complete matrix lifecycle. The Admin API state is authoritative;
    * event rows are immutable history and are idempotent by deterministic keys.
