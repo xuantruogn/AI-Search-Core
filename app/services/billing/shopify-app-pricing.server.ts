@@ -818,7 +818,7 @@ async function reconcileManualShopifySubscription({
         amount: shopifyPrice ?? plan.price,
         currency: shopifyCurrency ?? plan.currencyCode,
         billingPeriodStart: start,
-        billingPeriodEnd: end,
+        billingPeriodEnd: effectivePeriodEnd,
         acceptedAt:
           subscriptionPreviousStatus === "PENDING" && status === "ACTIVE"
             ? now
@@ -842,7 +842,7 @@ async function reconcileManualShopifySubscription({
         status: chargeStatus,
         amount: shopifyPrice ?? plan.price,
         currency: shopifyCurrency ?? plan.currencyCode,
-        billingPeriodEnd: end,
+        billingPeriodEnd: effectivePeriodEnd,
         acceptedAt:
           subscriptionPreviousStatus === "PENDING" && status === "ACTIVE"
             ? now
@@ -1361,7 +1361,7 @@ async function reconcileManualShopifySubscription({
         END,
         \`updatedAt\` = UTC_TIMESTAMP(3)
       WHERE \`shop\` = ${shop}
-    \`;
+    `;
   }
 
   const snapshot = await getSubscriptionSnapshot(shop);
