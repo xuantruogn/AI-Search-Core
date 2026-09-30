@@ -612,7 +612,7 @@ async function reconcileManualShopifySubscription({
 
   const previousTrialStatus = current?.trialStatus ?? "NONE";
 
-  const trialStatus: "NONE" | "ACTIVE" | "ENDED" | "CANCELLED" =
+  const trialStatus: BillingTrialStatus =
     status !== "ACTIVE"
       ? status === "CANCELLED" || status === "DECLINED" || status === "EXPIRED"
         ? trialEndsAt && now < trialEndsAt
@@ -635,7 +635,7 @@ async function reconcileManualShopifySubscription({
     Boolean(before.planHandle) &&
     before.planHandle !== inferred.planHandle;
 
-  const replacementStatus =
+  const replacementStatus: import("@prisma/client").BillingPlanChangeStatus =
     status === "PENDING"
       ? "PENDING"
       : status === "DECLINED"
@@ -646,7 +646,7 @@ async function reconcileManualShopifySubscription({
             ? "APPLIED"
             : (current?.planChangeStatus ?? "NONE");
 
-  const cancellationStatus =
+  const cancellationStatus: import("@prisma/client").BillingCancellationStatus =
     status === "CANCELLED"
       ? "EFFECTIVE"
       : (current?.cancellationStatus ?? "NONE");
@@ -662,7 +662,7 @@ async function reconcileManualShopifySubscription({
             ? "PAID"
             : "NONE";
 
-  const paymentStatus =
+  const paymentStatus: import("@prisma/client").BillingPaymentStatus =
     status === "FROZEN"
       ? "FAILED"
       : status === "PENDING"
@@ -675,7 +675,7 @@ async function reconcileManualShopifySubscription({
               ? "PAID"
               : "NONE";
 
-  const accessStatus =
+  const accessStatus: import("@prisma/client").BillingAccessStatus =
     status === "FROZEN"
       ? "SUSPENDED"
       : status === "ACTIVE"
@@ -728,9 +728,9 @@ async function reconcileManualShopifySubscription({
     planChangeStatus: replacementStatus,
     chargeStatus,
     paymentStatus,
-    refundStatus: current?.refundStatus ?? "NONE",
+    refundStatus: (current?.refundStatus ?? "NONE") as import("@prisma/client").BillingRefundStatus,
     accessStatus,
-    reconciliationStatus: "SYNCED",
+    reconciliationStatus: "SYNCED" as import("@prisma/client").BillingReconciliationStatus,
     reconciliationCheckedAt: now,
     reconciliationReason,
     repairRequiredAt: null,
