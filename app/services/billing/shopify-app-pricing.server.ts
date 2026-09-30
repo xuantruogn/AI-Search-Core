@@ -1469,10 +1469,11 @@ export async function reconcileShopifySubscriptionFromAdmin({
         Boolean(pointer?.currentSubscriptionGid) &&
         pointer?.currentSubscriptionGid !== expectedSubscriptionGid;
 
+      const observedTerminalStatus = observedShopifyStatus;
       const observedTerminal =
-        observedShopifyStatus === "CANCELLED" ||
-        observedShopifyStatus === "DECLINED" ||
-        observedShopifyStatus === "EXPIRED";
+        observedTerminalStatus === "CANCELLED" ||
+        observedTerminalStatus === "DECLINED" ||
+        observedTerminalStatus === "EXPIRED";
 
       if (pendingGid && !observedTerminal) {
         classification = "PENDING_WAIT";
@@ -1495,9 +1496,9 @@ export async function reconcileShopifySubscriptionFromAdmin({
         await db.billingSubscription.update({
           where: { id: local.id },
           data: {
-            status: observedShopifyStatus,
+            status: observedTerminalStatus,
             cancelledAt:
-              observedShopifyStatus === "CANCELLED"
+              observedTerminalStatus === "CANCELLED"
                 ? checkedAt
                 : undefined,
             reconciliationStatus: "SYNCED",
