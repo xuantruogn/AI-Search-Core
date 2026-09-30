@@ -661,45 +661,8 @@ export async function recordBillingEvent({
 
 export const BILLING_BACKEND_CONTRACT_VERSION = "1.0.0";
 
-type BillingContractSource =
-  | "CALLBACK"
-  | "WEBHOOK"
-  | "API"
-  | "RECONCILIATION";
-
-type BillingContractEventType =
-  | "SUBSCRIPTION_CREATED"
-  | "SUBSCRIPTION_APPROVED"
-  | "SUBSCRIPTION_ACTIVATED"
-  | "SUBSCRIPTION_UPDATED"
-  | "SUBSCRIPTION_DECLINED"
-  | "SUBSCRIPTION_EXPIRED"
-  | "SUBSCRIPTION_CANCELLED"
-  | "SUBSCRIPTION_FROZEN"
-  | "SUBSCRIPTION_UNFROZEN"
-  | "TRIAL_STARTED"
-  | "TRIAL_EXTENDED"
-  | "TRIAL_ENDED"
-  | "TRIAL_CANCELLED"
-  | "CANCELLATION_REQUESTED"
-  | "CANCELLATION_EFFECTIVE"
-  | "PAYMENT_FAILED"
-  | "PAYMENT_RECOVERED"
-  | "PLAN_CHANGE_REQUESTED"
-  | "PLAN_CHANGE_APPLIED"
-  | "PLAN_CHANGE_DECLINED"
-  | "PLAN_CHANGE_EXPIRED"
-  | "PLAN_CHANGE_DEFERRED"
-  | "REFUND_REQUESTED"
-  | "REFUND_PARTIAL"
-  | "REFUND_FULL"
-  | "PLAN_UPGRADE"
-  | "PLAN_DOWNGRADE"
-  | "APP_UNINSTALLED"
-  | "APP_REINSTALLED"
-  | "BILLING_RECONCILED"
-  | "DB_SHOPIFY_MISMATCH"
-  | "MISSING_SHOPIFY_RECORD";
+type BillingContractSource = BillingEventSource;
+type BillingContractEventType = BillingEventType;
 
 function iso(value: Date | string | null | undefined) {
   if (!value) return null;
