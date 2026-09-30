@@ -38,6 +38,7 @@ type AdminSubscription = {
   name: string;
   status: ShopifySubscriptionStatus;
   createdAt: string;
+  updatedAt?: string;
   currentPeriodEnd?: string | null;
   trialDays?: number;
   test?: boolean;
@@ -200,6 +201,7 @@ async function queryAdminSubscription(
               name
               status
               createdAt
+              updatedAt
               currentPeriodEnd
               trialDays
               test
@@ -348,6 +350,7 @@ async function reconcileManualShopifySubscription({
   preferredPlanHandle?: string | null;
   authoritativePlanHandle?: string | null;
   adminSubscription: AdminSubscription;
+  source = "API",
 }) {
   const identity = await fetchShopIdentity(admin);
 
@@ -581,6 +584,123 @@ async function reconcileManualShopifySubscription({
   }
 
   const previousStatus = current?.status ?? null;
+  const shopifyCreatedAt = parseShopifyDate(adminSubscription.createdAt);
+  const shopifyUpdatedAt = parseShopifyDate(adminSubscription.updatedAt);
+  const now = new Date();
+
+  const trialDays = Math.max(0, adminSubscription.trialDays ?? 0);
+  const trialStartsAt =
+    current?.trialStartsAt ??
+    (trialDays > 0 ? shopifyCreatedAt : null);
+  const trialEndsAt =
+    current?.trialEndsAt ??
+    (trialDays > 0 && shopifyCreatedAt
+      ? new Date(
+          shopifyCreatedAt.getTime() +
+            trialDays * 24 * 60 * 60 * 1000,
+        )
+      : null);
+
+  const previousTrialStatus = current?.trialStatus ?? "NONE";
+
+  const trialStatus =
+    !trialStartsAt || !trialEndsAt
+      ? "NONE"
+      : status === "CANCELLED" ||
+          status === "DECLINED" ||
+          status === "EXPIRED"
+        ? now < trialEndsAt
+          ? "CANCELLED"
+          : "ENDED"
+        : now < trialEndsAt
+          ? "ACTIVE"
+          : "ENDED";
+
+  const previousPlanKey = before.plan;
+
+  const isReplacementActivation =
+    status === "ACTIVE" &&
+    previousStatus !== "ACTIVE" &&
+    Boolean(before.shopifySubscriptionId) &&
+    before.shopifySubscriptionId !== gid &&
+    Boolean(before.planHandle) &&
+    before.planHandle !== inferred.planHandle;
+
+  const replacementStatus =
+    status === "PENDING"
+      ? "PENDING"
+      : status === "DECLINED"
+        ? "DECLINED"
+        : status === "EXPIRED"
+          ? "EXPIRED"
+          : isReplacementActivation
+            ? "APPLIED"
+            : (current?.planChangeStatus ?? "NONE");
+
+  const cancellationStatus =
+    status === "CANCELLED"
+      ? "EFFECTIVE"
+      : (current?.cancellationStatus ?? "NONE");
+
+  const chargeStatus =
+    status === "FROZEN"
+      ? "FAILED"
+      : status === "PENDING"
+        ? "PENDING"
+        : status === "ACTIVE" && trialStatus === "ACTIVE"
+          ? "NONE"
+          : status === "ACTIVE"
+            ? "PAID"
+            : "NONE";
+
+  const paymentStatus =
+    status === "FROZEN"
+      ? "FAILED"
+      : status === "PENDING"
+        ? "PENDING"
+        : status === "ACTIVE" && previousStatus === "FROZEN"
+          ? "RECOVERED"
+          : status === "ACTIVE" && trialStatus === "ACTIVE"
+            ? "NONE"
+            : status === "ACTIVE"
+              ? "PAID"
+              : "NONE";
+
+  const accessStatus =
+    status === "FROZEN"
+      ? "SUSPENDED"
+      : status === "ACTIVE"
+        ? inferred.plan === AI_SEARCH_PLAN.basic
+          ? "BASIC"
+          : inferred.plan === AI_SEARCH_PLAN.pro
+            ? "PRO"
+            : "CUSTOM"
+        : "NONE";
+
+  const reconciliationReason = null;
+
+  console.log("[BILLING MATRIX] reconcile transition:", {
+    shop,
+    source,
+    gid,
+    previousStatus,
+    status,
+    previousPlan: previousPlanKey,
+    nextPlan: inferred.plan,
+    previousPlanHandle: before.planHandle,
+    nextPlanHandle: inferred.planHandle,
+    trialStatus,
+    cancellationStatus,
+    planChangeStatus: replacementStatus,
+    chargeStatus,
+    paymentStatus,
+    accessStatus,
+    currentSubscriptionGid: shopPointer?.currentSubscriptionGid ?? null,
+    pendingSubscriptionGid: shopPointer?.pendingSubscriptionGid ?? null,
+    pendingPlanHandle: shopPointer?.pendingPlanHandle ?? null,
+    shopifyCreatedAt: shopifyCreatedAt?.toISOString() ?? null,
+    shopifyUpdatedAt: shopifyUpdatedAt?.toISOString() ?? null,
+  });
 
   const data = {
     shop,
@@ -592,18 +712,21 @@ async function reconcileManualShopifySubscription({
     priceSnapshot: shopifyPrice ?? plan.price,
     currencySnapshot: shopifyCurrency ?? plan.currencyCode,
     intervalSnapshot: shopifyInterval ?? plan.interval,
-    trialStartsAt:
-      status === "ACTIVE" && (adminSubscription.trialDays ?? 0) > 0
-        ? current?.trialStartsAt ?? new Date()
-        : current?.trialStartsAt ?? null,
-    trialEndsAt:
-      status === "ACTIVE" && (adminSubscription.trialDays ?? 0) > 0
-        ? current?.trialEndsAt ??
-          new Date(
-            (current?.trialStartsAt ?? new Date()).getTime() +
-              (adminSubscription.trialDays ?? 0) * 24 * 60 * 60 * 1000,
-          )
-        : current?.trialEndsAt ?? null,
+    shopifyCreatedAt,
+    shopifyUpdatedAt,
+    trialStatus,
+    cancellationStatus,
+    planChangeStatus: replacementStatus,
+    chargeStatus,
+    paymentStatus,
+    refundStatus: current?.refundStatus ?? "NONE",
+    accessStatus,
+    reconciliationStatus: "SYNCED",
+    reconciliationCheckedAt: now,
+    reconciliationReason,
+    repairRequiredAt: null,
+    trialStartsAt,
+    trialEndsAt,
     currentPeriodStartsAt: start,
     currentPeriodEndsAt: end,
     activatedAt:
@@ -620,7 +743,11 @@ async function reconcileManualShopifySubscription({
         : current?.cancelledAt ?? null,
     testMode:
       adminSubscription.test ?? process.env.NODE_ENV !== "production",
-    rawResponse: adminSubscription as unknown as object,
+    rawResponse: {
+      ...(adminSubscription as unknown as Record<string, unknown>),
+      reconciliationSource: source,
+      reconciledAt: now.toISOString(),
+    },
   };
 
   // Callback and APP_SUBSCRIPTIONS_UPDATE can reconcile the same exact GID
@@ -638,6 +765,20 @@ async function reconcileManualShopifySubscription({
    * The idempotency key contains the event type so ACTIVE after FROZEN can
    * produce SUBSCRIPTION_UNFROZEN without colliding with the first ACTIVE.
    */
+  if (!current) {
+    await recordBillingEvent({
+      shop,
+      subscriptionGid: gid,
+      type: "MISSING_DB_RECORD",
+      source,
+      idempotencyKey: `missing-db-record:${gid}:${status}`,
+      payload: {
+        planHandle: inferred.planHandle,
+        status,
+      },
+    });
+  }
+
   if (!current && status === "PENDING") {
     await recordBillingEvent({
       shop,
@@ -650,6 +791,33 @@ async function reconcileManualShopifySubscription({
         status,
       },
     });
+  }
+
+  if (
+    source === "CALLBACK" &&
+    status === "ACTIVE"
+  ) {
+    const priorActivation = await db.billingEvent.findFirst({
+      where: {
+        shop,
+        subscriptionGid: gid,
+        type: "SUBSCRIPTION_ACTIVATED",
+      },
+      select: { id: true },
+    });
+
+    if (!priorActivation) {
+      await recordBillingEvent({
+        shop,
+        subscriptionGid: gid,
+        type: "REDIRECT_BEFORE_WEBHOOK",
+        source,
+        idempotencyKey: `redirect-before-webhook:${gid}`,
+        payload: {
+          reason: "CALLBACK_RECONCILED_BEFORE_SUBSCRIPTION_WEBHOOK",
+        },
+      });
+    }
   }
 
   if (
@@ -672,6 +840,89 @@ async function reconcileManualShopifySubscription({
         status,
       },
     });
+
+    if (previousStatus === "PENDING") {
+      await recordBillingEvent({
+        shop,
+        subscriptionGid: gid,
+        type: "SUBSCRIPTION_APPROVED",
+        source,
+        idempotencyKey: `subscription-approved:${gid}`,
+        payload: { previousStatus, status },
+      });
+    }
+  }
+
+  if (
+    status === "ACTIVE" &&
+    trialStatus === "ACTIVE" &&
+    previousTrialStatus !== "ACTIVE"
+  ) {
+    await recordBillingEvent({
+      shop,
+      subscriptionGid: gid,
+      type: "TRIAL_STARTED",
+      source,
+      idempotencyKey: `trial-started:${gid}`,
+      payload: {
+        trialStartsAt: trialStartsAt?.toISOString() ?? null,
+        trialEndsAt: trialEndsAt?.toISOString() ?? null,
+        trialDays,
+      },
+    });
+  }
+
+  if (
+    status === "ACTIVE" &&
+    trialStatus === "ENDED" &&
+    previousTrialStatus === "ACTIVE"
+  ) {
+    await recordBillingEvent({
+      shop,
+      subscriptionGid: gid,
+      type: "TRIAL_ENDED",
+      source,
+      idempotencyKey: `trial-ended:${gid}:${trialEndsAt?.getTime() ?? "none"}`,
+      payload: {
+        trialEndsAt: trialEndsAt?.toISOString() ?? null,
+      },
+    });
+  }
+
+  if (
+    previousTrialStatus !== "NONE" &&
+    trialEndsAt &&
+    current?.trialEndsAt &&
+    trialEndsAt.getTime() > current.trialEndsAt.getTime()
+  ) {
+    await recordBillingEvent({
+      shop,
+      subscriptionGid: gid,
+      type: "TRIAL_EXTENDED",
+      source,
+      idempotencyKey: `trial-extended:${gid}:${trialEndsAt.getTime()}`,
+      payload: {
+        previousTrialEndsAt: current.trialEndsAt.toISOString(),
+        trialEndsAt: trialEndsAt.toISOString(),
+      },
+    });
+  }
+
+  if (
+    trialStatus === "CANCELLED" &&
+    previousTrialStatus !== "CANCELLED"
+  ) {
+    await recordBillingEvent({
+      shop,
+      subscriptionGid: gid,
+      type: "TRIAL_CANCELLED",
+      source,
+      idempotencyKey: `trial-cancelled:${gid}`,
+      payload: {
+        trialEndsAt: trialEndsAt?.toISOString() ?? null,
+        status,
+      },
+    });
   }
 
   if (
@@ -690,6 +941,96 @@ async function reconcileManualShopifySubscription({
         status,
       },
     });
+    if (replacementStatus === "APPLIED") {
+      await recordBillingEvent({
+        shop,
+        subscriptionGid: gid,
+        type: "PLAN_CHANGE_APPLIED",
+        source,
+        idempotencyKey: `plan-change-applied:${gid}`,
+        payload: {
+          previousPlanHandle: before.planHandle,
+          planHandle: inferred.planHandle,
+          previousStatus,
+          status,
+        },
+      });
+      const isUpgrade =
+        previousPlanKey === AI_SEARCH_PLAN.basic &&
+        inferred.plan === AI_SEARCH_PLAN.pro;
+      const isDowngrade =
+        previousPlanKey === AI_SEARCH_PLAN.pro &&
+        inferred.plan === AI_SEARCH_PLAN.basic;
+      if (isUpgrade || isDowngrade) {
+        await recordBillingEvent({
+          shop,
+          subscriptionGid: gid,
+          type: isUpgrade ? "PLAN_UPGRADE" : "PLAN_DOWNGRADE",
+          source,
+          idempotencyKey: `plan-change-${isUpgrade ? "upgrade" : "downgrade"}:${gid}`,
+          payload: {
+            previousPlanHandle: before.planHandle,
+            planHandle: inferred.planHandle,
+          },
+        });
+      }
+    }
+  }
+
+  if (
+    status === "DECLINED" &&
+    previousStatus !== "DECLINED"
+  ) {
+    await recordBillingEvent({
+      shop,
+      subscriptionGid: gid,
+      type: "SUBSCRIPTION_DECLINED",
+      source,
+      idempotencyKey: `subscription-declined:${gid}`,
+      payload: {
+        planHandle: inferred.planHandle,
+        previousStatus,
+        status,
+      },
+    });
+    if (replacementStatus === "DECLINED") {
+      await recordBillingEvent({
+        shop,
+        subscriptionGid: gid,
+        type: "PLAN_CHANGE_DECLINED",
+        source,
+        idempotencyKey: `plan-change-declined:${gid}`,
+        payload: { previousStatus, status, planHandle: inferred.planHandle },
+      });
+    }
+  }
+
+  if (
+    status === "EXPIRED" &&
+    previousStatus !== "EXPIRED"
+  ) {
+    await recordBillingEvent({
+      shop,
+      subscriptionGid: gid,
+      type: "SUBSCRIPTION_EXPIRED",
+      source,
+      idempotencyKey: `subscription-expired:${gid}`,
+      payload: {
+        planHandle: inferred.planHandle,
+        previousStatus,
+        status,
+      },
+    });
+    if (replacementStatus === "EXPIRED") {
+      await recordBillingEvent({
+        shop,
+        subscriptionGid: gid,
+        type: "PLAN_CHANGE_EXPIRED",
+        source,
+        idempotencyKey: `plan-change-expired:${gid}`,
+        payload: { previousStatus, status, planHandle: inferred.planHandle },
+      });
+    }
   }
 
   if (
@@ -746,12 +1087,29 @@ async function reconcileManualShopifySubscription({
     });
   }
 
+  if (previousStatus !== status || before.planHandle !== inferred.planHandle) {
+    await recordBillingEvent({
+      shop,
+      subscriptionGid: gid,
+      type: "SUBSCRIPTION_UPDATED",
+      source,
+      idempotencyKey: `subscription-updated:${gid}:${shopifyUpdatedAt?.getTime() ?? now.getTime()}`,
+      payload: {
+        previousStatus,
+        status,
+        previousPlanHandle: before.planHandle,
+        planHandle: inferred.planHandle,
+        shopifyUpdatedAt: shopifyUpdatedAt?.toISOString() ?? null,
+      },
+    });
+  }
+
   await recordBillingEvent({
     shop,
     subscriptionGid: gid,
     type: "BILLING_RECONCILED",
-    source: "API",
-    idempotencyKey: `billing-reconcile:${gid}:${status}`,
+    source,
+    idempotencyKey: `billing-reconcile:${gid}:${status}:${shopifyUpdatedAt?.getTime() ?? "none"}`,
     payload: {
       planId: plan.id,
       planHandle: inferred.planHandle,
@@ -902,6 +1260,62 @@ export async function reconcileShopifySubscriptionFromAdmin({
       },
     );
 
+    if (expectedSubscriptionGid) {
+      const local = await db.billingSubscription.findUnique({
+        where: { shopifySubscriptionGid: expectedSubscriptionGid },
+        select: {
+          id: true,
+          status: true,
+          reconciliationStatus: true,
+        },
+      });
+
+      if (local) {
+        const checkedAt = new Date();
+        await db.billingSubscription.update({
+          where: { id: local.id },
+          data: {
+            reconciliationStatus: "MISMATCH",
+            reconciliationCheckedAt: checkedAt,
+            reconciliationReason: "SHOPIFY_SUBSCRIPTION_NOT_FOUND",
+            repairRequiredAt: checkedAt,
+          },
+        });
+
+        await recordBillingEvent({
+          shop,
+          subscriptionGid: expectedSubscriptionGid,
+          type: "MISSING_SHOPIFY_RECORD",
+          source,
+          idempotencyKey: `missing-shopify-record:${expectedSubscriptionGid}`,
+          payload: {
+            previousStatus: local.status,
+            reason: "SHOPIFY_SUBSCRIPTION_NOT_FOUND",
+          },
+        });
+
+        await recordBillingEvent({
+          shop,
+          subscriptionGid: expectedSubscriptionGid,
+          type: "DB_SHOPIFY_MISMATCH",
+          source: "RECONCILIATION",
+          idempotencyKey: `db-shopify-mismatch:${expectedSubscriptionGid}:${checkedAt.getTime()}`,
+          payload: {
+            previousStatus: local.status,
+            reason: "SHOPIFY_SUBSCRIPTION_NOT_FOUND",
+          },
+        });
+
+        console.warn("[BILLING MATRIX MISMATCH]", {
+          shop,
+          expectedSubscriptionGid,
+          reason: "SHOPIFY_SUBSCRIPTION_NOT_FOUND",
+          reconciliationStatus: "MISMATCH",
+          repairRequiredAt: checkedAt.toISOString(),
+        });
+      }
+    }
+
     return {
       configured: true as const,
       confirmed: false as const,
@@ -927,6 +1341,7 @@ export async function reconcileShopifySubscriptionFromAdmin({
     preferredPlanHandle,
     authoritativePlanHandle,
     adminSubscription: subscription,
+    source,
   });
 
   return {
@@ -957,6 +1372,7 @@ export async function refreshShopifyAppPricingSubscription({
       admin,
       preferredPlanHandle,
       adminSubscription,
+      source,
     });
   }
 
@@ -965,6 +1381,7 @@ export async function refreshShopifyAppPricingSubscription({
     admin,
     expectedSubscriptionGid: null,
     preferredPlanHandle,
+    source,
   });
 }
 
@@ -973,11 +1390,13 @@ export async function refreshShopifyAppPricingIfStale({
   admin,
   preferredPlanHandle,
   maxAgeMs = 5 * 60_000,
+  source = "RECONCILIATION",
 }: {
   shop: string;
   admin: AdminGraphqlClient;
   preferredPlanHandle?: string | null;
   maxAgeMs?: number;
+  source?: "CALLBACK" | "WEBHOOK" | "API" | "RECONCILIATION";
 }) {
   const current = await getSubscriptionSnapshot(shop);
 
