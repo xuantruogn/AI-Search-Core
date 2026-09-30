@@ -17,7 +17,10 @@ import { reconcileShopCommercialState } from "../services/commerce/reconciliatio
 import { setBillingPlanChangeState } from "../services/commerce/billing-state.server";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
+  const debugId = crypto.randomUUID().slice(0, 8);
+  console.log("[BILLING DEBUG] loader:start", { debugId, method: request.method, url: request.url });
   const { session } = await authenticate.admin(request);
+  console.log("[BILLING DEBUG] loader:authenticated", { debugId, shop: session.shop });
 
   const entitlement = await getShopEntitlement(session.shop);
   const subscription = await getSubscriptionSnapshot(session.shop, { ensure: false });
@@ -64,9 +67,12 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
+  const debugId = crypto.randomUUID().slice(0, 8);
+  console.log("[BILLING DEBUG] action:start", { debugId, method: request.method, url: request.url });
   const { admin, session } = await authenticate.admin(request);
   const form = await request.formData();
   const intent = String(form.get("intent") || "");
+  console.log("[BILLING DEBUG] action:authenticated", { debugId, shop: session.shop, intent });
 
   if (intent === "refresh") {
     try {
@@ -96,7 +102,15 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
   if (intent === "cancelRenewal") {
     try {
+      console.log("[BILLING DEBUG] cancel:start", { debugId, shop: session.shop });
       const snapshot = await getSubscriptionSnapshot(session.shop, { ensure: false });
+      console.log("[BILLING DEBUG] cancel:snapshot", {
+        debugId, shop: session.shop, plan: snapshot.plan, planHandle: snapshot.planHandle,
+        status: snapshot.status, cancellationStatus: snapshot.cancellationStatus,
+        accessStatus: snapshot.accessStatus, commercialStatus: snapshot.commercialStatus,
+        subscriptionGid: snapshot.shopifySubscriptionId,
+        billingPeriodEnd: snapshot.billingPeriodEnd?.toISOString() ?? null,
+      });
       const subscriptionGid = snapshot.shopifySubscriptionId;
 
       if (!subscriptionGid) {
@@ -122,6 +136,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
       // Shopify Admin Billing API: prorate=false stops the next billing cycle
       // while preserving the merchant's already-paid current period.
+      console.log("[BILLING DEBUG] cancel:shopify:start", { debugId, shop: session.shop, subscriptionGid });
       const response = await admin.graphql(
         `#graphql
         mutation CancelAppSubscription($id: ID!, $prorate: Boolean) {
@@ -170,6 +185,11 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       }
 
       const cancelled = payload.data?.appSubscriptionCancel?.appSubscription;
+      console.log("[BILLING DEBUG] cancel:shopify:response", {
+        debugId, shop: session.shop, subscriptionGid,
+        cancelledId: cancelled?.id ?? null, cancelledStatus: cancelled?.status ?? null,
+        graphqlErrors: graphQLErrors.length, userErrors: userErrors.length,
+      });
 
       if (!cancelled?.id) {
         return {
@@ -178,7 +198,10 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         };
       }
 
-      await reconcileShopifySubscriptionFromAdmin({
+      console.log("[BILLING DEBUG] cancel:reconcile:start", {
+        debugId, shop: session.shop, expectedSubscriptionGid: cancelled.id,
+      });
+      const reconciliation = await reconcileShopifySubscriptionFromAdmin({
         shop: session.shop,
         admin,
         expectedSubscriptionGid: cancelled.id,
@@ -186,6 +209,14 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         authoritativePlanHandle: snapshot.planHandle,
         source: "API",
         observedShopifyStatus: "CANCELLED",
+      });
+      console.log("[BILLING DEBUG] cancel:reconcile:done", {
+        debugId, shop: session.shop,
+        plan: reconciliation.subscription.plan, status: reconciliation.subscription.status,
+        cancellationStatus: reconciliation.subscription.cancellationStatus,
+        accessStatus: reconciliation.subscription.accessStatus,
+        commercialStatus: reconciliation.subscription.commercialStatus,
+        reconciliationStatus: reconciliation.reconciliationStatus,
       });
 
       return {
