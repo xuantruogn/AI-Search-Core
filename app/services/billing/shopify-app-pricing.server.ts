@@ -1407,6 +1407,7 @@ export async function reconcileShopifySubscriptionFromAdmin({
   preferredPlanHandle,
   authoritativePlanHandle,
   source = "API",
+  observedShopifyStatus,
 }: {
   shop: string;
   admin: AdminGraphqlClient;
