@@ -58,6 +58,7 @@ enum BillingTrialStatus {
 
 enum BillingCancellationStatus {
   NONE
+  REQUESTED
   NON_RENEWING
   EFFECTIVE
 }
@@ -80,6 +81,8 @@ enum BillingChargeStatus {
 
 enum BillingPaymentStatus {
   NONE
+  PENDING
+  PAID
   FAILED
   RECOVERED
 }
@@ -137,6 +140,11 @@ enum BillingEventType {
   BILLING_RECONCILED
   WEBHOOK_DUPLICATE
   WEBHOOK_OUT_OF_ORDER
+  WEBHOOK_RETRY
+  REDIRECT_BEFORE_WEBHOOK
+  DB_SHOPIFY_MISMATCH
+  MISSING_DB_RECORD
+  MISSING_SHOPIFY_RECORD
 }
 
 enum BillingEventSource {
@@ -224,6 +232,7 @@ model BillingSubscription {
   intervalSnapshot       BillingInterval?
 
   shopifyCreatedAt       DateTime?
+  shopifyUpdatedAt       DateTime?
   trialStatus            BillingTrialStatus @default(NONE)
   cancellationStatus     BillingCancellationStatus @default(NONE)
   planChangeStatus       BillingPlanChangeStatus @default(NONE)
