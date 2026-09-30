@@ -1,14 +1,12 @@
 import db from "../../db.server";
-import type {
-  BillingAccessStatus,
-  BillingCancellationStatus,
-  BillingChargeStatus,
-  BillingPaymentStatus,
-  BillingPlanChangeStatus,
-  BillingReconciliationStatus,
-  BillingRefundStatus,
-  BillingTrialStatus,
-} from "@prisma/client";
+export type BillingAccessStatus = import("@prisma/client").BillingAccessStatus;
+export type BillingCancellationStatus = import("@prisma/client").BillingCancellationStatus;
+export type BillingChargeStatus = import("@prisma/client").BillingChargeStatus;
+export type BillingPaymentStatus = import("@prisma/client").BillingPaymentStatus;
+export type BillingPlanChangeStatus = import("@prisma/client").BillingPlanChangeStatus;
+export type BillingReconciliationStatus = import("@prisma/client").BillingReconciliationStatus;
+export type BillingRefundStatus = import("@prisma/client").BillingRefundStatus;
+export type BillingTrialStatus = import("@prisma/client").BillingTrialStatus;
 import type { SubscriptionSnapshot } from "./types.server";
 import {
   AI_SEARCH_PLAN,
