@@ -796,6 +796,12 @@ export type BillingBackendContract = {
     occurredAt: string;
     payload: unknown;
   };
+  recentEvents: Array<{
+    type: BillingContractEventType;
+    source: BillingContractSource;
+    subscriptionGid: string | null;
+    occurredAt: string;
+  }>;
 };
 
 export async function emitBillingBackendContract({
