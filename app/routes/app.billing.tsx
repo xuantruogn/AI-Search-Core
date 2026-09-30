@@ -112,7 +112,25 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       where: { handle: planKey.toLowerCase() },
       select: { trialDays: true },
     });
-    const trialDays = Math.max(0, billingPlan?.trialDays ?? 0);
+
+    // Trial is a shop-level first-subscription benefit, not a per-plan-change
+    // benefit. Once this shop has ever had a Billing V2 subscription, every
+    // later replacement/change must be created without trialDays.
+    //
+    // AiSearchSubscription is bootstrapped for every shop even when there has
+    // never been a paid/trial subscription, so its mere existence is not
+    // sufficient to determine trial eligibility. A real BillingSubscription
+    // row is the authoritative local marker that billing history has started.
+    const hasBillingHistory = Boolean(
+      await db.billingSubscription.findFirst({
+        where: { shop: session.shop },
+        select: { id: true },
+      }),
+    );
+
+    const trialDays = hasBillingHistory
+      ? 0
+      : Math.max(0, billingPlan?.trialDays ?? 0);
     const isProduction = process.env.NODE_ENV === "production";
 
     let finalPrice = baseMonthlyPrice;
