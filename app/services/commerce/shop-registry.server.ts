@@ -216,6 +216,8 @@ export async function ensureShopRecord({
   if (reactivate) {
     // Reactivation only happens after authenticated Admin access, so this is
     // the one place where an UNINSTALLED shop is intentionally made ACTIVE.
+    const wasUninstalled = existing.status === "UNINSTALLED";
+
     await db.$executeRaw`
       UPDATE \`AiSearchShop\`
       SET
@@ -225,6 +227,19 @@ export async function ensureShopRecord({
         \`updatedAt\` = UTC_TIMESTAMP(3)
       WHERE \`shop\` = ${cleanShop}
     `;
+
+    if (wasUninstalled) {
+      await recordBillingEvent({
+        shop: cleanShop,
+        type: "APP_REINSTALLED",
+        source: "RECONCILIATION",
+        idempotencyKey: `app-reinstalled:${cleanShop}:${Date.now()}`,
+        payload: {
+          previousStatus: "UNINSTALLED",
+          currentStatus: "ACTIVE",
+        },
+      });
+    }
   } else if (
     shopifyShopId &&
     existing.status === "ACTIVE" &&
@@ -449,6 +464,9 @@ export async function markShopUninstalled(shop: string) {
         \`uninstalledAt\` = UTC_TIMESTAMP(3),
         \`currentPlanHandle\` = NULL,
         \`currentSubscriptionGid\` = NULL,
+        \`pendingPlanHandle\` = NULL,
+        \`pendingSubscriptionGid\` = NULL,
+        \`pendingChangeAt\` = NULL,
         \`updatedAt\` = UTC_TIMESTAMP(3)
       WHERE \`shop\` = ${shop}
     `,
@@ -467,6 +485,9 @@ export async function markShopUninstalled(shop: string) {
       data: {
         status: "CANCELLED",
         cancelledAt: new Date(),
+        cancellationStatus: "EFFECTIVE",
+        accessStatus: "NONE",
+        reconciliationStatus: "SYNCED",
       },
     }),
     db.$executeRaw`
