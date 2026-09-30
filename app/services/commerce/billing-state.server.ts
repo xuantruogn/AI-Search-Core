@@ -110,19 +110,39 @@ function getTrialStatus(
 function getCommercialStatus(
   status: string | null,
   trialStatus: BillingTrialStatus,
+  cancellationStatus: BillingCancellationStatus = "NONE",
+  currentPeriodEndsAt: Date | null = null,
 ): BillingCommercialStatus {
   if (status === "PENDING") return "PENDING";
   if (status === "FROZEN") return "FROZEN";
   if (status === "ACTIVE") return trialStatus === "ACTIVE" ? "TRIAL" : "PAID";
+  if (
+    status === "CANCELLED" &&
+    cancellationStatus === "NON_RENEWING" &&
+    currentPeriodEndsAt &&
+    currentPeriodEndsAt > new Date()
+  ) {
+    return "PAID";
+  }
   return "INACTIVE";
 }
 
 function getAccessStatus(
   status: string | null,
   plan: AiSearchPlan,
+  cancellationStatus: BillingCancellationStatus = "NONE",
+  currentPeriodEndsAt: Date | null = null,
 ): BillingAccessStatus {
   if (status === "FROZEN") return "SUSPENDED";
-  if (status !== "ACTIVE") return "NONE";
+  const accessWindowActive =
+    status === "ACTIVE" ||
+    (
+      status === "CANCELLED" &&
+      cancellationStatus === "NON_RENEWING" &&
+      currentPeriodEndsAt &&
+      currentPeriodEndsAt > new Date()
+    );
+  if (!accessWindowActive) return "NONE";
   if (plan === AI_SEARCH_PLAN.basic) return "BASIC";
   if (plan === AI_SEARCH_PLAN.pro) return "PRO";
   if (plan === AI_SEARCH_PLAN.custom) return "CUSTOM";
@@ -315,16 +335,53 @@ export async function ensureBillingV2State(shop: string) {
       })
     : null;
 
-  // If the pointer is stale/missing, recover from an actual ACTIVE record.
-  // FROZEN is also a current lifecycle state, so allow it as a fallback only
-  // after an ACTIVE lookup has been exhausted.
+  // A Shopify non-prorated cancellation is CANCELLED immediately,
+  // but the merchant keeps the already-paid entitlement until the cached
+  // currentPeriodEndsAt.
   if (
-        !subscription ||
-        (subscription.status !== "ACTIVE" &&
-          subscription.status !== "FROZEN")
-      ) {
+    subscription?.status === "CANCELLED" &&
+    subscription.cancellationStatus === "NON_RENEWING" &&
+    subscription.currentPeriodEndsAt &&
+    subscription.currentPeriodEndsAt <= new Date()
+  ) {
+    await db.billingSubscription.update({
+      where: { id: subscription.id },
+      data: {
+        cancellationStatus: "EFFECTIVE",
+        accessStatus: "NONE",
+      },
+    });
+    subscription = null;
+  }
+
+  // If the pointer is stale/missing, recover from an actual ACTIVE/FROZEN
+  // record, or from a still-valid NON_RENEWING cancellation window.
+  if (
+    !subscription ||
+    (
+      subscription.status !== "ACTIVE" &&
+      subscription.status !== "FROZEN" &&
+      !(
+        subscription.status === "CANCELLED" &&
+        subscription.cancellationStatus === "NON_RENEWING" &&
+        subscription.currentPeriodEndsAt &&
+        subscription.currentPeriodEndsAt > new Date()
+      )
+    )
+  ) {
     subscription = await db.billingSubscription.findFirst({
-      where: { shop, status: "ACTIVE" },
+      where: {
+        shop,
+        OR: [
+          { status: "ACTIVE" },
+          { status: "FROZEN" },
+          {
+            status: "CANCELLED",
+            cancellationStatus: "NON_RENEWING",
+            currentPeriodEndsAt: { gt: new Date() },
+          },
+        ],
+      },
       orderBy: { updatedAt: "desc" },
     });
   }
@@ -473,7 +530,12 @@ export async function getBillingSubscriptionSnapshot(
       billingPeriodStart: subscription.currentPeriodStartsAt,
       billingPeriodEnd: subscription.currentPeriodEndsAt,
       billingInterval: subscription.intervalSnapshot,
-      commercialStatus: getCommercialStatus(subscription.status, trialStatus),
+      commercialStatus: getCommercialStatus(
+      subscription.status,
+      trialStatus,
+      subscription.cancellationStatus,
+      subscription.currentPeriodEndsAt,
+    ),
       trialStatus,
       trialStartsAt: subscription.trialStartsAt,
       trialEndsAt: subscription.trialEndsAt,
@@ -500,7 +562,12 @@ export async function getBillingSubscriptionSnapshot(
     subscription.trialEndsAt,
     subscription.status,
   );
-  const accessStatus = getAccessStatus(subscription.status, planKey);
+  const accessStatus = getAccessStatus(
+    subscription.status,
+    planKey,
+    subscription.cancellationStatus,
+    subscription.currentPeriodEndsAt,
+  );
 
   return {
     shop,
