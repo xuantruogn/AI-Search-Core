@@ -591,17 +591,23 @@ async function reconcileManualShopifySubscription({
   const now = new Date();
 
   const trialDays = Math.max(0, adminSubscription.trialDays ?? 0);
-  const trialStartsAt =
-    current?.trialStartsAt ??
-    (trialDays > 0 ? shopifyCreatedAt : null);
-  const trialEndsAt =
-    current?.trialEndsAt ??
-    (trialDays > 0 && shopifyCreatedAt
+  const providerTrialStartsAt =
+    trialDays > 0 ? shopifyCreatedAt : null;
+  const providerTrialEndsAt =
+    trialDays > 0 && shopifyCreatedAt
       ? new Date(
           shopifyCreatedAt.getTime() +
             trialDays * 24 * 60 * 60 * 1000,
         )
-      : null);
+      : null;
+  const trialStartsAt =
+    current?.trialStartsAt ?? providerTrialStartsAt;
+  const trialEndsAt =
+    current?.trialEndsAt &&
+    providerTrialEndsAt &&
+    providerTrialEndsAt.getTime() > current.trialEndsAt.getTime()
+      ? providerTrialEndsAt
+      : current?.trialEndsAt ?? providerTrialEndsAt;
 
   const previousTrialStatus = current?.trialStatus ?? "NONE";
 
