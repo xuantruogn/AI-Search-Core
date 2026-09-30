@@ -360,6 +360,7 @@ async function reconcileManualShopifySubscription({
   authoritativePlanHandle?: string | null;
   adminSubscription: AdminSubscription;
   source?: "CALLBACK" | "WEBHOOK" | "API" | "RECONCILIATION";
+  observedShopifyStatus?: ShopifySubscriptionStatus | null;
 }) {
   const identity = await fetchShopIdentity(admin);
 
@@ -1412,6 +1413,7 @@ export async function reconcileShopifySubscriptionFromAdmin({
   preferredPlanHandle?: string | null;
   authoritativePlanHandle?: string | null;
   source?: "CALLBACK" | "WEBHOOK" | "API" | "RECONCILIATION";
+  observedShopifyStatus?: ShopifySubscriptionStatus | null;
 }) {
   const subscription = await queryAdminSubscription(
     admin,
@@ -1420,114 +1422,202 @@ export async function reconcileShopifySubscriptionFromAdmin({
 
   if (!subscription) {
     console.log(
-      "[BILLING] Shopify subscription not found for reconciliation; local state unchanged:",
+      "[BILLING] Shopify subscription not found; classifying exact-GID absence:",
       {
         shop,
         expectedSubscriptionGid: expectedSubscriptionGid ?? null,
+        observedShopifyStatus: observedShopifyStatus ?? null,
       },
     );
 
+    let classification:
+      | "PENDING_WAIT"
+      | "WEBHOOK_TERMINAL"
+      | "SUPERSEDED_TERMINAL"
+      | "MISMATCH"
+      | "UNKNOWN" = "UNKNOWN";
+
     if (expectedSubscriptionGid) {
-      const local = await db.billingSubscription.findUnique({
-        where: { shopifySubscriptionGid: expectedSubscriptionGid },
-        select: {
-          id: true,
-          status: true,
-          reconciliationStatus: true,
-        },
-      });
+      const [local, pointer] = await Promise.all([
+        db.billingSubscription.findUnique({
+          where: { shopifySubscriptionGid: expectedSubscriptionGid },
+          select: {
+            id: true,
+            status: true,
+            reconciliationStatus: true,
+          },
+        }),
+        db.aiSearchShop.findUnique({
+          where: { shop },
+          select: {
+            currentSubscriptionGid: true,
+            pendingSubscriptionGid: true,
+          },
+        }),
+      ]);
 
-      if (local) {
-        const terminal =
-          local.status === "CANCELLED" ||
-          local.status === "DECLINED" ||
-          local.status === "EXPIRED";
+      const localTerminal =
+        local?.status === "CANCELLED" ||
+        local?.status === "DECLINED" ||
+        local?.status === "EXPIRED";
 
-        if (terminal) {
-          console.log(
-            "[BILLING] Shopify terminal subscription is no longer returned; keeping terminal local history without mismatch:",
-            {
-              shop,
-              expectedSubscriptionGid,
-              localStatus: local.status,
-              reason: "SHOPIFY_SUBSCRIPTION_NOT_FOUND_TERMINAL",
-            },
-          );
+      const pendingGid =
+        pointer?.pendingSubscriptionGid === expectedSubscriptionGid;
 
-          await recordBillingEvent({
-            shop,
-            subscriptionGid: expectedSubscriptionGid,
-            type: "BILLING_RECONCILED",
-            source,
-            idempotencyKey: `terminal-missing-shopify-record:${expectedSubscriptionGid}`,
-            payload: {
-              previousStatus: local.status,
-              reason: "SHOPIFY_SUBSCRIPTION_NOT_FOUND_TERMINAL",
-              reconciliationStatus: local.reconciliationStatus,
-            },
-          });
-        } else {
-          const checkedAt = new Date();
-          await db.billingSubscription.update({
-            where: { id: local.id },
-            data: {
-              reconciliationStatus: "MISMATCH",
-              reconciliationCheckedAt: checkedAt,
-              reconciliationReason: "SHOPIFY_SUBSCRIPTION_NOT_FOUND",
-              repairRequiredAt: checkedAt,
-            },
-          });
+      const supersededGid =
+        Boolean(pointer?.currentSubscriptionGid) &&
+        pointer?.currentSubscriptionGid !== expectedSubscriptionGid;
 
-          await recordBillingEvent({
-            shop,
-            subscriptionGid: expectedSubscriptionGid,
-            type: "MISSING_SHOPIFY_RECORD",
-            source,
-            idempotencyKey: `missing-shopify-record:${expectedSubscriptionGid}`,
-            payload: {
-              previousStatus: local.status,
-              reason: "SHOPIFY_SUBSCRIPTION_NOT_FOUND",
-            },
-          });
+      const observedTerminal =
+        observedShopifyStatus === "CANCELLED" ||
+        observedShopifyStatus === "DECLINED" ||
+        observedShopifyStatus === "EXPIRED";
 
-          await recordBillingEvent({
-            shop,
-            subscriptionGid: expectedSubscriptionGid,
-            type: "DB_SHOPIFY_MISMATCH",
-            source: "RECONCILIATION",
-            idempotencyKey: `db-shopify-mismatch:${expectedSubscriptionGid}:${checkedAt.getTime()}`,
-            payload: {
-              previousStatus: local.status,
-              reason: "SHOPIFY_SUBSCRIPTION_NOT_FOUND",
-            },
-          });
+      if (pendingGid && !observedTerminal) {
+        classification = "PENDING_WAIT";
 
-          console.warn("[BILLING MATRIX MISMATCH]", {
-            shop,
-            expectedSubscriptionGid,
-            reason: "SHOPIFY_SUBSCRIPTION_NOT_FOUND",
+        await recordBillingEvent({
+          shop,
+          subscriptionGid: expectedSubscriptionGid,
+          type: "BILLING_RECONCILED",
+          source,
+          idempotencyKey:
+            "pending-shopify-record-not-found:" + expectedSubscriptionGid,
+          payload: {
+            reason: "PENDING_SUBSCRIPTION_NOT_YET_VISIBLE",
+            reconciliationStatus: local?.reconciliationStatus ?? "SYNCED",
+          },
+        });
+      } else if (observedTerminal && local && !localTerminal) {
+        const checkedAt = new Date();
+
+        await db.billingSubscription.update({
+          where: { id: local.id },
+          data: {
+            status: observedShopifyStatus,
+            cancelledAt:
+              observedShopifyStatus === "CANCELLED"
+                ? checkedAt
+                : undefined,
+            reconciliationStatus: "SYNCED",
+            reconciliationCheckedAt: checkedAt,
+            reconciliationReason:
+              "SHOPIFY_WEBHOOK_TERMINAL_NOT_FOUND_IN_ADMIN",
+            repairRequiredAt: null,
+          },
+        });
+
+        classification = "WEBHOOK_TERMINAL";
+
+        await recordBillingEvent({
+          shop,
+          subscriptionGid: expectedSubscriptionGid,
+          type: "SUBSCRIPTION_UPDATED",
+          source,
+          idempotencyKey:
+            "webhook-terminal-not-found:" +
+            expectedSubscriptionGid +
+            ":" +
+            observedShopifyStatus,
+          payload: {
+            previousStatus: local.status,
+            status: observedShopifyStatus,
+            reason: "SHOPIFY_WEBHOOK_TERMINAL_NOT_FOUND_IN_ADMIN",
+          },
+        });
+      } else if (local && (localTerminal || supersededGid)) {
+        classification = "SUPERSEDED_TERMINAL";
+
+        await recordBillingEvent({
+          shop,
+          subscriptionGid: expectedSubscriptionGid,
+          type: "BILLING_RECONCILED",
+          source,
+          idempotencyKey:
+            "superseded-missing-shopify-record:" + expectedSubscriptionGid,
+          payload: {
+            previousStatus: local.status,
+            reason: localTerminal
+              ? "SHOPIFY_SUBSCRIPTION_NOT_FOUND_TERMINAL"
+              : "SHOPIFY_SUBSCRIPTION_NOT_FOUND_SUPERSEDED",
+            currentSubscriptionGid:
+              pointer?.currentSubscriptionGid ?? null,
+            pendingSubscriptionGid:
+              pointer?.pendingSubscriptionGid ?? null,
+          },
+        });
+      } else if (local) {
+        classification = "MISMATCH";
+
+        const checkedAt = new Date();
+
+        await db.billingSubscription.update({
+          where: { id: local.id },
+          data: {
             reconciliationStatus: "MISMATCH",
-            repairRequiredAt: checkedAt.toISOString(),
-          });
-        }
+            reconciliationCheckedAt: checkedAt,
+            reconciliationReason: "SHOPIFY_SUBSCRIPTION_NOT_FOUND",
+            repairRequiredAt: checkedAt,
+          },
+        });
+
+        await recordBillingEvent({
+          shop,
+          subscriptionGid: expectedSubscriptionGid,
+          type: "MISSING_SHOPIFY_RECORD",
+          source,
+          idempotencyKey:
+            "missing-shopify-record:" + expectedSubscriptionGid,
+          payload: {
+            previousStatus: local.status,
+            reason: "SHOPIFY_SUBSCRIPTION_NOT_FOUND",
+          },
+        });
+
+        await recordBillingEvent({
+          shop,
+          subscriptionGid: expectedSubscriptionGid,
+          type: "DB_SHOPIFY_MISMATCH",
+          source: "RECONCILIATION",
+          idempotencyKey:
+            "db-shopify-mismatch:" +
+            expectedSubscriptionGid +
+            ":" +
+            checkedAt.getTime(),
+          payload: {
+            previousStatus: local.status,
+            reason: "SHOPIFY_SUBSCRIPTION_NOT_FOUND",
+          },
+        });
       }
     }
 
     const contract = await emitBillingBackendContract({
       shop,
       source,
-      eventType: "DB_SHOPIFY_MISMATCH",
+      eventType:
+        classification === "MISMATCH"
+          ? "DB_SHOPIFY_MISMATCH"
+          : "BILLING_RECONCILED",
       eventPayload: {
         expectedSubscriptionGid: expectedSubscriptionGid ?? null,
-        reason: "SHOPIFY_SUBSCRIPTION_NOT_FOUND",
-        reconciliationStatus: "MISMATCH",
+        reason:
+          classification === "PENDING_WAIT"
+            ? "PENDING_SUBSCRIPTION_NOT_YET_VISIBLE"
+            : classification === "WEBHOOK_TERMINAL"
+              ? "SHOPIFY_WEBHOOK_TERMINAL_NOT_FOUND_IN_ADMIN"
+              : classification === "SUPERSEDED_TERMINAL"
+                ? "SHOPIFY_SUBSCRIPTION_NOT_FOUND_SUPERSEDED"
+                : "SHOPIFY_SUBSCRIPTION_NOT_FOUND",
+        reconciliationStatus:
+          classification === "MISMATCH" ? "MISMATCH" : "SYNCED",
       },
     });
 
     return {
       configured: true as const,
       confirmed: false as const,
-      changed: false,
+      changed: classification === "WEBHOOK_TERMINAL",
       subscription: await getSubscriptionSnapshot(shop, {
         ensure: false,
       }),
@@ -1535,7 +1625,6 @@ export async function reconcileShopifySubscriptionFromAdmin({
       backendContract: contract,
     };
   }
-
   console.log("[BILLING] Shopify subscription verified:", {
     shop,
     expectedSubscriptionGid: expectedSubscriptionGid ?? null,
@@ -1551,6 +1640,7 @@ export async function reconcileShopifySubscriptionFromAdmin({
     authoritativePlanHandle,
     adminSubscription: subscription,
     source,
+    observedShopifyStatus,
   });
 
   return {
