@@ -56,12 +56,51 @@ function mapPlanHandleToKey(handle: string | null | undefined): AiSearchPlan {
   return AI_SEARCH_PLAN.custom;
 }
 
+export type BillingCommercialStatus =
+  | "INACTIVE"
+  | "PENDING"
+  | "TRIAL"
+  | "PAID"
+  | "FROZEN";
+
+export type BillingTrialStatus = "NONE" | "ACTIVE" | "ENDED" | "CANCELLED";
+export type BillingCancellationStatus =
+  | "NONE"
+  | "REQUESTED"
+  | "NON_RENEWING"
+  | "EFFECTIVE";
+export type BillingPlanChangeStatus =
+  | "NONE"
+  | "PENDING"
+  | "APPLIED"
+  | "DECLINED"
+  | "EXPIRED"
+  | "DEFERRED";
+export type BillingChargeStatus = "NONE" | "PENDING" | "PAID" | "FAILED";
+export type BillingPaymentStatus =
+  | "NONE"
+  | "PENDING"
+  | "PAID"
+  | "FAILED"
+  | "RECOVERED";
+export type BillingRefundStatus = "NONE" | "PARTIAL" | "FULL";
+export type BillingAccessStatus =
+  | "NONE"
+  | "BASIC"
+  | "PRO"
+  | "CUSTOM"
+  | "SUSPENDED";
+export type BillingReconciliationStatus =
+  | "SYNCED"
+  | "MISMATCH"
+  | "REPAIR_REQUIRED";
+
 function getTrialStatus(
   trialStartsAt: Date | null,
   trialEndsAt: Date | null,
   subscriptionStatus: string | null,
   now = new Date(),
-): "NONE" | "ACTIVE" | "ENDED" | "CANCELLED" {
+): BillingTrialStatus {
   if (!trialStartsAt || !trialEndsAt) return "NONE";
   if (
     subscriptionStatus === "CANCELLED" ||
@@ -75,8 +114,8 @@ function getTrialStatus(
 
 function getCommercialStatus(
   status: string | null,
-  trialStatus: "NONE" | "ACTIVE" | "ENDED" | "CANCELLED",
-): "INACTIVE" | "PENDING" | "TRIAL" | "PAID" | "FROZEN" {
+  trialStatus: BillingTrialStatus,
+): BillingCommercialStatus {
   if (status === "PENDING") return "PENDING";
   if (status === "FROZEN") return "FROZEN";
   if (status === "ACTIVE") return trialStatus === "ACTIVE" ? "TRIAL" : "PAID";
@@ -86,7 +125,7 @@ function getCommercialStatus(
 function getAccessStatus(
   status: string | null,
   plan: AiSearchPlan,
-): "NONE" | "BASIC" | "PRO" | "CUSTOM" | "SUSPENDED" {
+): BillingAccessStatus {
   if (status === "FROZEN") return "SUSPENDED";
   if (status !== "ACTIVE") return "NONE";
   if (plan === AI_SEARCH_PLAN.basic) return "BASIC";
@@ -96,26 +135,23 @@ function getAccessStatus(
 }
 
 function getPlanChangeStatus(
-  status: string | null,
-  currentPlanHandle: string | null,
-  pendingPlanHandle: string | null,
+  subscriptionStatus: string | null,
+  storedStatus: BillingPlanChangeStatus,
   pendingSubscriptionGid: string | null,
-  currentSubscriptionGid: string | null,
-): "NONE" | "PENDING" | "APPLIED" | "DECLINED" | "EXPIRED" | "DEFERRED" {
-  if (status === "PENDING" && pendingSubscriptionGid) return "PENDING";
-  if (status === "DECLINED") return "DECLINED";
-  if (status === "EXPIRED") return "EXPIRED";
+): BillingPlanChangeStatus {
   if (
-    status === "ACTIVE" &&
-    currentSubscriptionGid &&
-    pendingSubscriptionGid === null &&
-    currentPlanHandle &&
-    pendingPlanHandle &&
-    currentPlanHandle !== pendingPlanHandle
+    storedStatus !== "NONE" &&
+    storedStatus !== "PENDING"
   ) {
-    return "APPLIED";
+    return storedStatus;
   }
-  return "NONE";
+
+  if (subscriptionStatus === "PENDING" && pendingSubscriptionGid) {
+    return "PENDING";
+  }
+  if (subscriptionStatus === "DECLINED") return "DECLINED";
+  if (subscriptionStatus === "EXPIRED") return "EXPIRED";
+  return storedStatus;
 }
 
 function limitsFromPlan(plan: {
@@ -372,9 +408,18 @@ export async function getBillingSubscriptionSnapshot(shop: string) {
       billingPeriodStart: null,
       billingPeriodEnd: null,
       billingInterval: null,
+      commercialStatus: "INACTIVE",
       trialStatus: "NONE",
       trialStartsAt: null,
       trialEndsAt: null,
+      cancellationStatus: "NONE",
+      planChangeStatus: "NONE",
+      chargeStatus: "NONE",
+      paymentStatus: "NONE",
+      refundStatus: "NONE",
+      accessStatus: "NONE",
+      reconciliationStatus: "SYNCED",
+      reconciliationReason: null,
       source: "BILLING_V2",
       lastSyncedAt: null,
     };
@@ -404,6 +449,11 @@ export async function getBillingSubscriptionSnapshot(shop: string) {
   }
 
   if (!plan) {
+    const trialStatus = getTrialStatus(
+      subscription.trialStartsAt,
+      subscription.trialEndsAt,
+      subscription.status,
+    );
     return {
       shop,
       plan: AI_SEARCH_PLAN.none,
@@ -416,18 +466,34 @@ export async function getBillingSubscriptionSnapshot(shop: string) {
       billingPeriodStart: subscription.currentPeriodStartsAt,
       billingPeriodEnd: subscription.currentPeriodEndsAt,
       billingInterval: subscription.intervalSnapshot,
-      trialStatus: getTrialStatus(
-        subscription.trialStartsAt,
-        subscription.trialEndsAt,
-      ),
+      commercialStatus: getCommercialStatus(subscription.status, trialStatus),
+      trialStatus,
       trialStartsAt: subscription.trialStartsAt,
       trialEndsAt: subscription.trialEndsAt,
+      cancellationStatus: subscription.cancellationStatus,
+      planChangeStatus: getPlanChangeStatus(
+        subscription.status,
+        subscription.planChangeStatus,
+        null,
+      ),
+      chargeStatus: subscription.chargeStatus,
+      paymentStatus: subscription.paymentStatus,
+      refundStatus: subscription.refundStatus,
+      accessStatus: "NONE",
+      reconciliationStatus: subscription.reconciliationStatus,
+      reconciliationReason: subscription.reconciliationReason,
       source: "BILLING_V2",
       lastSyncedAt: subscription.updatedAt,
     };
   }
 
   const planKey = mapPlanHandleToKey(plan.handle);
+  const trialStatus = getTrialStatus(
+    subscription.trialStartsAt,
+    subscription.trialEndsAt,
+    subscription.status,
+  );
+  const accessStatus = getAccessStatus(subscription.status, planKey);
 
   return {
     shop,
@@ -441,12 +507,25 @@ export async function getBillingSubscriptionSnapshot(shop: string) {
     billingPeriodStart: subscription.currentPeriodStartsAt,
     billingPeriodEnd: subscription.currentPeriodEndsAt,
     billingInterval: subscription.intervalSnapshot,
-    trialStatus: getTrialStatus(
-      subscription.trialStartsAt,
-      subscription.trialEndsAt,
-    ),
+    commercialStatus: getCommercialStatus(subscription.status, trialStatus),
+    trialStatus,
     trialStartsAt: subscription.trialStartsAt,
     trialEndsAt: subscription.trialEndsAt,
+    cancellationStatus: subscription.cancellationStatus,
+    planChangeStatus: getPlanChangeStatus(
+      subscription.status,
+      subscription.planChangeStatus,
+      (await db.aiSearchShop.findUnique({
+        where: { shop },
+        select: { pendingSubscriptionGid: true },
+      }))?.pendingSubscriptionGid ?? null,
+    ),
+    chargeStatus: subscription.chargeStatus,
+    paymentStatus: subscription.paymentStatus,
+    refundStatus: subscription.refundStatus,
+    accessStatus,
+    reconciliationStatus: subscription.reconciliationStatus,
+    reconciliationReason: subscription.reconciliationReason,
     source: "BILLING_V2",
     lastSyncedAt: subscription.updatedAt,
   };
@@ -503,14 +582,40 @@ export async function recordBillingEvent({
     | "SUBSCRIPTION_CREATED"
     | "SUBSCRIPTION_APPROVED"
     | "SUBSCRIPTION_ACTIVATED"
+    | "SUBSCRIPTION_UPDATED"
+    | "SUBSCRIPTION_DECLINED"
+    | "SUBSCRIPTION_EXPIRED"
     | "SUBSCRIPTION_CANCELLED"
     | "SUBSCRIPTION_FROZEN"
     | "SUBSCRIPTION_UNFROZEN"
+    | "TRIAL_STARTED"
+    | "TRIAL_EXTENDED"
+    | "TRIAL_ENDED"
+    | "TRIAL_CANCELLED"
+    | "CANCELLATION_REQUESTED"
+    | "CANCELLATION_EFFECTIVE"
+    | "PAYMENT_FAILED"
+    | "PAYMENT_RECOVERED"
+    | "PLAN_CHANGE_REQUESTED"
+    | "PLAN_CHANGE_APPLIED"
+    | "PLAN_CHANGE_DECLINED"
+    | "PLAN_CHANGE_EXPIRED"
+    | "PLAN_CHANGE_DEFERRED"
+    | "REFUND_REQUESTED"
+    | "REFUND_PARTIAL"
+    | "REFUND_FULL"
     | "PLAN_UPGRADE"
     | "PLAN_DOWNGRADE"
     | "APP_UNINSTALLED"
     | "APP_REINSTALLED"
-    | "BILLING_RECONCILED";
+    | "BILLING_RECONCILED"
+    | "WEBHOOK_DUPLICATE"
+    | "WEBHOOK_OUT_OF_ORDER"
+    | "WEBHOOK_RETRY"
+    | "REDIRECT_BEFORE_WEBHOOK"
+    | "DB_SHOPIFY_MISMATCH"
+    | "MISSING_DB_RECORD"
+    | "MISSING_SHOPIFY_RECORD";
   source?: "CALLBACK" | "WEBHOOK" | "API" | "RECONCILIATION";
   idempotencyKey: string;
   payload?: unknown;
