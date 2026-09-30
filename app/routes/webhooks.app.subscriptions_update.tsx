@@ -69,12 +69,82 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   });
 
   if (existingWebhook) {
-    console.log("[BILLING] Duplicate Shopify subscription webhook ignored:", {
+    await recordBillingEvent({
+      shop,
+      subscriptionGid,
+      type: "WEBHOOK_DUPLICATE",
+      source: "WEBHOOK",
+      idempotencyKey: `webhook-duplicate:${webhookId}`,
+      payload: {
+        topic,
+        webhookId,
+        reason: "IDEMPOTENCY_KEY_ALREADY_PROCESSED",
+      },
+    });
+
+    await recordBillingEvent({
+      shop,
+      subscriptionGid,
+      type: "WEBHOOK_RETRY",
+      source: "WEBHOOK",
+      idempotencyKey: `webhook-retry:${webhookId}`,
+      payload: {
+        topic,
+        webhookId,
+        reason: "DUPLICATE_WEBHOOK_DELIVERY",
+      },
+    });
+
+    console.log("[BILLING MATRIX] Duplicate/retry webhook ignored:", {
       shop,
       webhookId,
+      subscriptionGid,
     });
 
     return new Response("OK", { status: 200 });
+  }
+
+  const localBeforeWebhook = await db.billingSubscription.findUnique({
+    where: { shopifySubscriptionGid: subscriptionGid },
+    select: {
+      status: true,
+      shopifyUpdatedAt: true,
+    },
+  });
+
+  const incomingUpdatedAt = subscription?.updated_at
+    ? new Date(subscription.updated_at)
+    : null;
+
+  if (
+    localBeforeWebhook?.shopifyUpdatedAt &&
+    incomingUpdatedAt &&
+    !Number.isNaN(incomingUpdatedAt.getTime()) &&
+    incomingUpdatedAt.getTime() <
+      localBeforeWebhook.shopifyUpdatedAt.getTime()
+  ) {
+    await recordBillingEvent({
+      shop,
+      subscriptionGid,
+      type: "WEBHOOK_OUT_OF_ORDER",
+      source: "WEBHOOK",
+      idempotencyKey: `webhook-out-of-order:${webhookId}`,
+      payload: {
+        webhookId,
+        incomingUpdatedAt: incomingUpdatedAt.toISOString(),
+        storedUpdatedAt: localBeforeWebhook.shopifyUpdatedAt.toISOString(),
+        storedStatus: localBeforeWebhook.status,
+        webhookStatus: status,
+      },
+    });
+
+    console.warn("[BILLING MATRIX] Out-of-order webhook detected:", {
+      shop,
+      webhookId,
+      subscriptionGid,
+      incomingUpdatedAt: incomingUpdatedAt.toISOString(),
+      storedUpdatedAt: localBeforeWebhook.shopifyUpdatedAt.toISOString(),
+    });
   }
 
   const { admin } = await unauthenticated.admin(shop);
@@ -85,22 +155,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     admin,
     expectedSubscriptionGid: subscriptionGid,
     preferredPlanHandle: subscription?.plan_handle ?? null,
-  });
-
-  await recordBillingEvent({
-    shop,
-    type: "BILLING_RECONCILED",
     source: "WEBHOOK",
-    subscriptionGid,
-    idempotencyKey: webhookIdempotencyKey,
-    payload: {
-      topic,
-      webhookId,
-      webhookStatus: status,
-      confirmed: result.confirmed,
-      changed: result.changed,
-      localStatus: result.subscription.status,
-    },
   });
 
   console.log("[BILLING] Shopify subscription webhook reconciled:", {
