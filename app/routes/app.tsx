@@ -10,7 +10,7 @@ import { refreshShopifyAppPricingIfStale } from "../services/billing/shopify-app
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const debugId = crypto.randomUUID().slice(0, 8);
   const url = new URL(request.url);
-  console.log("[APP DEBUG] loader:start", { debugId, method: request.method, pathname: url.pathname, search: url.search });
+  console.log("[APP TRACE] loader:start", { debugId, method: request.method, pathname: url.pathname, search: url.search, referer: request.headers.get("referer"), remixRequest: request.headers.get("x-remix-request"), secFetchMode: request.headers.get("sec-fetch-mode") });
   const { admin, session } = await authenticate.admin(request);
   console.log("[APP DEBUG] loader:authenticated", { debugId, shop: session.shop, pathname: url.pathname });
 
@@ -26,13 +26,13 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   // 2. Refresh trạng thái Billing nhẹ từ Shopify (Chỉ dùng để Read/Recovery)
   try {
-    console.log("[APP DEBUG] billingRefresh:start", { debugId, shop: session.shop, preferredPlanHandle });
+    console.log("[APP TRACE] billingRefresh:start", { debugId, shop: session.shop, preferredPlanHandle });
     await refreshShopifyAppPricingIfStale({
       shop: session.shop,
       admin,
       preferredPlanHandle,
     });
-    console.log("[APP DEBUG] billingRefresh:done", { debugId, shop: session.shop });
+    console.log("[APP TRACE] billingRefresh:done", { debugId, shop: session.shop });
   } catch (error) {
     console.error("[AI Search] Shopify App Pricing refresh failed:", {
       shop: session.shop,
