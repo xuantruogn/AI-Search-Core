@@ -611,7 +611,7 @@ async function reconcileManualShopifySubscription({
 
   const previousTrialStatus = current?.trialStatus ?? "NONE";
 
-  const trialStatus =
+  const trialStatus: "NONE" | "ACTIVE" | "ENDED" | "CANCELLED" =
     status !== "ACTIVE"
       ? status === "CANCELLED" || status === "DECLINED" || status === "EXPIRED"
         ? trialEndsAt && now < trialEndsAt
