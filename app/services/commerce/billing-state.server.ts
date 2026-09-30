@@ -1,4 +1,14 @@
 import db from "../../db.server";
+import type {
+  BillingAccessStatus,
+  BillingCancellationStatus,
+  BillingChargeStatus,
+  BillingPaymentStatus,
+  BillingPlanChangeStatus,
+  BillingReconciliationStatus,
+  BillingRefundStatus,
+  BillingTrialStatus,
+} from "@prisma/client";
 import type { SubscriptionSnapshot } from "./types.server";
 import {
   AI_SEARCH_PLAN,
@@ -63,38 +73,6 @@ export type BillingCommercialStatus =
   | "TRIAL"
   | "PAID"
   | "FROZEN";
-
-export type BillingTrialStatus = "NONE" | "ACTIVE" | "ENDED" | "CANCELLED";
-export type BillingCancellationStatus =
-  | "NONE"
-  | "REQUESTED"
-  | "NON_RENEWING"
-  | "EFFECTIVE";
-export type BillingPlanChangeStatus =
-  | "NONE"
-  | "PENDING"
-  | "APPLIED"
-  | "DECLINED"
-  | "EXPIRED"
-  | "DEFERRED";
-export type BillingChargeStatus = "NONE" | "PENDING" | "PAID" | "FAILED";
-export type BillingPaymentStatus =
-  | "NONE"
-  | "PENDING"
-  | "PAID"
-  | "FAILED"
-  | "RECOVERED";
-export type BillingRefundStatus = "NONE" | "PARTIAL" | "FULL";
-export type BillingAccessStatus =
-  | "NONE"
-  | "BASIC"
-  | "PRO"
-  | "CUSTOM"
-  | "SUSPENDED";
-export type BillingReconciliationStatus =
-  | "SYNCED"
-  | "MISMATCH"
-  | "REPAIR_REQUIRED";
 
 function getTrialStatus(
   trialStartsAt: Date | null,
