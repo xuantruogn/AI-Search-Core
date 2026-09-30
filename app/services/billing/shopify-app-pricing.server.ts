@@ -13,6 +13,7 @@ import {
   ensureBillingV2State,
   mirrorBillingStateToLegacy,
   recordBillingEvent,
+  type BillingTrialStatus,
 } from "../commerce/billing-state.server";
 import { withDistributedLease } from "../commerce/lease-lock.server";
 
@@ -650,7 +651,7 @@ async function reconcileManualShopifySubscription({
       ? "EFFECTIVE"
       : (current?.cancellationStatus ?? "NONE");
 
-  const chargeStatus =
+  const chargeStatus: import("@prisma/client").BillingChargeStatus =
     status === "FROZEN"
       ? "FAILED"
       : status === "PENDING"
