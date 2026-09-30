@@ -11,6 +11,15 @@ File này là bộ nhớ làm việc dài hạn cho AI khi tiếp tục đọc, 
 - Sau khi sửa phải kiểm tra typecheck/build hoặc kiểm tra phù hợp; không được tuyên bố đã kiểm tra nếu chưa có bằng chứng.
 - Người dùng sẽ pull branch và chạy test thực tế; log thực tế là bằng chứng quan trọng hơn suy luận.
 
+
+## 2A. Luồng Billing chính của AI-Buyense
+- App đi theo luồng **Manual Pricing / Billing API**.
+- Khi phân tích, sửa hoặc test Billing V2 phải lấy Manual Pricing / Billing API làm luồng billing chính.
+- Không được tự ý tạo hoặc giả định một billing flow khác ngoài luồng này.
+- Luồng tổng quát cần được giữ nhất quán:
+  **Shopify Manual Pricing / Billing API → Callback / Webhook → Billing Service → Reconciliation / State Engine → Prisma / DB → Billing Backend Contract → Access / Entitlement → UI**
+- Khi debug một case phải xác định dữ liệu đang đi qua bước nào trong luồng trên và không bỏ qua lớp trung gian chỉ vì một trạng thái đã xuất hiện ở callback/webhook.
+
 ## 2. Trạng thái nguồn sự thật
 - Shopify Admin API là source of truth cho trạng thái subscription.
 - Webhook chỉ là tín hiệu; phải đối chiếu/reconcile với Shopify Admin API.
