@@ -9,6 +9,8 @@ import type {
   BillingReconciliationStatus,
   BillingRefundStatus,
   BillingTrialStatus,
+  BillingEventType,
+  BillingEventSource,
 } from "@prisma/client";
 
 export type {
@@ -20,6 +22,8 @@ export type {
   BillingReconciliationStatus,
   BillingRefundStatus,
   BillingTrialStatus,
+  BillingEventType,
+  BillingEventSource,
 };
 import type { SubscriptionSnapshot } from "./types.server";
 import {
