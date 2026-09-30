@@ -1278,12 +1278,14 @@ export async function reconcileShopifySubscriptionFromAdmin({
   expectedSubscriptionGid,
   preferredPlanHandle,
   authoritativePlanHandle,
+  source = "API",
 }: {
   shop: string;
   admin: AdminGraphqlClient;
   expectedSubscriptionGid?: string | null;
   preferredPlanHandle?: string | null;
   authoritativePlanHandle?: string | null;
+  source?: "CALLBACK" | "WEBHOOK" | "API" | "RECONCILIATION";
 }) {
   const subscription = await queryAdminSubscription(
     admin,
@@ -1399,11 +1401,13 @@ export async function refreshShopifyAppPricingSubscription({
   admin,
   preferredPlanHandle,
   adminSubscription,
+  source = "API",
 }: {
   shop: string;
   admin: AdminGraphqlClient;
   preferredPlanHandle?: string | null;
   adminSubscription?: AdminSubscription | null;
+  source?: "CALLBACK" | "WEBHOOK" | "API" | "RECONCILIATION";
 }) {
   if (adminSubscription) {
     return reconcileManualShopifySubscription({
@@ -1491,6 +1495,7 @@ export async function refreshShopifyAppPricingIfStale({
         expectedSubscriptionGid:
           latest.shopifySubscriptionId ?? null,
         preferredPlanHandle,
+        source,
       });
 
       return {
