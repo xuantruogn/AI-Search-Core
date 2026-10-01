@@ -1,35 +1,29 @@
+import type { ReactNode } from "react";
 import { Form, Link, useNavigation } from "react-router";
 
 import type { DevDashboardData } from "../services/admin/dev-dashboard.server";
-
 type DevRole = "OWNER" | "ADMIN" | "VIEWER";
+type UiWritePermission =
+  | "shop_quota.write"
+  | "shop_plan.write"
+  | "system.write";
+
+function hasDevPermission(role: DevRole, permission: UiWritePermission) {
+  if (role === "OWNER") return true;
+  if (role === "ADMIN") return permission !== "system.write";
+  return false;
+}
+
 type Feedback = { ok: boolean; message: string } | undefined;
-const cardStyle = {
-  border: "1px solid #dfe3e8",
-  borderRadius: 12,
-  padding: 16,
-  background: "white",
-} as const;
-
-function fmtUsd(value: number | null) {
-  return value === null ? "Not configured" : `$${value.toFixed(4)}`;
-}
-
-function fmtDate(value: string | Date | null) {
-  if (!value) return "—";
-  return new Date(value).toLocaleString();
-}
-
-function progress(used: number, limit: number | null) {
-  if (limit === null) return "Unlimited";
-  return `${used.toLocaleString()} / ${limit.toLocaleString()}`;
-}
+type Shop = DevDashboardData["shops"][number];
+type Grant = DevDashboardData["supportGrants"][number];
+type Tone = "success" | "warning" | "danger" | "neutral" | "primary";
 
 export function DevCenterDashboard({
   data,
   devUser,
   csrfToken,
-  managedShop: _managedShop,
+  managedShop,
   feedback,
 }: {
   data: DevDashboardData;
@@ -38,403 +32,463 @@ export function DevCenterDashboard({
   managedShop: string | null;
   feedback: Feedback;
 }) {
-  const actionData = feedback;
   const navigation = useNavigation();
   const busy = navigation.state !== "idle";
+  const selectedShop = managedShop
+    ? data.shops.find((shop) => shop.shop === managedShop) ?? null
+    : null;
+  const selectedGrants = selectedShop
+    ? data.supportGrants.filter(
+        (grant) => grant.shop === selectedShop.shop && grant.active,
+      )
+    : [];
+  const canQuotaWrite = hasDevPermission(devUser.role, "shop_quota.write");
+  const canPlanWrite = hasDevPermission(devUser.role, "shop_plan.write");
+  const canSystemWrite = hasDevPermission(devUser.role, "system.write");
+  const usdMrr =
+    data.financial.revenue.find((item) => item.currency === "USD")?.mrr ?? null;
+  const estimatedMargin =
+    usdMrr === null ? null : usdMrr - data.provider.totalCostUsd;
 
   return (
-    <main
-      style={{
-        maxWidth: 1500,
-        margin: "0 auto",
-        padding: 24,
-        fontFamily:
-          "Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif",
-        color: "#202223",
-      }}
-    >
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "flex-end",
-          alignItems: "center",
-          gap: 8,
-          flexWrap: "wrap",
-          marginBottom: 12,
-        }}
-      >
-        <span style={{ color: "#6d7175", fontSize: 13 }}>
-          {devUser.email} · {devUser.role}
-        </span>
-        <Link
-          to="/dev/search-history"
-          style={{
-            border: "1px solid #babfc3",
-            borderRadius: 8,
-            padding: "8px 12px",
-            color: "#202223",
-            textDecoration: "none",
-            fontSize: 13,
-            fontWeight: 650,
-          }}
-        >
-          Search History
-        </Link>
-        <Form method="post" action="/dev/logout">
-          <input type="hidden" name="_csrf" value={csrfToken} />
-          <button type="submit" style={{ padding: "8px 12px" }}>Sign out</button>
-        </Form>
-      </div>
+    <div className="dc-shell">
+      <aside className="dc-sidebar">
+        <div className="dc-brand">
+          <span className="dc-brand-mark">B</span>
+          <span>
+            <strong>AI-Buyense</strong>
+            <small>Internal Dev Center</small>
+          </span>
+        </div>
 
-      <header style={{ marginBottom: 20 }}>
-        <div style={{ fontSize: 13, color: "#6d7175", fontWeight: 700 }}>
-          INTERNAL · AI-BUYENSE
-        </div>
-        <h1 style={{ margin: "4px 0 6px", fontSize: 30 }}>Admin Dashboard</h1>
-        <p style={{ margin: 0, color: "#6d7175" }}>
-          Provider capacity, token/cost telemetry, shop plans, effective quotas,
-          support grants and audit history. Generated {fmtDate(data.generatedAt)}.
-        </p>
-      </header>
+        <nav className="dc-nav" aria-label="Dev Center navigation">
+          <NavItem href="#overview" label="Overview" icon="01" />
+          <NavItem href="#shops" label="Shops" icon="02" />
+          <Link to="/dev/search-history"><span>03</span>Search History</Link>
+          <NavItem href="#plans" label="Plans & Revenue" icon="04" />
+          <NavItem href="#usage" label="Usage & Cost" icon="05" />
+          <NavItem href="#audit" label="Audit" icon="06" />
+        </nav>
 
-      {actionData ? (
-        <div
-          style={{
-            ...cardStyle,
-            marginBottom: 16,
-            borderColor: actionData.ok ? "#8ccf9b" : "#e0a1a1",
-            background: actionData.ok ? "#f1f8f3" : "#fff4f4",
-          }}
-        >
-          {actionData.message}
+        <div className="dc-sidebar-meta">
+          <span className="dc-system-dot" />
+          <div>
+            <strong>Internal access</strong>
+            <small>MFA protected session</small>
+          </div>
         </div>
-      ) : null}
+      </aside>
 
-      <section
-        style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))",
-          gap: 12,
-          marginBottom: 20,
-        }}
-      >
-        <div style={cardStyle}>
-          <small>OpenAI cost MTD · estimated</small>
-          <div style={{ fontSize: 25, fontWeight: 800 }}>
-            {fmtUsd(data.provider.totalCostUsd)}
+      <main className="dc-main">
+        <header className="dc-header">
+          <div>
+            <p className="dc-kicker">Application operations</p>
+            <h1>Dev Center</h1>
+            <p className="dc-header-sub">
+              Business health, merchant operations and commercial controls.
+            </p>
           </div>
-          <div style={{ color: "#6d7175", fontSize: 13 }}>
-            Search {fmtUsd(data.provider.searchCostUsd)} · Indexing{" "}
-            {fmtUsd(data.provider.indexingCostUsd)}
+          <div className="dc-user">
+            <span className="dc-avatar">{devUser.email.slice(0, 1).toUpperCase()}</span>
+            <div>
+              <strong>{devUser.email}</strong>
+              <small>{devUser.role}</small>
+            </div>
+            <Form method="post" action="/dev/logout">
+              <input type="hidden" name="_csrf" value={csrfToken} />
+              <button className="dc-button dc-button-ghost" type="submit">
+                Sign out
+              </button>
+            </Form>
           </div>
-        </div>
-        <div style={cardStyle}>
-          <small>Internal API budget remaining</small>
-          <div style={{ fontSize: 25, fontWeight: 800 }}>
-            {fmtUsd(data.provider.remainingBudgetUsd)}
-          </div>
-          <div style={{ color: "#6d7175", fontSize: 13 }}>
-            Budget {fmtUsd(data.provider.configuredBudgetUsd)}
-          </div>
-        </div>
-        <div style={cardStyle}>
-          <small>Indexed products</small>
-          <div style={{ fontSize: 25, fontWeight: 800 }}>
-            {data.overview.indexedProducts.toLocaleString("en-US")}
-          </div>
-          <div style={{ color: "#6d7175", fontSize: 13 }}>
-            {data.overview.totalShops.toLocaleString("en-US")} shops · {data.overview.aiEnabledShops.toLocaleString("en-US")} AI enabled
-          </div>
-        </div>
-        <div style={cardStyle}>
-          <small>Tokens MTD</small>
-          <div style={{ fontSize: 25, fontWeight: 800 }}>
-            {data.provider.totalTokens.toLocaleString()}
-          </div>
-          <div style={{ color: "#6d7175", fontSize: 13 }}>
-            LLM {data.provider.llmTokens.toLocaleString()} · Embedding{" "}
-            {data.provider.embeddingTokens.toLocaleString()}
-          </div>
-        </div>
-        <div style={cardStyle}>
-          <small>AI searches MTD</small>
-          <div style={{ fontSize: 25, fontWeight: 800 }}>
-            {data.provider.mtdSearches.toLocaleString()}
-          </div>
-          <div style={{ color: "#6d7175", fontSize: 13 }}>
-            Avg search cost {fmtUsd(data.provider.avgSearchCostUsd)}
-          </div>
-        </div>
-        <div style={cardStyle}>
-          <small>Estimated searches remaining</small>
-          <div style={{ fontSize: 25, fontWeight: 800 }}>
-            {data.provider.estimatedSearchesRemaining?.toLocaleString() ?? "—"}
-          </div>
-          <div style={{ color: "#6d7175", fontSize: 13 }}>
-            Based on configured budget + current average
-          </div>
-        </div>
-      </section>
+        </header>
 
-      <section style={{ ...cardStyle, marginBottom: 20 }}>
-        <Form method="get" style={{ display: "flex", gap: 8, alignItems: "center" }}>
-          <input
-            name="q"
-            defaultValue={data.query}
-            placeholder="Search shop domain..."
-            style={{
-              flex: 1,
-              minWidth: 260,
-              padding: "9px 11px",
-              border: "1px solid #c9cccf",
-              borderRadius: 8,
-            }}
+        {feedback ? (
+          <div className={`dc-alert ${feedback.ok ? "is-success" : "is-error"}`}>
+            {feedback.message}
+          </div>
+        ) : null}
+
+        <section id="overview" className="dc-section">
+          <SectionHeader
+            eyebrow="Overview"
+            title="Business at a glance"
+            note={`Live application data · updated ${formatDate(data.generatedAt)}`}
           />
-          <button type="submit" style={{ padding: "9px 14px" }}>
-            Search
-          </button>
-        </Form>
-      </section>
+          <div className="dc-kpi-grid">
+            <Metric label="Total shops" value={number(data.overview.totalShops)} note={`${number(data.overview.activeShops)} lifecycle active`} />
+            <Metric label="Paid shops" value={number(data.overview.paidShops)} note={`${number(data.financial.trialSubscriptions)} currently in trial`} tone="success" />
+            <Metric label="AI enabled" value={number(data.overview.aiEnabledShops)} note="Active entitlement and toggle on" />
+            <Metric label="Subscription MRR" value={moneyList(data.financial.revenue)} note="Active Billing V2 snapshots" tone="primary" />
+            <Metric label="API cost MTD" value={usd(data.provider.totalCostUsd)} note="Recorded OpenAI/provider usage" />
+            <Metric label="Estimated margin" value={estimatedMargin === null ? "—" : usd(estimatedMargin)} note={usdMrr === null ? "Requires comparable USD MRR" : "USD MRR minus provider cost"} />
+            <Metric label="AI searches MTD" value={number(data.overview.searchesMtd)} note={`${usdNullable(data.provider.avgSearchCostUsd)} average cost/search`} />
+            <Metric label="Indexed products" value={number(data.overview.indexedProducts)} note="Retained vectors across all shops" />
+          </div>
+        </section>
 
-      <section style={{ ...cardStyle, overflowX: "auto", marginBottom: 20 }}>
-        <h2 style={{ marginTop: 0 }}>Shop management ({data.shops.length})</h2>
-        <table
-          style={{
-            width: "100%",
-            borderCollapse: "collapse",
-            minWidth: 1250,
-            fontSize: 13,
-          }}
-        >
-          <thead>
-            <tr style={{ textAlign: "left", borderBottom: "1px solid #dfe3e8" }}>
-              <th style={{ padding: 8 }}>Shop</th>
-              <th>Plan</th>
-              <th>AI</th>
-              <th>Products</th>
-              <th>Search</th>
-              <th>Vector updates</th>
-              <th>API tokens MTD</th>
-              <th>API cost MTD</th>
-              <th>Support</th>
-            </tr>
-          </thead>
-          <tbody>
-            {data.shops.map((shop) => (
-              <tr key={shop.shop} style={{ borderBottom: "1px solid #eef0f2" }}>
-                <td style={{ padding: 8, verticalAlign: "top" }}>
-                  <strong>{shop.shop}</strong>
-                  <div style={{ color: "#6d7175" }}>
-                    {shop.lifecycleStatus} · {shop.subscriptionStatus}
-                  </div>
-                  <div style={{ color: "#6d7175" }}>
-                    cycle ends {fmtDate(shop.billingPeriodEnd)}
-                  </div>
-                </td>
-                <td style={{ verticalAlign: "top" }}>
-                  <strong>{shop.planLabel}</strong>
-                  <div>{shop.plan}</div>
-                </td>
-                <td style={{ verticalAlign: "top" }}>
-                  {shop.aiSearchEnabled ? "ON" : "OFF"}
-                </td>
-                <td style={{ verticalAlign: "top" }}>
-                  {progress(shop.usage.indexedProducts, shop.limits.productLimit)}
-                  {shop.grants.product ? (
-                    <div>grant +{shop.grants.product.toLocaleString()}</div>
-                  ) : null}
-                </td>
-                <td style={{ verticalAlign: "top" }}>
-                  {progress(shop.usage.searchCount, shop.limits.searchLimit)}
-                  {shop.grants.search ? (
-                    <div>grant +{shop.grants.search.toLocaleString()}</div>
-                  ) : null}
-                </td>
-                <td style={{ verticalAlign: "top" }}>
-                  {progress(
-                    shop.usage.vectorUpdateCount,
-                    shop.limits.vectorUpdateLimit,
-                  )}
-                  {shop.grants.vectorUpdate ? (
-                    <div>grant +{shop.grants.vectorUpdate.toLocaleString()}</div>
-                  ) : null}
-                </td>
-                <td style={{ verticalAlign: "top" }}>
-                  {shop.api.totalTokens.toLocaleString()}
-                  <div style={{ color: "#6d7175" }}>
-                    in {shop.api.inputTokens.toLocaleString()} · out{" "}
-                    {shop.api.outputTokens.toLocaleString()}
-                  </div>
-                </td>
-                <td style={{ verticalAlign: "top" }}>
-                  ${shop.api.costUsd.toFixed(4)}
-                </td>
-                <td style={{ verticalAlign: "top", minWidth: 330 }}>
-                  <details>
-                    <summary style={{ cursor: "pointer", fontWeight: 700 }}>
-                      Adjust
-                    </summary>
-
-                    <Form method="post" style={{ marginTop: 10 }}>
-                      <input type="hidden" name="_csrf" value={csrfToken} />
-                      <input type="hidden" name="intent" value="grant_quota" />
-                      <input type="hidden" name="targetShop" value={shop.shop} />
-                      <div style={{ display: "flex", gap: 6, marginBottom: 6 }}>
-                        <select name="kind" defaultValue="SEARCH">
-                          <option value="SEARCH">Searches</option>
-                          <option value="VECTOR_UPDATE">Vector updates</option>
-                          <option value="PRODUCT">Products</option>
-                        </select>
-                        <input
-                          name="amount"
-                          type="number"
-                          min="1"
-                          placeholder="+ amount"
-                          required
-                          style={{ width: 105 }}
-                        />
-                        <select name="expiryMode" defaultValue="BILLING_CYCLE">
-                          <option value="BILLING_CYCLE">End billing cycle</option>
-                          <option value="30_DAYS">30 days</option>
-                          <option value="NEVER">No expiry</option>
-                        </select>
-                      </div>
-                      <input
-                        name="reason"
-                        placeholder="Support reason / ticket"
-                        required
-                        style={{ width: "100%", marginBottom: 6 }}
-                      />
-                      <button disabled={busy} type="submit">
-                        Add grant
-                      </button>
-                    </Form>
-
-                    <hr style={{ border: 0, borderTop: "1px solid #eee" }} />
-
-                    <Form method="post">
-                      <input type="hidden" name="_csrf" value={csrfToken} />
-                      <input type="hidden" name="intent" value="set_limits" />
-                      <input type="hidden" name="targetShop" value={shop.shop} />
-                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 5 }}>
-                        <input
-                          name="productLimitOverride"
-                          type="number"
-                          min="0"
-                          placeholder="Product absolute limit"
-                          defaultValue={shop.overrides.product ?? ""}
-                        />
-                        <input
-                          name="searchLimitOverride"
-                          type="number"
-                          min="0"
-                          placeholder="Search absolute limit"
-                          defaultValue={shop.overrides.search ?? ""}
-                        />
-                        <input
-                          name="vectorUpdateLimitOverride"
-                          type="number"
-                          min="0"
-                          placeholder="Vector absolute limit"
-                          defaultValue={shop.overrides.vectorUpdate ?? ""}
-                        />
-                      </div>
-                      <input
-                        name="reason"
-                        placeholder="Reason (blank limits = return to plan defaults)"
-                        required
-                        style={{ width: "100%", margin: "6px 0" }}
-                      />
-                      <button disabled={busy} type="submit">
-                        Set absolute overrides
-                      </button>
-                    </Form>
-
-                    <hr style={{ border: 0, borderTop: "1px solid #eee" }} />
-
-                    <Form method="post">
-                      <input type="hidden" name="_csrf" value={csrfToken} />
-                      <input type="hidden" name="intent" value="toggle_ai" />
-                      <input type="hidden" name="targetShop" value={shop.shop} />
-                      <input
-                        type="hidden"
-                        name="enabled"
-                        value={shop.aiSearchEnabled ? "false" : "true"}
-                      />
-                      <input
-                        name="reason"
-                        placeholder="Reason for kill-switch change"
-                        required
-                        style={{ width: "100%", marginBottom: 6 }}
-                      />
-                      <button disabled={busy} type="submit">
-                        {shop.aiSearchEnabled ? "Disable AI Search" : "Enable AI Search"}
-                      </button>
-                    </Form>
-                  </details>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </section>
-
-      <section
-        style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(auto-fit, minmax(420px, 1fr))",
-          gap: 16,
-        }}
-      >
-        <div style={cardStyle}>
-          <h2 style={{ marginTop: 0 }}>Recent quota grants</h2>
-          {data.recentGrants.map((grant) => (
-            <div
-              key={grant.id}
-              style={{ padding: "10px 0", borderBottom: "1px solid #eef0f2" }}
-            >
-              <strong>{grant.shop}</strong> · {grant.kind} +{grant.amount}
-              <div style={{ color: "#6d7175" }}>
-                {grant.reason || "No reason"} · expires {fmtDate(grant.expiresAt)}
-                {grant.revokedAt ? ` · revoked ${fmtDate(grant.revokedAt)}` : ""}
-              </div>
-              {!grant.revokedAt ? (
-                <Form method="post" style={{ marginTop: 5 }}>
-                      <input type="hidden" name="_csrf" value={csrfToken} />
-                  <input type="hidden" name="intent" value="revoke_grant" />
-                  <input type="hidden" name="grantId" value={grant.id} />
-                  <input type="hidden" name="targetShop" value={grant.shop} />
-                  <input
-                    name="reason"
-                    placeholder="Reason to revoke"
-                    required
-                    style={{ marginRight: 6 }}
-                  />
-                  <button disabled={busy} type="submit">
-                    Revoke
-                  </button>
-                </Form>
-              ) : null}
+        <section id="shops" className="dc-section">
+          <SectionHeader
+            eyebrow="Merchants"
+            title="Shop operations"
+            note="Commercial state and usable capacity are derived from Billing V2."
+            action={
+              <Form method="get" className="dc-search">
+                <input name="q" defaultValue={data.query} placeholder="Search shop domain" aria-label="Search shop domain" />
+                <button className="dc-button" type="submit">Search</button>
+              </Form>
+            }
+          />
+          <div className="dc-table-panel">
+            <div className="dc-table-scroll">
+              <table className="dc-table dc-shop-table">
+                <thead>
+                  <tr>
+                    <th>Shop</th>
+                    <th>Lifecycle</th>
+                    <th>Subscription</th>
+                    <th>Plan & price</th>
+                    <th>AI state</th>
+                    <th>Products</th>
+                    <th>Searches</th>
+                    <th>Vector updates</th>
+                    <th>API cost MTD</th>
+                    <th />
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.shops.map((shop) => (
+                    <tr key={shop.shop}>
+                      <td>
+                        <strong className="dc-shop-name">{shop.shop}</strong>
+                        <small>Cycle ends {formatDate(shop.commercial.periodEnd)}</small>
+                      </td>
+                      <td><StatusBadge tone={lifecycleTone(shop.lifecycleStatus)}>{shop.lifecycleStatus}</StatusBadge></td>
+                      <td><StatusBadge tone={subscriptionTone(shop.subscriptionStatus)}>{shop.subscriptionStatus}</StatusBadge></td>
+                      <td>
+                        <strong>{shop.commercial.planLabel}</strong>
+                        <small>
+                          {shop.legacySource === "DEV_OVERRIDE" &&
+                          shop.subscriptionStatus === "ACTIVE"
+                            ? "Dev override · no Shopify billing"
+                            : commercialPrice(shop)}
+                        </small>
+                        {shop.commercial.customTerms?.pendingCommercialChange ? <em className="dc-pending">Pending commercial change</em> : null}
+                      </td>
+                      <td>
+                        <StatusBadge tone={shop.state.aiOperational ? "success" : shop.state.aiConfigured ? "warning" : "danger"}>
+                          {shop.state.aiOperational ? "Operational" : shop.state.aiConfigured ? "Not entitled" : "Disabled"}
+                        </StatusBadge>
+                      </td>
+                      <td><QuotaCell quota={shop.quota.products} active={shop.subscriptionStatus === "ACTIVE"} /></td>
+                      <td><QuotaCell quota={shop.quota.searches} active={shop.subscriptionStatus === "ACTIVE"} /></td>
+                      <td><QuotaCell quota={shop.quota.vectorUpdates} active={shop.subscriptionStatus === "ACTIVE"} /></td>
+                      <td><strong>{usd(shop.cost.mtdUsd)}</strong></td>
+                      <td>
+                        <Link className="dc-button dc-button-compact" to={manageUrl(data.query, shop.shop)}>
+                          Manage
+                        </Link>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
-          ))}
-        </div>
+            {data.shops.length === 0 ? <Empty>No shops match this filter.</Empty> : null}
+          </div>
+        </section>
 
-        <div style={cardStyle}>
-          <h2 style={{ marginTop: 0 }}>Admin audit</h2>
-          {data.recentAudit.map((item) => (
-            <div
-              key={item.id}
-              style={{ padding: "10px 0", borderBottom: "1px solid #eef0f2" }}
-            >
-              <strong>{item.action}</strong> · {item.targetShop}
-              <div style={{ color: "#6d7175" }}>
-                by {item.actorShop} · {fmtDate(item.createdAt)}
+
+
+        <section id="plans" className="dc-section">
+          <SectionHeader
+            eyebrow="Commercial"
+            title="Plans & revenue"
+            note="Subscription MRR is run-rate from ACTIVE BillingSubscription.priceSnapshot values, not Shopify payout or cash received."
+          />
+          <div className="dc-two-column">
+            <div className="dc-panel dc-panel-flush">
+              <div className="dc-panel-head">
+                <div><strong>Plan distribution</strong><small>Current Billing V2 state</small></div>
+                <div className="dc-mrr-summary"><small>Total MRR</small><strong>{moneyList(data.financial.revenue)}</strong></div>
               </div>
-              <div>{item.reason || "—"}</div>
+              <div className="dc-table-scroll">
+                <table className="dc-table">
+                  <thead><tr><th>Plan</th><th>Active</th><th>Trial</th><th>Frozen</th><th>MRR</th></tr></thead>
+                  <tbody>
+                    {data.financial.plans.map((plan) => (
+                      <tr key={plan.key}>
+                        <td><strong>{plan.name}</strong><small>{plan.key === "CUSTOM" ? "Shop-specific terms" : plan.handle}</small></td>
+                        <td>{number(plan.active)}</td>
+                        <td>{number(plan.trials)}</td>
+                        <td>{number(plan.frozen)}</td>
+                        <td>{plan.revenue.length ? plan.revenue.map((item) => formatMoney(item.mrr, item.currency)).join(" · ") : "—"}</td>
+                      </tr>
+                    ))}
+                    <tr>
+                      <td><strong>No active plan</strong><small>Inactive, cancelled or not established</small></td>
+                      <td>{number(data.financial.shopsWithoutActiveSubscription)}</td><td>—</td><td>—</td><td>—</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
             </div>
-          ))}
-        </div>
-      </section>
-    </main>
+            <div className="dc-panel">
+              <p className="dc-panel-label">Revenue definition</p>
+              <h3>Subscription run-rate</h3>
+              <p className="dc-copy">Monthly subscriptions contribute their active price snapshot. Annual subscriptions contribute one twelfth of their snapshot. Currencies are never combined.</p>
+              <div className="dc-stat-list">
+                <Stat label="Active paid subscriptions" value={number(data.financial.activeSubscriptions)} />
+                <Stat label="Frozen subscriptions" value={number(data.financial.frozenSubscriptions)} />
+                <Stat label="Cancelled / expired" value={number(data.financial.cancelledSubscriptions)} />
+                <Stat label="ARR (secondary)" value={data.financial.revenue.length ? data.financial.revenue.map((item) => formatMoney(item.arr, item.currency)).join(" · ") : "—"} />
+              </div>
+              <div className="dc-info-note">Actual Shopify payouts, transaction fees and net cash are unavailable until Partner transaction sync is implemented.</div>
+            </div>
+          </div>
+        </section>
+
+        <section id="usage" className="dc-section">
+          <SectionHeader eyebrow="Economics" title="Usage & cost" note={`Month to date from ${new Date(data.monthStart).toLocaleDateString()}.`} />
+          <div className="dc-three-column">
+            <UsageCard label="Search operations" value={number(data.provider.mtdSearches)} cost={usd(data.provider.searchCostUsd)} detail="Query analysis and query embeddings" />
+            <UsageCard label="Indexing cost" value={number(data.overview.indexedProducts)} cost={usd(data.provider.indexingCostUsd)} detail="Product enrichment and embeddings" />
+            <UsageCard label="Total provider usage" value={number(data.provider.totalTokens)} cost={usd(data.provider.totalCostUsd)} detail="Tracked API tokens and recorded cost" />
+          </div>
+          <details className="dc-diagnostics">
+            <summary>Advanced diagnostics</summary>
+            <div className="dc-diagnostic-grid">
+              <Stat label="Input tokens" value={number(data.provider.inputTokens)} />
+              <Stat label="Output tokens" value={number(data.provider.outputTokens)} />
+              <Stat label="Embedding tokens" value={number(data.provider.embeddingTokens)} />
+              <Stat label="LLM tokens" value={number(data.provider.llmTokens)} />
+              <Stat label="Configured budget" value={usdNullable(data.provider.configuredBudgetUsd)} />
+              <Stat label="Remaining budget" value={usdNullable(data.provider.remainingBudgetUsd)} />
+              <Stat label="Failed sync jobs" value={number(data.diagnostics.failedSyncJobs)} />
+              <Stat label="Failed catalog jobs" value={number(data.diagnostics.failedCatalogJobs)} />
+              <Stat label="Active subscriptions missing price" value={number(data.diagnostics.activeSubscriptionsMissingPrice)} />
+            </div>
+          </details>
+        </section>
+
+        <section id="audit" className="dc-section">
+          <SectionHeader eyebrow="Accountability" title="Audit history" note="Commercial/support activity and security events are intentionally separated." />
+          <div className="dc-two-column">
+            <AuditPanel title="Support & commercial changes" empty="No support activity yet.">
+              {data.recentAudit.slice(0, 12).map((event) => <BusinessAudit key={event.id} event={event} />)}
+            </AuditPanel>
+            <AuditPanel title="Security activity" empty="No security activity yet.">
+              {data.securityAudit.filter((event) => /LOGIN|PASSWORD|MFA|LOGOUT|AUTH/.test(event.action)).slice(0, 12).map((event) => (
+                <div className="dc-audit-row" key={event.id}>
+                  <div><strong>{securityLabel(event.action)}</strong><small>{event.userEmail ?? "Unknown user"} · {formatDate(event.createdAt)}</small></div>
+                  <StatusBadge tone={event.result === "SUCCESS" ? "success" : "warning"}>{event.result}</StatusBadge>
+                </div>
+              ))}
+            </AuditPanel>
+          </div>
+        </section>
+      </main>
+
+      {selectedShop ? (
+        <ShopDrawer
+          shop={selectedShop}
+          grants={selectedGrants}
+          csrfToken={csrfToken}
+          query={data.query}
+          canQuotaWrite={canQuotaWrite}
+          canPlanWrite={canPlanWrite}
+          canSystemWrite={canSystemWrite}
+          busy={busy}
+        />
+      ) : null}
+    </div>
   );
 }
+
+function ShopDrawer({ shop, grants, csrfToken, query, canQuotaWrite, canPlanWrite, canSystemWrite, busy }: {
+  shop: Shop;
+  grants: Grant[];
+  csrfToken: string;
+  query: string;
+  canQuotaWrite: boolean;
+  canPlanWrite: boolean;
+  canSystemWrite: boolean;
+  busy: boolean;
+}) {
+  return (
+    <div className="dc-drawer-layer" role="dialog" aria-modal="true" aria-labelledby="shop-drawer-title">
+      <Link className="dc-drawer-backdrop" to={closeManageUrl(query)} aria-label="Close shop manager" />
+      <aside className="dc-drawer">
+        <header className="dc-drawer-head">
+          <div><p>Shop management</p><h2 id="shop-drawer-title">{shop.shop}</h2></div>
+          <Link className="dc-drawer-close" to={closeManageUrl(query)} aria-label="Close">×</Link>
+        </header>
+        <div className="dc-drawer-body">
+          <DrawerSection title="Shop overview">
+            <div className="dc-detail-grid">
+              <Stat label="Lifecycle" value={shop.lifecycleStatus} />
+              <Stat label="AI state" value={shop.state.aiOperational ? "Operational" : shop.state.aiConfigured ? "Not entitled" : "Disabled"} />
+              <Stat label="API cost MTD" value={usd(shop.cost.mtdUsd)} />
+              <Stat label="Retained vectors" value={number(shop.quota.products.retained)} />
+            </div>
+          </DrawerSection>
+
+          <DrawerSection title="Commercial">
+            <div className="dc-detail-grid">
+              <Stat label="Current plan" value={shop.commercial.planLabel} />
+              <Stat label="Subscription" value={shop.subscriptionStatus} />
+              <Stat label="Active billed price" value={shop.commercial.priceSnapshot === null ? "—" : `${formatMoney(shop.commercial.priceSnapshot, shop.commercial.currency ?? "USD")}${shop.commercial.interval === "ANNUAL" ? " / year" : " / month"}`} />
+              <Stat label="Billing cycle ends" value={formatDate(shop.commercial.periodEnd)} />
+            </div>
+            {shop.commercial.customTerms ? (
+              <div className="dc-commercial-compare">
+                <div><small>Configured Custom terms</small><strong>{shop.commercial.customTerms.price === null ? "—" : `${formatMoney(shop.commercial.customTerms.price, shop.commercial.customTerms.currency)} / month`}</strong></div>
+                <div><small>Shopify subscription</small><strong>{shop.commercial.activePaid ? "Active" : "Not active"}</strong></div>
+                {shop.commercial.customTerms.pendingCommercialChange ? <StatusBadge tone="warning">Pending commercial change</StatusBadge> : null}
+              </div>
+            ) : null}
+          </DrawerSection>
+
+          <DrawerSection title="Usage">
+            <div className="dc-usage-lines">
+              <QuotaLine label="Products" quota={shop.quota.products} active={shop.subscriptionStatus === "ACTIVE"} />
+              <QuotaLine label="Searches" quota={shop.quota.searches} active={shop.subscriptionStatus === "ACTIVE"} />
+              <QuotaLine label="Vector updates" quota={shop.quota.vectorUpdates} active={shop.subscriptionStatus === "ACTIVE"} />
+            </div>
+          </DrawerSection>
+
+          <DrawerSection title="Support grants">
+            {grants.length ? <div className="dc-grant-list">{grants.map((grant) => (
+              <div className="dc-grant" key={grant.id}>
+                <div><strong>+{number(grant.amount)} {quotaKind(grant.kind)}</strong><small>{shop.subscriptionStatus === "ACTIVE" ? "Effective grant" : "Stored grant"} · expires {grant.expiresAt ? formatDate(grant.expiresAt) : "never"}</small><small>{grant.reason}</small></div>
+                {canQuotaWrite ? <Form method="post"><MutationFields csrfToken={csrfToken} intent="revoke_grant" shop={shop.shop} /><input type="hidden" name="grantId" value={grant.id} /><input type="hidden" name="reason" value="Revoked from Dev Center" /><button className="dc-link-danger" disabled={busy} type="submit">Revoke</button></Form> : null}
+              </div>
+            ))}</div> : <Empty>No active stored grants.</Empty>}
+            {canQuotaWrite ? (
+              <Form method="post" className="dc-form-card">
+                <MutationFields csrfToken={csrfToken} intent="grant_quota" shop={shop.shop} />
+                <div className="dc-form-grid-3">
+                  <Field label="Quota"><select name="kind" defaultValue="SEARCH"><option value="SEARCH">Searches</option><option value="PRODUCT">Products</option><option value="VECTOR_UPDATE">Vector updates</option></select></Field>
+                  <Field label="Amount"><input name="amount" type="number" min="1" required /></Field>
+                  <Field label="Expiry"><select name="expiryMode" defaultValue="BILLING_CYCLE"><option value="BILLING_CYCLE">End of billing cycle</option><option value="30_DAYS">30 days</option><option value="NEVER">No expiry</option></select></Field>
+                </div>
+                <Field label="Reason"><input name="reason" required placeholder="Support ticket or reason" /></Field>
+                <button className="dc-button dc-button-primary" disabled={busy} type="submit">Add grant</button>
+              </Form>
+            ) : <ReadOnly />}
+          </DrawerSection>
+
+          <DrawerSection title="Custom plan">
+            <p className="dc-section-copy">Configure proposed terms. Saving does not activate billing or change MRR.</p>
+            {canPlanWrite ? (
+              <Form method="post" className="dc-form-card">
+                <MutationFields csrfToken={csrfToken} intent="set_custom_plan" shop={shop.shop} />
+                <div className="dc-form-grid-2">
+                  <Field label="Price (USD / month)"><input name="customPrice" type="number" min="0.01" step="0.01" defaultValue={shop.customConfig?.price ?? ""} required /></Field>
+                  <Field label="Product limit"><input name="customProductLimit" type="number" min="0" defaultValue={shop.customConfig?.productLimit ?? ""} required /></Field>
+                  <Field label="Monthly searches"><input name="customSearchLimit" type="number" min="0" defaultValue={shop.customConfig?.searchLimit ?? ""} required /></Field>
+                  <Field label="Monthly vector updates"><input name="customVectorUpdateLimit" type="number" min="0" defaultValue={shop.customConfig?.vectorUpdateLimit ?? ""} required /></Field>
+                </div>
+                <Field label="Agreement note / reason"><input name="reason" required /></Field>
+                <button className="dc-button dc-button-primary" disabled={busy} type="submit">Save proposed terms</button>
+              </Form>
+            ) : <ReadOnly />}
+          </DrawerSection>
+
+          <DrawerSection title="AI Search">
+            <div className="dc-inline-control">
+              <div><strong>{shop.aiSearchEnabled ? "Configured ON" : "Configured OFF"}</strong><small>{shop.state.aiOperational ? "Entitlement active" : "AI requests are not currently entitled"}</small></div>
+              {canSystemWrite ? (
+                <Form method="post" className="dc-inline-form">
+                  <MutationFields csrfToken={csrfToken} intent="toggle_ai" shop={shop.shop} />
+                  <input type="hidden" name="enabled" value={shop.aiSearchEnabled ? "false" : "true"} />
+                  <input name="reason" required placeholder="Reason" />
+                  <button className={`dc-button ${shop.aiSearchEnabled ? "dc-button-danger" : "dc-button-primary"}`} disabled={busy} type="submit">{shop.aiSearchEnabled ? "Disable" : "Enable"}</button>
+                </Form>
+              ) : <ReadOnly />}
+            </div>
+          </DrawerSection>
+
+          <details className="dc-advanced">
+            <summary>Advanced controls</summary>
+            <p>Absolute limit overrides bypass normal plan defaults. Recent strong authentication is required.</p>
+            {canQuotaWrite ? (
+              <Form method="post" className="dc-form-card">
+                <MutationFields csrfToken={csrfToken} intent="set_limits" shop={shop.shop} />
+                <div className="dc-form-grid-3">
+                  <Field label="Products"><input name="productLimitOverride" type="number" min="0" defaultValue={shop.overrides.product ?? ""} placeholder="Plan default" /></Field>
+                  <Field label="Searches"><input name="searchLimitOverride" type="number" min="0" defaultValue={shop.overrides.search ?? ""} placeholder="Plan default" /></Field>
+                  <Field label="Vectors"><input name="vectorUpdateLimitOverride" type="number" min="0" defaultValue={shop.overrides.vectorUpdate ?? ""} placeholder="Plan default" /></Field>
+                </div>
+                <Field label="Reason"><input name="reason" required /></Field>
+                <button className="dc-button" disabled={busy} type="submit">Save absolute overrides</button>
+              </Form>
+            ) : <ReadOnly />}
+          </details>
+        </div>
+      </aside>
+    </div>
+  );
+}
+
+function NavItem({ href, label, icon }: { href: string; label: string; icon: string }) {
+  return <a href={href}><span>{icon}</span>{label}</a>;
+}
+function SectionHeader({ eyebrow, title, note, action }: { eyebrow: string; title: string; note: string; action?: ReactNode }) {
+  return <div className="dc-section-head"><div><p>{eyebrow}</p><h2>{title}</h2><small>{note}</small></div>{action}</div>;
+}
+function Metric({ label, value, note, tone = "neutral" }: { label: string; value: ReactNode; note: ReactNode; tone?: Tone }) {
+  return <article className={`dc-metric is-${tone}`}><span>{label}</span><strong>{value}</strong><small>{note}</small></article>;
+}
+function StatusBadge({ tone, children }: { tone: Tone; children: ReactNode }) {
+  return <span className={`dc-badge is-${tone}`}><i />{children}</span>;
+}
+function QuotaCell({ quota, active }: { quota: { used: number; limit: number | null; storedGrant: number }; active: boolean }) {
+  return <div className="dc-quota-cell"><strong>{quotaText(quota.used, quota.limit)}</strong>{quota.storedGrant > 0 ? <small>{active ? "Grant" : "Stored grant"} +{number(quota.storedGrant)}</small> : null}</div>;
+}
+function QuotaLine({ label, quota, active }: { label: string; quota: { used: number; limit: number | null; storedGrant: number }; active: boolean }) {
+  const percent = quota.limit && quota.limit > 0 ? Math.min(100, (quota.used / quota.limit) * 100) : 0;
+  return <div className="dc-quota-line"><div><span>{label}</span><strong>{quotaText(quota.used, quota.limit)}</strong></div><div className="dc-meter"><i style={{ width: `${percent}%` }} /></div>{quota.storedGrant > 0 ? <small>{active ? "Effective grant" : "Stored grant"} +{number(quota.storedGrant)}</small> : null}</div>;
+}
+function UsageCard({ label, value, cost, detail }: { label: string; value: string; cost: string; detail: string }) {
+  return <article className="dc-usage-card"><span>{label}</span><strong>{value}</strong><div><b>{cost}</b><small>{detail}</small></div></article>;
+}
+function Stat({ label, value }: { label: string; value: ReactNode }) { return <div className="dc-stat"><span>{label}</span><strong>{value}</strong></div>; }
+function DrawerSection({ title, children }: { title: string; children: ReactNode }) { return <section className="dc-drawer-section"><h3>{title}</h3>{children}</section>; }
+function Field({ label, children }: { label: string; children: ReactNode }) { return <label className="dc-field"><span>{label}</span>{children}</label>; }
+function MutationFields({ csrfToken, intent, shop }: { csrfToken: string; intent: string; shop: string }) { return <><input type="hidden" name="_csrf" value={csrfToken} /><input type="hidden" name="intent" value={intent} /><input type="hidden" name="targetShop" value={shop} /></>; }
+function Empty({ children }: { children: ReactNode }) { return <div className="dc-empty">{children}</div>; }
+function ReadOnly() { return <span className="dc-readonly">Read-only access</span>; }
+function AuditPanel({ title, empty, children }: { title: string; empty: string; children: ReactNode[] }) { return <div className="dc-panel"><h3>{title}</h3><div className="dc-audit-list">{children.length ? children : <Empty>{empty}</Empty>}</div></div>; }
+
+function BusinessAudit({ event }: { event: DevDashboardData["recentAudit"][number] }) {
+  const before = json(event.beforeJson);
+  const after = json(event.afterJson);
+  let title = event.action.replaceAll("_", " ").toLowerCase();
+  let detail = event.reason || "No reason recorded";
+  if (event.action === "QUOTA_GRANT_CREATED") { title = `Added +${after.amount ?? "—"} ${quotaKind(String(after.kind ?? "quota"))}`; detail = `${event.targetShop} · expires ${after.expiresAt ? formatDate(String(after.expiresAt)) : "never"}`; }
+  if (event.action === "QUOTA_GRANT_REVOKED") title = `Revoked ${quotaKind(String(before.kind ?? "quota"))} grant`;
+  if (event.action === "CUSTOM_PLAN_TERMS_CHANGED") { title = "Changed Custom plan terms"; detail = `${event.targetShop} · price ${value(before.customPriceOverride)} → ${value(after.customPriceOverride)} · ${event.reason ?? "No reason"}`; }
+  if (event.action === "ABSOLUTE_QUOTA_OVERRIDE_CHANGED") title = "Changed absolute limits";
+  if (event.action === "AI_SEARCH_ENABLED_BY_ADMIN") title = "Enabled AI Search";
+  if (event.action === "AI_SEARCH_DISABLED_BY_ADMIN") title = "Disabled AI Search";
+  return <div className="dc-audit-row"><div><strong>{title}</strong><small>{detail}</small><small>By {event.actorShop.replace(/^dev:/, "")} · {formatDate(event.createdAt)}</small></div></div>;
+}
+
+function lifecycleTone(status: string): Tone { return status === "ACTIVE" ? "success" : /FROZEN|SUSPEND/.test(status) ? "warning" : /UNINSTALL|INACTIVE/.test(status) ? "danger" : "neutral"; }
+function subscriptionTone(status: string): Tone { return status === "ACTIVE" ? "success" : status === "FROZEN" || status === "PENDING" ? "warning" : "neutral"; }
+function commercialPrice(shop: Shop) { if (shop.commercial.priceSnapshot !== null) return `${formatMoney(shop.commercial.priceSnapshot, shop.commercial.currency ?? "USD")}${shop.commercial.interval === "ANNUAL" ? " / year" : " / month"}`; if (shop.commercial.customTerms?.price) return `Configured ${formatMoney(shop.commercial.customTerms.price, "USD")} / month · not billed`; return "No active billed price"; }
+function manageUrl(query: string, shop: string) { const params = new URLSearchParams(); if (query) params.set("q", query); params.set("manage", shop); return `/dev?${params.toString()}#shops`; }
+function closeManageUrl(query: string) { return query ? `/dev?q=${encodeURIComponent(query)}#shops` : "/dev#shops"; }
+function quotaText(used: number, limit: number | null) { return `${number(used)} / ${limit === null ? "Unlimited" : number(limit)}`; }
+function quotaKind(kind: string) { return kind === "SEARCH" ? "searches" : kind === "PRODUCT" ? "products" : kind === "VECTOR_UPDATE" ? "vector updates" : kind.toLowerCase(); }
+function number(value: number) { return value.toLocaleString(); }
+function usd(value: number) { return `$${value.toFixed(2)}`; }
+function usdNullable(value: number | null) { return value === null ? "—" : usd(value); }
+function formatMoney(value: number, currency: string) { try { return new Intl.NumberFormat(undefined, { style: "currency", currency, maximumFractionDigits: 2 }).format(value); } catch { return `${value.toFixed(2)} ${currency}`; } }
+function moneyList(items: Array<{ currency: string; mrr: number }>) { return items.length ? items.map((item) => formatMoney(item.mrr, item.currency)).join(" · ") : "—"; }
+function formatDate(value: string | Date | null) { if (!value) return "—"; return new Date(value).toLocaleString(); }
+function json(value: string | null): Record<string, unknown> { if (!value) return {}; try { const parsed: unknown = JSON.parse(value); return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {}; } catch { return {}; } }
+function prettyJson(value: string | null) { if (!value) return "No LLM analysis recorded."; try { return JSON.stringify(JSON.parse(value), null, 2); } catch { return value; } }
+function value(input: unknown) { return input === null || input === undefined || input === "" ? "default" : String(input); }
+function securityLabel(action: string) { const labels: Record<string, string> = { DEV_LOGIN_SUCCESS: "Login successful", DEV_PASSWORD_VERIFIED: "Password verified", DEV_MFA_SUCCESS: "MFA verified", DEV_LOGOUT: "Logged out", DEV_LOGIN_FAILED: "Login failed", DEV_MFA_FAILED: "MFA failed" }; return labels[action] ?? action.replaceAll("_", " ").toLowerCase(); }
