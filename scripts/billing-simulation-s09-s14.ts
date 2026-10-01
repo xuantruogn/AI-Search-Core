@@ -326,7 +326,18 @@ async function runScenario(scenario: Scenario) {
       ]);
 
       console.log("[PROCESS]");
-      console.log("step: expected pending replacement is not visible in Admin API");
+      console.log("step: establish pending replacement in local Billing state");
+
+      await reconcile(scenario, scenario.newGid, "PENDING", [
+        {
+          gid: scenario.newGid,
+          status: "PENDING",
+          updatedAt: now,
+        },
+      ]);
+
+      console.log("[PROCESS]");
+      console.log("step: pending replacement is not visible in Admin API");
 
       const result = await reconcile(
         scenario,
