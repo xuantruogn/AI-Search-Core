@@ -47,7 +47,10 @@ function normalizeThemeIntegration(value: unknown) {
 }
 
 export async function loader({ request }: LoaderFunctionArgs) {
+  const debugId = crypto.randomUUID().slice(0, 8);
+  console.log("[DASHBOARD DEBUG] status:start", { debugId, method: request.method, url: request.url });
   const { admin, session } = await authenticate.admin(request);
+  console.log("[DASHBOARD DEBUG] status:authenticated", { debugId, shop: session.shop });
 
   const [entitlement, queue, catalogJob, themeIntegration] =
     await Promise.all([

@@ -49,18 +49,102 @@ enum ReplacementBehavior {
   APPLY_ON_NEXT_BILLING_CYCLE
 }
 
+enum BillingTrialStatus {
+  NONE
+  ACTIVE
+  ENDED
+  CANCELLED
+}
+
+enum BillingCancellationStatus {
+  NONE
+  REQUESTED
+  NON_RENEWING
+  EFFECTIVE
+}
+
+enum BillingPlanChangeStatus {
+  NONE
+  PENDING
+  APPLIED
+  DECLINED
+  EXPIRED
+  DEFERRED
+}
+
+enum BillingChargeStatus {
+  NONE
+  PENDING
+  PAID
+  FAILED
+}
+
+enum BillingPaymentStatus {
+  NONE
+  PENDING
+  PAID
+  FAILED
+  RECOVERED
+}
+
+enum BillingRefundStatus {
+  NONE
+  PARTIAL
+  FULL
+}
+
+enum BillingAccessStatus {
+  NONE
+  BASIC
+  PRO
+  CUSTOM
+  SUSPENDED
+}
+
+enum BillingReconciliationStatus {
+  SYNCED
+  MISMATCH
+  REPAIR_REQUIRED
+}
+
 enum BillingEventType {
   SUBSCRIPTION_CREATED
   SUBSCRIPTION_APPROVED
   SUBSCRIPTION_ACTIVATED
+  SUBSCRIPTION_UPDATED
+  SUBSCRIPTION_DECLINED
+  SUBSCRIPTION_EXPIRED
   SUBSCRIPTION_CANCELLED
   SUBSCRIPTION_FROZEN
   SUBSCRIPTION_UNFROZEN
+  TRIAL_STARTED
+  TRIAL_EXTENDED
+  TRIAL_ENDED
+  TRIAL_CANCELLED
+  CANCELLATION_REQUESTED
+  CANCELLATION_EFFECTIVE
+  PAYMENT_FAILED
+  PAYMENT_RECOVERED
+  PLAN_CHANGE_REQUESTED
+  PLAN_CHANGE_APPLIED
+  PLAN_CHANGE_DECLINED
+  PLAN_CHANGE_EXPIRED
+  PLAN_CHANGE_DEFERRED
+  REFUND_REQUESTED
+  REFUND_PARTIAL
+  REFUND_FULL
   PLAN_UPGRADE
   PLAN_DOWNGRADE
   APP_UNINSTALLED
   APP_REINSTALLED
   BILLING_RECONCILED
+  WEBHOOK_DUPLICATE
+  WEBHOOK_OUT_OF_ORDER
+  WEBHOOK_RETRY
+  REDIRECT_BEFORE_WEBHOOK
+  DB_SHOPIFY_MISMATCH
+  MISSING_DB_RECORD
+  MISSING_SHOPIFY_RECORD
 }
 
 enum BillingEventSource {
@@ -147,6 +231,20 @@ model BillingSubscription {
   currencySnapshot       String?                    @db.VarChar(10)
   intervalSnapshot       BillingInterval?
 
+  shopifyCreatedAt       DateTime?
+  shopifyUpdatedAt       DateTime?
+  trialStatus            BillingTrialStatus @default(NONE)
+  cancellationStatus     BillingCancellationStatus @default(NONE)
+  planChangeStatus       BillingPlanChangeStatus @default(NONE)
+  chargeStatus           BillingChargeStatus @default(NONE)
+  paymentStatus          BillingPaymentStatus @default(NONE)
+  refundStatus           BillingRefundStatus @default(NONE)
+  accessStatus           BillingAccessStatus @default(NONE)
+  reconciliationStatus   BillingReconciliationStatus @default(SYNCED)
+  reconciliationCheckedAt DateTime?
+  reconciliationReason   String? @db.VarChar(255)
+  repairRequiredAt       DateTime?
+
   trialStartsAt          DateTime?
   trialEndsAt            DateTime?
   currentPeriodStartsAt  DateTime?
@@ -162,12 +260,67 @@ model BillingSubscription {
   testMode               Boolean?
   rawResponse            Json?
 
+  charges                BillingCharge[]
+  
   createdAt              DateTime                   @default(now())
   updatedAt              DateTime                   @updatedAt
 
   @@index([shop, status])
   @@index([shop, createdAt])
   @@map("billing_subscriptions")
+}
+
+model BillingCharge {
+  id                    String              @id @default(cuid()) @db.VarChar(191)
+  shop                  String              @db.VarChar(191)
+  shopRecord             AiSearchShop        @relation(fields: [shop], references: [shop], onDelete: Cascade)
+  subscriptionGid       String?             @db.VarChar(191)
+  subscription           BillingSubscription? @relation(fields: [subscriptionGid], references: [shopifySubscriptionGid], onDelete: SetNull)
+  shopifyChargeId       String?             @unique @db.VarChar(191)
+  status                BillingChargeStatus @default(NONE)
+  amount                Decimal?            @db.Decimal(10, 2)
+  currency              String?             @db.VarChar(10)
+  billingPeriodStart   DateTime?
+  billingPeriodEnd     DateTime?
+  acceptedAt            DateTime?
+  activatedAt          DateTime?
+  paidAt               DateTime?
+  failedAt             DateTime?
+  cancelledAt          DateTime?
+  expiredAt            DateTime?
+  frozenAt             DateTime?
+  unfrozenAt           DateTime?
+  testMode             Boolean?
+  rawResponse          Json?
+  createdAt             DateTime            @default(now())
+  updatedAt             DateTime            @updatedAt
+
+  refunds              BillingRefund[]
+
+  @@index([shop, status, createdAt])
+  @@unique([subscriptionGid, billingPeriodStart], map: "billing_charges_subscription_period_key")
+  @@index([subscriptionGid])
+  @@map("billing_charges")
+}
+
+model BillingRefund {
+  id                 String            @id @default(cuid()) @db.VarChar(191)
+  shop               String            @db.VarChar(191)
+  shopRecord          AiSearchShop      @relation(fields: [shop], references: [shop], onDelete: Cascade)
+  chargeId            String
+  charge              BillingCharge    @relation(fields: [chargeId], references: [id], onDelete: Cascade)
+  status              BillingRefundStatus @default(NONE)
+  amount              Decimal?         @db.Decimal(10, 2)
+  currency            String?          @db.VarChar(10)
+  requestedAt         DateTime?
+  refundedAt          DateTime?
+  rawResponse         Json?
+  createdAt           DateTime          @default(now())
+  updatedAt           DateTime          @updatedAt
+
+  @@index([shop, status, createdAt])
+  @@index([chargeId])
+  @@map("billing_refunds")
 }
 
 model BillingEvent {
@@ -325,6 +478,8 @@ model AiSearchShop {
   billingSubscriptions BillingSubscription[]
   planAssignments      PlanAssignment[]
   billingEvents        BillingEvent[]
+  billingCharges       BillingCharge[]
+  billingRefunds       BillingRefund[]
   usageCounters        UsageCounter[]
   catalogState         CatalogState?
 }

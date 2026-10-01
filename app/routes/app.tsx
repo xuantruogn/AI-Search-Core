@@ -5,33 +5,22 @@ import { AppProvider } from "@shopify/shopify-app-react-router/react";
 
 import { authenticate } from "../shopify.server";
 import { ensureShopFromAdmin } from "../services/commerce/shop-registry.server";
-import { refreshShopifyAppPricingIfStale } from "../services/billing/shopify-app-pricing.server";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
+  const debugId = crypto.randomUUID().slice(0, 8);
   const url = new URL(request.url);
+  console.log("[APP TRACE] loader:start", { debugId, method: request.method, pathname: url.pathname, search: url.search, referer: request.headers.get("referer"), remixRequest: request.headers.get("x-remix-request"), secFetchMode: request.headers.get("sec-fetch-mode") });
   const { admin, session } = await authenticate.admin(request);
+  console.log("[APP DEBUG] loader:authenticated", { debugId, shop: session.shop, pathname: url.pathname });
 
   // 1. Đảm bảo record Shop tồn tại trong DB
+  console.log("[APP DEBUG] ensureShopFromAdmin:start", { debugId, shop: session.shop });
   await ensureShopFromAdmin({
     shop: session.shop,
     admin,
   });
 
-  const preferredPlanHandle = url.searchParams.get("plan_handle");
-
-  // 2. Refresh trạng thái Billing nhẹ từ Shopify (Chỉ dùng để Read/Recovery)
-  try {
-    await refreshShopifyAppPricingIfStale({
-      shop: session.shop,
-      admin,
-      preferredPlanHandle,
-    });
-  } catch (error) {
-    console.error("[AI Search] Shopify App Pricing refresh failed:", {
-      shop: session.shop,
-      error: error instanceof Error ? error.message : String(error),
-    });
-  }
+  console.log("[APP DEBUG] ensureShopFromAdmin:done", { debugId, shop: session.shop });
 
   // LƯU Ý KIẾN TRÚC: Đã loại bỏ hoàn toàn reconcileShopCommercialState() tại đây.
   // Nhiệm vụ Reconcile Product Policy (khóa/mở catalog) được chuyển 100% cho Webhook đảm nhận.

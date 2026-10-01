@@ -14,12 +14,20 @@ import { PLAN_DEFINITIONS } from "../services/commerce/plans.server";
 import { getShopEntitlement } from "../services/commerce/entitlement.server";
 import { getSubscriptionSnapshot } from "../services/commerce/shop-registry.server";
 import { reconcileShopCommercialState } from "../services/commerce/reconciliation.server";
+import { setBillingPlanChangeState } from "../services/commerce/billing-state.server";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
+  const debugId = crypto.randomUUID().slice(0, 8);
+  console.log("[BILLING TRACE] loader:start", { debugId, method: request.method, url: request.url, referer: request.headers.get("referer"), remixRequest: request.headers.get("x-remix-request"), secFetchMode: request.headers.get("sec-fetch-mode") });
   const { session } = await authenticate.admin(request);
+  console.log("[BILLING DEBUG] loader:authenticated", { debugId, shop: session.shop });
 
   const entitlement = await getShopEntitlement(session.shop);
   const subscription = await getSubscriptionSnapshot(session.shop, { ensure: false });
+  const billingPlans = await db.plan.findMany({
+    where: { handle: { in: ["basic", "pro"] } },
+    select: { handle: true, trialDays: true },
+  });
 
   let daysRemaining: number | null = null;
   let formattedPeriodEnd: string | null = null;
@@ -49,14 +57,22 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     },
     pricingUrl: getShopifyPricingPlansUrl(session.shop),
     partnerApiConfigured: isShopifyAppPricingConfigured(),
-    plans: [PLAN_DEFINITIONS.BASIC, PLAN_DEFINITIONS.PRO],
+    plans: [PLAN_DEFINITIONS.BASIC, PLAN_DEFINITIONS.PRO].map((plan) => ({
+      ...plan,
+      trialDays:
+        billingPlans.find((billingPlan) => billingPlan.handle === plan.key.toLowerCase())
+          ?.trialDays ?? 0,
+    })),
   };
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
+  const debugId = crypto.randomUUID().slice(0, 8);
+  console.log("[BILLING DEBUG] action:start", { debugId, method: request.method, url: request.url });
   const { admin, session } = await authenticate.admin(request);
   const form = await request.formData();
   const intent = String(form.get("intent") || "");
+  console.log("[BILLING DEBUG] action:authenticated", { debugId, shop: session.shop, intent });
 
   if (intent === "refresh") {
     try {
@@ -84,11 +100,175 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     }
   }
 
+  if (intent === "cancelRenewal") {
+    try {
+      console.log("[BILLING DEBUG] cancel:start", { debugId, shop: session.shop });
+      const snapshot = await getSubscriptionSnapshot(session.shop, { ensure: false });
+      console.log("[BILLING DEBUG] cancel:snapshot", {
+        debugId, shop: session.shop, plan: snapshot.plan, planHandle: snapshot.planHandle,
+        status: snapshot.status, cancellationStatus: snapshot.cancellationStatus,
+        accessStatus: snapshot.accessStatus, commercialStatus: snapshot.commercialStatus,
+        subscriptionGid: snapshot.shopifySubscriptionId,
+        billingPeriodEnd: snapshot.billingPeriodEnd?.toISOString() ?? null,
+      });
+      const subscriptionGid = snapshot.shopifySubscriptionId;
+
+      if (!subscriptionGid) {
+        return {
+          success: false,
+          message: "No active Shopify subscription was found.",
+        };
+      }
+
+      if (snapshot.cancellationStatus === "NON_RENEWING") {
+        return {
+          success: true,
+          message: "This subscription is already set not to renew for the next cycle.",
+        };
+      }
+
+      if (snapshot.status !== "ACTIVE") {
+        return {
+          success: false,
+          message: `This subscription cannot be set to stop renewal from its current status: ${snapshot.status}.`,
+        };
+      }
+
+      // Shopify Admin Billing API: prorate=false stops the next billing cycle
+      // while preserving the merchant's already-paid current period.
+      console.log("[BILLING DEBUG] cancel:shopify:start", { debugId, shop: session.shop, subscriptionGid });
+      const response = await admin.graphql(
+        `#graphql
+        mutation CancelAppSubscription($id: ID!, $prorate: Boolean) {
+          appSubscriptionCancel(id: $id, prorate: $prorate) {
+            userErrors { field message }
+            appSubscription {
+              id
+              status
+            }
+          }
+        }`,
+        {
+          variables: {
+            id: subscriptionGid,
+            prorate: false,
+          },
+        },
+      );
+
+      const payload = (await response.json()) as {
+        data?: {
+          appSubscriptionCancel?: {
+            userErrors?: Array<{ field?: string[]; message?: string }>;
+            appSubscription?: {
+              id?: string;
+              status?: string;
+            } | null;
+          };
+        };
+        errors?: Array<{ message?: string }>;
+      };
+
+      const userErrors = payload.data?.appSubscriptionCancel?.userErrors ?? [];
+      const graphQLErrors = payload.errors ?? [];
+
+      if (graphQLErrors.length || userErrors.length) {
+        const message = [
+          ...graphQLErrors.map((error) => error.message).filter(Boolean),
+          ...userErrors.map((error) => error.message).filter(Boolean),
+        ].join("; ");
+
+        return {
+          success: false,
+          message: message || "Shopify could not stop the next subscription renewal.",
+        };
+      }
+
+      const cancelled = payload.data?.appSubscriptionCancel?.appSubscription;
+      console.log("[BILLING DEBUG] cancel:shopify:response", {
+        debugId, shop: session.shop, subscriptionGid,
+        cancelledId: cancelled?.id ?? null, cancelledStatus: cancelled?.status ?? null,
+        graphqlErrors: graphQLErrors.length, userErrors: userErrors.length,
+      });
+
+      if (!cancelled?.id) {
+        return {
+          success: false,
+          message: "Shopify did not return the cancelled subscription.",
+        };
+      }
+
+      console.log("[BILLING DEBUG] cancel:reconcile:start", {
+        debugId, shop: session.shop, expectedSubscriptionGid: cancelled.id,
+      });
+      const reconciliation = await reconcileShopifySubscriptionFromAdmin({
+        shop: session.shop,
+        admin,
+        expectedSubscriptionGid: cancelled.id,
+        preferredPlanHandle: snapshot.planHandle,
+        authoritativePlanHandle: snapshot.planHandle,
+        source: "API",
+        observedShopifyStatus: "CANCELLED",
+      });
+      console.log("[BILLING DEBUG] cancel:reconcile:done", {
+        debugId, shop: session.shop,
+        plan: reconciliation.subscription.plan, status: reconciliation.subscription.status,
+        cancellationStatus: reconciliation.subscription.cancellationStatus,
+        accessStatus: reconciliation.subscription.accessStatus,
+        commercialStatus: reconciliation.subscription.commercialStatus,
+      });
+
+      return {
+        success: true,
+        renewalDisabled: true,
+        message:
+          "Automatic renewal is off. Your current plan remains available until the end of the paid billing period.",
+      };
+    } catch (error) {
+      return {
+        success: false,
+        message: error instanceof Error ? error.message : String(error),
+      };
+    }
+  }
+
   if (intent === "subscribe") {
     const planKey = String(form.get("planKey") || "");
     const cycle = String(form.get("cycle") || "monthly");
 
+    const requestedReplacementBehavior =
+      String(form.get("replacementBehavior") || "APPLY_IMMEDIATELY");
+    const replacementBehavior =
+      requestedReplacementBehavior === "APPLY_ON_NEXT_BILLING_CYCLE"
+        ? "APPLY_ON_NEXT_BILLING_CYCLE"
+        : requestedReplacementBehavior === "STANDARD"
+          ? "STANDARD"
+          : "APPLY_IMMEDIATELY";
+
     const baseMonthlyPrice = planKey === "PRO" ? 29.9 : 9.9;
+    const billingPlan = await db.plan.findUnique({
+      where: { handle: planKey.toLowerCase() },
+      select: { trialDays: true },
+    });
+
+    // Trial is a shop-level first-subscription benefit, not a per-plan-change
+    // benefit. Once this shop has ever had a Billing V2 subscription, every
+    // later replacement/change must be created without trialDays.
+    //
+    // AiSearchSubscription is bootstrapped for every shop even when there has
+    // never been a paid/trial subscription, so its mere existence is not
+    // sufficient to determine trial eligibility. A real BillingSubscription
+    // row is the authoritative local marker that billing history has started.
+    const hasBillingHistory = Boolean(
+      await db.billingSubscription.findFirst({
+        where: { shop: session.shop },
+        select: { id: true },
+      }),
+    );
+
+    const trialDays = hasBillingHistory
+      ? 0
+      : Math.max(0, billingPlan?.trialDays ?? 0);
     const isProduction = process.env.NODE_ENV === "production";
 
     let finalPrice = baseMonthlyPrice;
@@ -121,7 +301,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           $name: String!, 
           $price: Decimal!, 
           $returnUrl: URL!, 
-          $test: Boolean, 
+          $test: Boolean,
+          $trialDays: Int,
           $interval: AppPricingInterval!,
           $replacementBehavior: AppSubscriptionReplacementBehavior
         ) {
@@ -129,6 +310,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
             name: $name
             returnUrl: $returnUrl
             test: $test
+            trialDays: $trialDays
             replacementBehavior: $replacementBehavior
             lineItems: [{
               plan: {
@@ -155,8 +337,9 @@ export const action = async ({ request }: ActionFunctionArgs) => {
             price: finalPrice.toFixed(2),
             returnUrl: returnUrl.toString(),
             test: !isProduction,
+            trialDays: trialDays > 0 ? trialDays : null,
             interval: billingInterval,
-            replacementBehavior: "APPLY_IMMEDIATELY",
+            replacementBehavior,
           },
         }
       );
@@ -195,7 +378,18 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         expectedSubscriptionGid: createdSubscription.id,
         preferredPlanHandle: planKey.toLowerCase(),
         authoritativePlanHandle: planKey.toLowerCase(),
+        source: "CALLBACK",
       });
+
+      if (replacementBehavior === "APPLY_ON_NEXT_BILLING_CYCLE") {
+        await setBillingPlanChangeState({
+          shop: session.shop,
+          subscriptionGid: createdSubscription.id,
+          status: "DEFERRED",
+          source: "CALLBACK",
+          reason: "APP_SUBSCRIPTION_REPLACEMENT_BEHAVIOR_APPLY_ON_NEXT_BILLING_CYCLE",
+        });
+      }
 
       const confirmationUrl = subscriptionData?.confirmationUrl;
       if (confirmationUrl) {
@@ -223,6 +417,15 @@ export default function BillingPage() {
   const data = useLoaderData<typeof loader>();
   const fetcher = useFetcher<typeof action>();
   const subscribeFetcher = useFetcher<typeof action>();
+  const cancelFetcher = useFetcher<typeof action>();
+
+  useEffect(() => {
+    console.log("[BILLING TRACE] cancelFetcher:state", {
+      state: cancelFetcher.state,
+      hasData: Boolean(cancelFetcher.data),
+      renewalDisabled: cancelFetcher.data?.renewalDisabled ?? false,
+    });
+  }, [cancelFetcher.state, cancelFetcher.data]);
 
   if (!data) return null;
 
@@ -237,6 +440,8 @@ export default function BillingPage() {
     }
   }, [subscribeFetcher.data]);
 
+
+
   const cycleDiscount = {
     monthly: 0,
     yearly: 0.2,
@@ -248,7 +453,9 @@ export default function BillingPage() {
   };
 
   const currentPlanKey = data.entitlement.planLabel?.toUpperCase() || "NONE";
-  const isActive = data.entitlement.subscriptionStatus === "ACTIVE";
+  const isNonRenewing = data.entitlement.cancellationStatus === "NON_RENEWING";
+  const isActive =
+    data.entitlement.subscriptionStatus === "ACTIVE" || isNonRenewing;
 
   const planConfigs = {
     BASIC: {
@@ -348,7 +555,11 @@ export default function BillingPage() {
               color: isActive ? "#008060" : "#d32f2f",
             }}
           >
-            {isActive ? "ACTIVE (PAID)" : data.entitlement.subscriptionStatus}
+            {isNonRenewing
+              ? "ACTIVE — NOT RENEWING"
+              : isActive
+                ? "ACTIVE (PAID)"
+                : data.entitlement.subscriptionStatus}
           </span>
         </div>
 
@@ -428,6 +639,116 @@ export default function BillingPage() {
             </a>
           )}
         </div>
+        {isActive ? (
+          <div
+            style={{
+              marginTop: 14,
+              padding: 14,
+              borderRadius: 10,
+              background: isNonRenewing ? "#fff8e6" : "#f3faf7",
+              border: `1px solid ${isNonRenewing ? "#f0d98a" : "#cfe9df"}`,
+            }}
+          >
+            <div style={{ fontWeight: 700, fontSize: 13, color: "#1a1a1a" }}>
+              Renewal
+            </div>
+            <div style={{ fontSize: 12, color: "#4a4a4a", marginTop: 6 }}>
+              {isNonRenewing
+                ? `Automatic renewal is off. Your ${data.entitlement.planLabel} plan remains available until ${data.subscription.formattedPeriodEnd ?? "the end of the current billing period"}.`
+                : "Automatic renewal is on. Shopify will continue the subscription at the next billing cycle unless you choose to stop renewal."}
+            </div>
+
+            <cancelFetcher.Form method="post" style={{ marginTop: 12 }}>
+              <input type="hidden" name="intent" value="cancelRenewal" />
+              <fieldset
+                disabled={cancelFetcher.state !== "idle" || isNonRenewing}
+                style={{
+                  margin: 0,
+                  padding: 0,
+                  border: 0,
+                  display: "grid",
+                  gap: 8,
+                }}
+              >
+                <label
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 8,
+                    fontSize: 12,
+                    color: "#1a1a1a",
+                    cursor: cancelFetcher.state === "idle" && !isNonRenewing ? "pointer" : "default",
+                  }}
+                >
+                  <input
+                    type="radio"
+                    name="renewalChoice"
+                    value="automatic"
+                    checked={!isNonRenewing}
+                    readOnly
+                  />
+                  <span>
+                    <strong>Automatic renewal</strong>
+                    <span style={{ display: "block", color: "#6b6b6b", marginTop: 2 }}>
+                      Continue this subscription into the next billing cycle.
+                    </span>
+                  </span>
+                </label>
+
+                <label
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 8,
+                    fontSize: 12,
+                    color: isNonRenewing ? "#8a1c1c" : "#1a1a1a",
+                    cursor: cancelFetcher.state === "idle" && !isNonRenewing ? "pointer" : "default",
+                  }}
+                >
+                  <input
+                    type="radio"
+                    name="renewalChoice"
+                    value="stop"
+                    checked={isNonRenewing}
+                    disabled={isNonRenewing}
+                    onChange={(event) => {
+                      if (!event.target.checked || cancelFetcher.state !== "idle") return;
+
+                      const confirmed = window.confirm(
+                        `Are you sure you want to turn off automatic renewal? Your current ${data.entitlement.planLabel} plan will remain active until ${data.subscription.formattedPeriodEnd ?? "the end of the current billing period"}, then it will end and will not renew automatically.`,
+                      );
+
+                      if (confirmed) {
+                        event.currentTarget.form?.requestSubmit();
+                      } else {
+                        event.currentTarget.checked = false;
+                      }
+                    }}
+                  />
+                  <span>
+                    <strong>Do not renew next period</strong>
+                    <span style={{ display: "block", color: "#6b6b6b", marginTop: 2 }}>
+                      Keep the current plan active until the end of this billing period.
+                    </span>
+                  </span>
+                </label>
+              </fieldset>
+            </cancelFetcher.Form>
+
+            {cancelFetcher.data?.message ? (
+              <p
+                style={{
+                  margin: "8px 0 0 0",
+                  fontSize: 12,
+                  color: cancelFetcher.data.success ? "#008060" : "#d32f2f",
+                }}
+              >
+                {cancelFetcher.data.message}
+              </p>
+            ) : null}
+          </div>
+        ) : null}
+
         {fetcher.data?.message ? (
           <p style={{ margin: "10px 0 0 0", fontSize: 12, color: "#008060" }}>
             {fetcher.data.message}
@@ -681,6 +1002,18 @@ export default function BillingPage() {
                   >
                     Regular: {config.originalPrice}
                   </div>
+                  {plan.trialDays > 0 && (
+                    <div
+                      style={{
+                        fontSize: 12,
+                        color: "#008060",
+                        fontWeight: 700,
+                        marginTop: 6,
+                      }}
+                    >
+                      {plan.trialDays}-day free trial
+                    </div>
+                  )}
                   <div
                     style={{
                       fontSize: 12,

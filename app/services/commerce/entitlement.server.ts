@@ -79,7 +79,16 @@ export async function getShopEntitlement(
   const limits = await applyActiveQuotaGrants(shop, baseLimits);
 
   const subscriptionActive =
-    shopLifecycleStatus === "ACTIVE" && subscription.status === "ACTIVE";
+    shopLifecycleStatus === "ACTIVE" &&
+    (
+      subscription.status === "ACTIVE" ||
+      (
+        subscription.status === "CANCELLED" &&
+        subscription.cancellationStatus === "NON_RENEWING" &&
+        subscription.billingPeriodEnd !== null &&
+        subscription.billingPeriodEnd > new Date()
+      )
+    );
   const productSlotAvailable =
     limits.productLimit === null || productSlotsUsed < limits.productLimit;
   const productLimitExceeded =
@@ -116,6 +125,7 @@ export async function getShopEntitlement(
     plan: subscription.plan,
     planLabel: subscription.planLabel,
     subscriptionStatus: subscription.status,
+    cancellationStatus: subscription.cancellationStatus,
     active,
     aiSearchEnabled: settings.aiSearchEnabled,
     fallbackEnabled: settings.fallbackEnabled,

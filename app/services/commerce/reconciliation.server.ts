@@ -15,10 +15,21 @@ async function reconcileShopCommercialStateUnlocked({
   shop: string;
   forceCatalogRefresh?: boolean;
 }) {
+  console.log("[COMMERCIAL DEBUG] reconcile:start", { shop, forceCatalogRefresh });
   let entitlement = await getShopEntitlement(shop);
+  console.log("[COMMERCIAL DEBUG] entitlement:beforeRecovery", {
+    shop, plan: entitlement.plan, active: entitlement.active,
+    indexedProducts: entitlement.indexedProducts, productSlotsUsed: entitlement.productSlotsUsed,
+    catalogProductCount: entitlement.catalogProductCount,
+  });
 
   const recovery = await recoverBlockedProducts(shop);
   entitlement = await getShopEntitlement(shop);
+  console.log("[COMMERCIAL DEBUG] entitlement:afterRecovery", {
+    shop, plan: entitlement.plan, active: entitlement.active,
+    indexedProducts: entitlement.indexedProducts, productSlotsUsed: entitlement.productSlotsUsed,
+    catalogProductCount: entitlement.catalogProductCount,
+  });
 
   // A fresh catalog pass is required after an upgrade (the Basic scan may have
   // stopped at 500 and therefore never created registry rows for later items).
@@ -35,6 +46,13 @@ async function reconcileShopCommercialStateUnlocked({
   const shouldRefreshCatalog =
     !needsInitialCatalogSync && (forceCatalogRefresh || planNeedsExpansionScan);
 
+  console.log("[COMMERCIAL DEBUG] catalogDecision", {
+    shop, latestCatalogJobId: latestCatalogJob?.id ?? null,
+    latestCatalogStatus: latestCatalogJob?.status ?? null,
+    latestCatalogPlan: latestCatalogJob?.planAtStart ?? null,
+    needsInitialCatalogSync, planNeedsExpansionScan, forceCatalogRefresh, shouldRefreshCatalog,
+  });
+
   let catalogJobId: number | null = null;
   if (needsInitialCatalogSync) {
     // First install / Phase-1 migration must use INITIAL_SYNC semantics so the
@@ -50,6 +68,7 @@ async function reconcileShopCommercialStateUnlocked({
     );
   }
 
+  console.log("[COMMERCIAL DEBUG] catalogDecision:result", { shop, catalogJobId });
   if (catalogJobId) kickCatalogSyncQueue();
 
   return {
