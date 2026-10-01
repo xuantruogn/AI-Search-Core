@@ -30,7 +30,8 @@
     "dev-admin:rotate-mfa": "tsx --env-file=.env scripts/dev-admin-rotate-mfa.ts",
     "test:billing-simulation:s01": "tsx --env-file=.env scripts/billing-simulation-s01.ts",
     "test:billing-simulation:s02-s05": "tsx --env-file=.env scripts/billing-simulation-s02-s05.ts",
-    "test:billing-simulation:s06-s08": "tsx --env-file=.env scripts/billing-simulation-s06-s08.ts"
+    "test:billing-simulation:s06-s08": "tsx --env-file=.env scripts/billing-simulation-s06-s08.ts",
+    "test:billing-simulation:s09-s14": "tsx --env-file=.env scripts/billing-simulation-s09-s14.ts"
   },
   "type": "module",
   "engines": {
