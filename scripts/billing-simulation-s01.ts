@@ -20,16 +20,16 @@ if (productionDatabaseUrl && simulationDatabaseUrl === productionDatabaseUrl) {
 process.env.DATABASE_URL = simulationDatabaseUrl;
 process.env.NODE_ENV = "test";
 
-const { default: db } = await import("../app/db.server.ts");
+const { default: db } = await import("../app/db.server");
 const {
   reconcileShopifySubscriptionFromAdmin,
-} = await import("../app/services/billing/shopify-app-pricing.server.ts");
+} = await import("../app/services/billing/shopify-app-pricing.server");
 const {
   ensureBillingV2State,
   getBillingSubscriptionSnapshot,
   emitBillingBackendContract,
-} = await import("../app/services/commerce/billing-state.server.ts");
-const { getShopEntitlement } = await import("../app/services/commerce/entitlement.server.ts");
+} = await import("../app/services/commerce/billing-state.server");
+const { getShopEntitlement } = await import("../app/services/commerce/entitlement.server");
 
 const SHOP = "billing-simulation-s01.myshopify.com";
 const GID = "gid://shopify/AppSubscription/simulation-s01";
@@ -153,7 +153,7 @@ async function main() {
     const activeEntitlement = await getShopEntitlement(SHOP);
 
     assert.equal(activeSnapshot.status, "ACTIVE");
-    assert.equal(activeSnapshot.plan, "basic");
+    assert.equal(activeSnapshot.plan, "BASIC");
     assert.equal(activeSnapshot.accessStatus, "BASIC");
     assert.equal(activeSnapshot.commercialStatus, "PAID");
     assert.equal(activeSnapshot.cancellationStatus, "NONE");
