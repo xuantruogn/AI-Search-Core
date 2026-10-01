@@ -342,7 +342,7 @@ async function runScenario(scenario: Scenario) {
           (scenario.id === "S06"
             ? "ENDED"
             : scenario.id === "S07"
-              ? "NONE"
+              ? "CANCELLED"
               : "ACTIVE"),
       },
       access: {
