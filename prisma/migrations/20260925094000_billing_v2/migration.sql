@@ -1,34 +1,17 @@
--- DropForeignKey
-ALTER TABLE `aisearchcatalogsyncjob` DROP FOREIGN KEY `AiSearchCatalogSyncJob_shop_aisearchshop_fkey`;
-
--- DropForeignKey
-ALTER TABLE `aisearchindexedproduct` DROP FOREIGN KEY `AiSearchIndexedProduct_shop_aisearchshop_fkey`;
-
--- DropForeignKey
-ALTER TABLE `aisearchquerylog` DROP FOREIGN KEY `AiSearchQueryLog_shop_aisearchshop_fkey`;
-
--- DropForeignKey
-ALTER TABLE `aisearchshopsettings` DROP FOREIGN KEY `AiSearchShopSettings_shop_aisearchshop_fkey`;
-
--- DropForeignKey
-ALTER TABLE `aisearchsubscription` DROP FOREIGN KEY `AiSearchSubscription_shop_aisearchshop_fkey`;
-
--- DropForeignKey
-ALTER TABLE `aisearchusageevent` DROP FOREIGN KEY `AiSearchUsageEvent_shop_aisearchshop_fkey`;
-
--- DropForeignKey
-ALTER TABLE `aisearchusageperiod` DROP FOREIGN KEY `AiSearchUsagePeriod_shop_aisearchshop_fkey`;
-
--- DropForeignKey
-ALTER TABLE `aisearchusagereservation` DROP FOREIGN KEY `AiSearchUsageReservation_shop_aisearchshop_fkey`;
+-- Billing V2 compatibility fields.
+-- vectorStatus/searchable/blockedReason already exist from product-policy migration.
+ALTER TABLE `AiSearchIndexedProduct`
+    ADD COLUMN `isIndexed` BOOLEAN NOT NULL DEFAULT false,
+    ADD COLUMN `isSearchable` BOOLEAN NOT NULL DEFAULT false,
+    ADD COLUMN `excludedReason` VARCHAR(64) NULL,
+    ADD COLUMN `embeddingModel` VARCHAR(64) NULL,
+    ADD COLUMN `embeddingVersion` INTEGER NOT NULL DEFAULT 1,
+    ADD COLUMN `contentHash` VARCHAR(64) NULL,
+    ADD COLUMN `lastEmbeddedAt` DATETIME(3) NULL,
+    ADD COLUMN `lastSyncedAt` DATETIME(3) NULL;
 
 -- AlterTable
-ALTER TABLE `aisearchindexedproduct` ADD COLUMN `blockedReason` VARCHAR(64) NULL,
-    ADD COLUMN `searchable` BOOLEAN NOT NULL DEFAULT false,
-    ADD COLUMN `vectorStatus` VARCHAR(32) NOT NULL DEFAULT 'MISSING';
-
--- AlterTable
-ALTER TABLE `aisearchshop` ADD COLUMN `currentPlanHandle` VARCHAR(191) NULL,
+ALTER TABLE `AiSearchShop` ADD COLUMN `currentPlanHandle` VARCHAR(191) NULL,
     ADD COLUMN `currentSubscriptionGid` VARCHAR(191) NULL,
     ADD COLUMN `frozenAt` DATETIME(3) NULL,
     ADD COLUMN `installCount` INTEGER NOT NULL DEFAULT 1,
@@ -36,9 +19,6 @@ ALTER TABLE `aisearchshop` ADD COLUMN `currentPlanHandle` VARCHAR(191) NULL,
     ADD COLUMN `pendingPlanHandle` VARCHAR(191) NULL,
     ADD COLUMN `pendingSubscriptionGid` VARCHAR(191) NULL,
     ADD COLUMN `reinstalledAt` DATETIME(3) NULL;
-
--- AlterTable
-ALTER TABLE `aisearchshopsettings` ADD COLUMN `productPolicyVersion` INTEGER NOT NULL DEFAULT 0;
 
 -- CreateTable
 CREATE TABLE `plans` (
@@ -178,12 +158,6 @@ CREATE INDEX `AiSearchIndexedProduct_shop_isSearchable_idx` ON `AiSearchIndexedP
 -- CreateIndex
 CREATE INDEX `AiSearchIndexedProduct_shop_hasVector_idx` ON `AiSearchIndexedProduct`(`shop`, `hasVector`);
 
--- CreateIndex
-CREATE INDEX `AiSearchIndexedProduct_shop_searchable_idx` ON `AiSearchIndexedProduct`(`shop`, `searchable`);
-
--- CreateIndex
-CREATE INDEX `AiSearchIndexedProduct_shop_vectorStatus_idx` ON `AiSearchIndexedProduct`(`shop`, `vectorStatus`);
-
 -- AddForeignKey
 ALTER TABLE `plan_assignments` ADD CONSTRAINT `plan_assignments_shop_fkey` FOREIGN KEY (`shop`) REFERENCES `AiSearchShop`(`shop`) ON DELETE CASCADE ON UPDATE CASCADE;
 
@@ -204,28 +178,3 @@ ALTER TABLE `usage_counters` ADD CONSTRAINT `usage_counters_shop_fkey` FOREIGN K
 
 -- AddForeignKey
 ALTER TABLE `catalog_states` ADD CONSTRAINT `catalog_states_shop_fkey` FOREIGN KEY (`shop`) REFERENCES `AiSearchShop`(`shop`) ON DELETE CASCADE ON UPDATE CASCADE;
-
--- AddForeignKey
-ALTER TABLE `AiSearchSubscription` ADD CONSTRAINT `AiSearchSubscription_shop_fkey` FOREIGN KEY (`shop`) REFERENCES `AiSearchShop`(`shop`) ON DELETE CASCADE ON UPDATE CASCADE;
-
--- AddForeignKey
-ALTER TABLE `AiSearchShopSettings` ADD CONSTRAINT `AiSearchShopSettings_shop_fkey` FOREIGN KEY (`shop`) REFERENCES `AiSearchShop`(`shop`) ON DELETE CASCADE ON UPDATE CASCADE;
-
--- AddForeignKey
-ALTER TABLE `AiSearchUsagePeriod` ADD CONSTRAINT `AiSearchUsagePeriod_shop_fkey` FOREIGN KEY (`shop`) REFERENCES `AiSearchShop`(`shop`) ON DELETE CASCADE ON UPDATE CASCADE;
-
--- AddForeignKey
-ALTER TABLE `AiSearchUsageEvent` ADD CONSTRAINT `AiSearchUsageEvent_shop_fkey` FOREIGN KEY (`shop`) REFERENCES `AiSearchShop`(`shop`) ON DELETE CASCADE ON UPDATE CASCADE;
-
--- AddForeignKey
-ALTER TABLE `AiSearchQueryLog` ADD CONSTRAINT `AiSearchQueryLog_shop_fkey` FOREIGN KEY (`shop`) REFERENCES `AiSearchShop`(`shop`) ON DELETE CASCADE ON UPDATE CASCADE;
-
--- AddForeignKey
-ALTER TABLE `AiSearchUsageReservation` ADD CONSTRAINT `AiSearchUsageReservation_shop_fkey` FOREIGN KEY (`shop`) REFERENCES `AiSearchShop`(`shop`) ON DELETE CASCADE ON UPDATE CASCADE;
-
--- AddForeignKey
-ALTER TABLE `AiSearchIndexedProduct` ADD CONSTRAINT `AiSearchIndexedProduct_shop_fkey` FOREIGN KEY (`shop`) REFERENCES `AiSearchShop`(`shop`) ON DELETE CASCADE ON UPDATE CASCADE;
-
--- AddForeignKey
-ALTER TABLE `AiSearchCatalogSyncJob` ADD CONSTRAINT `AiSearchCatalogSyncJob_shop_fkey` FOREIGN KEY (`shop`) REFERENCES `AiSearchShop`(`shop`) ON DELETE CASCADE ON UPDATE CASCADE;
-
