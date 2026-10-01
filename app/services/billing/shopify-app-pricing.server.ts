@@ -1,9 +1,5 @@
 import db from "../../db.server";
-import {
-  AI_SEARCH_PLAN,
-  hasExplicitDevPlanOverride,
-  planFromHandle,
-} from "../commerce/plans.server";
+import { AI_SEARCH_PLAN, planFromHandle } from "../commerce/plans.server";
 import {
   ensureShopRecord,
   fetchShopIdentity,
@@ -1769,16 +1765,6 @@ export async function refreshShopifyAppPricingIfStale({
     lastSyncedAt: current.lastSyncedAt?.toISOString() ?? null,
   });
 
-  if (current.source === "DEV_OVERRIDE" && hasExplicitDevPlanOverride()) {
-    return {
-      configured: false as const,
-      subscription: current,
-      skipped: true,
-      changed: false,
-      previousPlan: current.plan,
-      previousStatus: current.status,
-    };
-  }
 
   const isStale = (snapshot: typeof current) =>
     !snapshot.lastSyncedAt ||
