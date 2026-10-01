@@ -217,7 +217,7 @@ export async function getSearchImpactSnapshot(
           query: cluster.label,
           count: cluster.semanticFacetNoResultCount,
           detail:
-            `${cluster.semanticFacetNoResultCount} lượt search có Product Semantic Facets hợp lý nhưng không trả về sản phẩm.`,
+            "No sufficiently relevant products were found for this query.",
         };
       }
 

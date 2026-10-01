@@ -146,7 +146,7 @@ async function getShopAnalyticsData(shop: string, requestedDays: number = 30) {
     const statusColor = isAbnormal ? "#d32f2f" : "#008060";
     const abnormalReason =
       classification === "SEMANTIC_NO_RESULTS"
-        ? "Valid Product Semantic Facets but no results"
+        ? "No sufficiently relevant products found"
         : classification === "LOW_CTR"
           ? "Query class >20 searches with CTR <5%"
           : cluster.searches <= 20

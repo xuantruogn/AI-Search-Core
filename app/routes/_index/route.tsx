@@ -1,5 +1,5 @@
 import type { LoaderFunctionArgs } from "react-router";
-import { Form, redirect, useLoaderData } from "react-router";
+import { redirect, useLoaderData } from "react-router";
 
 import { login } from "../../shopify.server";
 
@@ -42,21 +42,21 @@ function CheckIcon() {
 const features = [
   {
     number: "01",
-    title: "Hiểu đúng ý định mua hàng",
+    title: "Understand shopper intent",
     description:
-      "AI phân tích ngữ nghĩa, thuộc tính và ngôn ngữ để đưa khách đến đúng sản phẩm họ thực sự cần.",
+      "AI interprets meaning, attributes, context, and language to connect shoppers with products that actually fit what they need.",
   },
   {
     number: "02",
-    title: "Giữ nguyên giao diện của bạn",
+    title: "Keep your storefront experience",
     description:
-      "Kết quả được render bằng chính product card của theme Shopify — đồng nhất từ hình ảnh đến quick add.",
+      "Results are rendered with your existing Shopify theme so product cards, imagery, and storefront interactions remain consistent.",
   },
   {
     number: "03",
-    title: "An toàn để vận hành",
+    title: "Operate with confidence",
     description:
-      "Có quota, analytics, đồng bộ nền và cơ chế fallback về Shopify Search khi cần thiết.",
+      "Built-in quotas, analytics, background synchronization, and fallback behavior help keep search reliable in production.",
   },
 ];
 
@@ -69,7 +69,7 @@ export default function App() {
       <div className={styles.glowTwo} />
 
       <header className={styles.header}>
-        <a className={styles.brand} href="/" aria-label="AI Buyense home">
+        <a className={styles.brand} href="/" aria-label="AI-Buyense home">
           <span className={styles.brandMark}>
             <SearchIcon />
           </span>
@@ -88,18 +88,18 @@ export default function App() {
             <span>Native Theme Rendering</span>
           </div>
           <h1>
-            Biến mọi truy vấn thành
-            <span> cơ hội mua hàng.</span>
+            Turn every search into
+            <span> a better product discovery opportunity.</span>
           </h1>
           <p className={styles.lead}>
-            Công cụ tìm kiếm AI dành cho Shopify, hiểu ngôn ngữ tự nhiên và
-            hiển thị kết quả hoàn toàn đồng bộ với giao diện cửa hàng của bạn.
+            AI-powered search for Shopify that understands natural language and
+            returns relevant products while preserving your existing storefront experience.
           </p>
 
           <div className={styles.benefits}>
-            <span><CheckIcon /> Kết quả theo ngữ nghĩa</span>
-            <span><CheckIcon /> Không phá vỡ theme</span>
-            <span><CheckIcon /> Cài đặt nhanh chóng</span>
+            <span><CheckIcon /> Semantic relevance</span>
+            <span><CheckIcon /> Theme-compatible results</span>
+            <span><CheckIcon /> Fast setup</span>
           </div>
         </div>
 
@@ -108,13 +108,13 @@ export default function App() {
             <SearchIcon />
           </div>
           <p className={styles.cardEyebrow}>Merchant access</p>
-          <h2 id="login-title">Kết nối cửa hàng</h2>
+          <h2 id="login-title">Connect your store</h2>
           <p className={styles.cardDescription}>
-            Nhập domain Shopify để truy cập trang quản trị AI Search.
+            Enter your Shopify store domain to access the AI-Buyense admin.
           </p>
 
           {showForm ? (
-            <Form className={styles.form} method="post" action="/auth/login">
+            <form className={styles.form} method="post" action="/auth/login">
               <label className={styles.label} htmlFor="shop-domain">
                 Shop domain
               </label>
@@ -135,29 +135,29 @@ export default function App() {
                 />
               </div>
               <span id="shop-domain-help" className={styles.helpText}>
-                Sử dụng domain <strong>*.myshopify.com</strong> của cửa hàng.
+                Use your store&apos;s <strong>*.myshopify.com</strong> domain.
               </span>
               <button className={styles.button} type="submit">
-                Đăng nhập với Shopify <ArrowIcon />
+                Continue with Shopify <ArrowIcon />
               </button>
-            </Form>
+            </form>
           ) : (
             <div className={styles.unavailable}>
-              Đăng nhập Shopify hiện chưa khả dụng. Vui lòng thử lại sau.
+              Shopify sign-in is currently unavailable. Please try again later.
             </div>
           )}
 
           <div className={styles.secureNote}>
-            <span className={styles.lockIcon} aria-hidden="true">●</span>
-            Đăng nhập bảo mật qua Shopify OAuth
+            <span className={styles.lockIcon} aria-hidden="true">Ã¢â‚¬Â¢</span>
+            Secure sign-in with Shopify OAuth
           </div>
         </aside>
       </section>
 
       <section className={styles.features} aria-label="Key capabilities">
         <div className={styles.featuresIntro}>
-          <p>Tại sao chọn AI-Buyense?</p>
-          <h2>Tìm kiếm thông minh hơn.<br />Trải nghiệm liền mạch hơn.</h2>
+          <p>Why AI-Buyense?</p>
+          <h2>Smarter search.<br />A more seamless shopping experience.</h2>
         </div>
         <div className={styles.featureGrid}>
           {features.map((feature) => (
@@ -171,7 +171,7 @@ export default function App() {
       </section>
 
       <footer className={styles.footer}>
-        <span>© {new Date().getFullYear()} AI-Buyense</span>
+        <span>Ã‚Â© {new Date().getFullYear()} AI-Buyense</span>
         <span>Semantic commerce search for Shopify</span>
       </footer>
     </main>

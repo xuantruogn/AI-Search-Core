@@ -500,7 +500,7 @@ function SearchPerformanceChart({
 }
 
 function AlertTypeLabel(type: string) {
-  if (type === "SEMANTIC_NO_RESULTS") return "Semantic No Results";
+  if (type === "SEMANTIC_NO_RESULTS") return "No matching products found";
   if (type === "LOW_CTR") return "Low CTR";
   if (type === "CTR_DROP") return "CTR Drop";
   return type;

@@ -4,7 +4,7 @@ import type { MetaFunction } from "react-router";
 import styles from "./demo.module.css";
 
 export const meta: MetaFunction = () => [
-  { title: "NOVA — AI Search Control Room" },
+  { title: "NOVA - AI Search Control Room" },
   {
     name: "description",
     content: "Interactive product demo for AI Search Core and LLM query rewriting.",
@@ -22,22 +22,22 @@ type SearchResult = {
 const demoResults: SearchResult[] = [
   {
     name: "Nimbus Run Jacket",
-    meta: "Women · Running · Rain-ready",
-    price: "2.490.000₫",
+    meta: "Women • Running • Rain-ready",
+    price: "2,490,000 VND",
     score: 96,
     tag: "Best match",
   },
   {
     name: "Aero Shell Jacket",
-    meta: "Unisex · Trail · Ultralight",
-    price: "2.190.000₫",
+    meta: "Unisex • Trail • Ultralight",
+    price: "2,190,000 VND",
     score: 91,
     tag: "High intent",
   },
   {
     name: "Drift Windbreaker",
-    meta: "Women · Training · Packable",
-    price: "1.690.000₫",
+    meta: "Women • Training • Packable",
+    price: "1,690,000 VND",
     score: 87,
     tag: "Good fit",
   },
@@ -61,21 +61,21 @@ function Metric({ label, value, delta, tone }: { label: string; value: string; d
       <strong>{value}</strong>
       <div className={styles.metricFoot}>
         <span className={styles.delta} style={{ "--tone": tone } as React.CSSProperties}>{delta}</span>
-        <span>vs. 30 ngày trước</span>
+        <span>vs. previous 30 days</span>
       </div>
     </article>
   );
 }
 
 export default function DemoPage() {
-  const [query, setQuery] = useState("áo khoác chạy bộ nữ dưới 3 triệu");
+  const [query, setQuery] = useState("women's running jacket under 3 million VND");
   const [submittedQuery, setSubmittedQuery] = useState(query);
   const [isRunning, setIsRunning] = useState(false);
   const [notice, setNotice] = useState("");
 
   const keywords = useMemo(() => {
     const normalized = submittedQuery.toLowerCase();
-    if (normalized.includes("áo khoác")) return ["women jacket", "running", "weather resistant", "price < 3m"];
+    if (normalized.includes("jacket")) return ["women jacket", "running", "weather resistant", "price < 3m VND"];
     return ["semantic intent", "catalog match", "price-aware"];
   }, [submittedQuery]);
 
@@ -110,10 +110,10 @@ export default function DemoPage() {
             <span className={styles.planEyebrow}>PRO PLAN</span>
             <strong>18.4k / 25k</strong>
             <div className={styles.progress}><i /></div>
-            <small>6,600 searches còn lại</small>
+            <small>6,600 searches remaining</small>
           </div>
-          <button className={styles.profile} onClick={() => toast("Menu tài khoản đã sẵn sàng cho bản demo.")}>
-            <span className={styles.avatar}>LM</span><span><strong>Lumina Store</strong><small>Owner</small></span><b>⌄</b>
+          <button className={styles.profile} onClick={() => toast("The account menu is ready for this demo.")}>
+            <span className={styles.avatar}>LM</span><span><strong>Lumina Store</strong><small>Owner</small></span><b>›</b>
           </button>
         </div>
       </aside>
@@ -122,9 +122,9 @@ export default function DemoPage() {
         <header className={styles.topbar}>
           <div><span className={styles.mobileLogo}>N</span><span className={styles.breadcrumb}>Workspace&nbsp; / &nbsp;<b>Overview</b></span></div>
           <div className={styles.topActions}>
-            <button aria-label="Notifications" onClick={() => toast("Không có cảnh báo mới.")} className={styles.iconButton}>◌<i /></button>
+            <button aria-label="Notifications" onClick={() => toast("No new alerts.")} className={styles.iconButton}>●<i /></button>
             <span className={styles.status}><i /> System healthy</span>
-            <button className={styles.primaryButton} onClick={() => document.querySelector("#search-lab")?.scrollIntoView({ behavior: "smooth" })}>Test a query <span>↗</span></button>
+            <button className={styles.primaryButton} onClick={() => document.querySelector("#search-lab")?.scrollIntoView({ behavior: "smooth" })}>Test a query <span>→</span></button>
           </div>
         </header>
 
@@ -133,23 +133,23 @@ export default function DemoPage() {
             <div>
               <span className={styles.eyebrow}>FRIDAY, 12 SEPTEMBER</span>
               <h1>Search is looking sharp.</h1>
-              <p>Hệ thống hiểu đúng ý định của khách và đang chuyển đổi tốt hơn tuần trước.</p>
+              <p>The system is understanding shopper intent and converting searches more effectively than last week.</p>
             </div>
             <div className={styles.timeControl}><button className={styles.selected}>30 days</button><button>90 days</button></div>
           </section>
 
           <section className={styles.metrics} aria-label="Performance metrics">
-            <Metric label="Search sessions" value="18,429" delta="↗ 12.4%" tone="#b9ff66" />
-            <Metric label="Click-through rate" value="42.8%" delta="↗ 5.7%" tone="#70e6ff" />
-            <Metric label="Zero-result rate" value="3.1%" delta="↘ 2.3%" tone="#ffca6a" />
-            <Metric label="Revenue influenced" value="₫284M" delta="↗ 18.9%" tone="#d4a4ff" />
+            <Metric label="Search sessions" value="18,429" delta="↑ 12.4%" tone="#b9ff66" />
+            <Metric label="Click-through rate" value="42.8%" delta="↑ 5.7%" tone="#70e6ff" />
+            <Metric label="Zero-result rate" value="3.1%" delta="↓ 2.3%" tone="#ffca6a" />
+            <Metric label="Revenue influenced" value="284M VND" delta="↑ 18.9%" tone="#d4a4ff" />
           </section>
 
           <section className={styles.grid}>
             <article className={`${styles.panel} ${styles.performance}`}>
               <div className={styles.panelHead}>
                 <div><span className={styles.eyebrow}>SEARCH PERFORMANCE</span><h2>Intent → conversion</h2></div>
-                <button onClick={() => toast("Dữ liệu demo đã được làm mới.")}>Refresh ↻</button>
+                <button onClick={() => toast("Demo data refreshed.")}>Refresh ↻</button>
               </div>
               <div className={styles.chartLegend}><span><i className={styles.lime} />Searches</span><span><i className={styles.blue} />Conversions</span></div>
               <div className={styles.chart} aria-label="Search and conversion line chart">
@@ -167,9 +167,9 @@ export default function DemoPage() {
             <article className={`${styles.panel} ${styles.rewriteCard}`}>
               <div className={styles.panelHead}><div><span className={styles.eyebrow}>LLM REWRITE</span><h2>What customers meant</h2></div><span className={styles.liveBadge}>● LIVE</span></div>
               <div className={styles.queryPair}>
-                <span>RAW QUERY</span><p>“ao khoac nu chay bo troi mua”</p>
-                <b>↓</b>
-                <span>REWRITTEN INTENT</span><p>Women&apos;s running jacket · water resistant</p>
+                <span>RAW QUERY</span><p>&quot;women running jacket rain&quot;</p>
+                <b>→</b>
+                <span>REWRITTEN INTENT</span><p>Women&apos;s running jacket • water resistant</p>
               </div>
               <div className={styles.rewriteStats}>
                 <div><span>Rewrite rate</span><strong>68%</strong></div>
@@ -186,7 +186,7 @@ export default function DemoPage() {
             <div className={styles.searchBox}>
               <Icon name="search" />
               <input aria-label="Search query" value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => event.key === "Enter" && runSearch()} />
-              <button onClick={runSearch} disabled={isRunning}>{isRunning ? "Analyzing…" : "Analyze query"}<span>⌘↵</span></button>
+              <button onClick={runSearch} disabled={isRunning}>{isRunning ? "Analyzing..." : "Analyze query"}<span>→</span></button>
             </div>
             <div className={styles.pipeline}>
               <div className={styles.intentBlock}>
@@ -194,7 +194,7 @@ export default function DemoPage() {
                 <dl>
                   <div><dt>Original</dt><dd>{submittedQuery}</dd></div>
                   <div><dt>Intent</dt><dd>Women&apos;s running jacket for wet weather</dd></div>
-                  <div><dt>Constraints</dt><dd><span>category: jacket</span><span>activity: running</span><span>price: &lt; 3,000,000₫</span></dd></div>
+                  <div><dt>Constraints</dt><dd><span>category: jacket</span><span>activity: running</span><span>price: &lt; 3,000,000 VND</span></dd></div>
                   <div><dt>Vector query</dt><dd className={styles.keywordList}>{keywords.map((word) => <code key={word}>{word}</code>)}</dd></div>
                 </dl>
               </div>
@@ -203,7 +203,7 @@ export default function DemoPage() {
                 <div className={styles.resultList}>
                   {demoResults.map((result, index) => (
                     <article className={styles.result} key={result.name}>
-                      <div className={styles.productShot}><span>0{index + 1}</span><small>Ảnh SP<br/>tự chụp</small></div>
+                      <div className={styles.productShot}><span>0{index + 1}</span><small>Product<br/>image</small></div>
                       <div className={styles.resultCopy}><span className={styles.resultTag}>{result.tag}</span><h3>{result.name}</h3><p>{result.meta}</p><strong>{result.price}</strong></div>
                       <div className={styles.score}><span>{result.score}</span><small>match</small></div>
                     </article>
@@ -215,20 +215,20 @@ export default function DemoPage() {
 
           <section id="insights" className={styles.bottomGrid}>
             <article className={styles.panel}>
-              <div className={styles.panelHead}><div><span className={styles.eyebrow}>OPPORTUNITIES</span><h2>Queries worth fixing</h2></div><button onClick={() => toast("Đã mở danh sách 27 truy vấn.")}>View all 27 →</button></div>
-              <div className={styles.issueRow}><span className={styles.issueIcon}>↳</span><div><strong>“váy đi tiệc cưới biển”</strong><small>142 searches · 0 products matched</small></div><span className={styles.issueTag}>Catalog gap</span></div>
-              <div className={styles.issueRow}><span className={styles.issueIcon}>↳</span><div><strong>“giày chạy ultra boost”</strong><small>96 searches · low click-through</small></div><span className={styles.issueTag}>Synonym</span></div>
-              <div className={styles.issueRow}><span className={styles.issueIcon}>↳</span><div><strong>“áo polo form rộng”</strong><small>74 searches · weak ranking</small></div><span className={styles.issueTag}>Re-rank</span></div>
+              <div className={styles.panelHead}><div><span className={styles.eyebrow}>OPPORTUNITIES</span><h2>Queries worth fixing</h2></div><button onClick={() => toast("Opened the list of 27 queries.")}>View all 27 →</button></div>
+              <div className={styles.issueRow}><span className={styles.issueIcon}>!</span><div><strong>&quot;beach wedding dress&quot;</strong><small>142 searches • 0 products matched</small></div><span className={styles.issueTag}>Catalog gap</span></div>
+              <div className={styles.issueRow}><span className={styles.issueIcon}>!</span><div><strong>&quot;ultra boost running shoes&quot;</strong><small>96 searches • low click-through</small></div><span className={styles.issueTag}>Synonym</span></div>
+              <div className={styles.issueRow}><span className={styles.issueIcon}>!</span><div><strong>&quot;relaxed fit polo shirt&quot;</strong><small>74 searches • weak ranking</small></div><span className={styles.issueTag}>Re-rank</span></div>
             </article>
             <aside className={`${styles.panel} ${styles.captureNote}`}>
               <span className={styles.eyebrow}>IMAGE NOTES</span>
-              <h2>Ảnh cần tự chụp</h2>
+              <h2>Screenshots to capture</h2>
               <ol>
-                <li><b>Dashboard:</b> toàn màn hình 1440 × 1000.</li>
-                <li><b>Search lab:</b> crop từ ô query đến 3 kết quả.</li>
-                <li><b>Storefront:</b> chụp trang search thật sau khi bật App Embed.</li>
+                <li><b>Dashboard:</b> full screen at 1440 × 1000.</li>
+                <li><b>Search lab:</b> crop from the query box through the three results.</li>
+                <li><b>Storefront:</b> capture a real search page after enabling the App Embed.</li>
               </ol>
-              <p>Thay các ô “Ảnh SP tự chụp” bằng ảnh sản phẩm thật trước khi quay demo chính thức.</p>
+              <p>Replace the placeholder product images with real product photography before recording the final demo.</p>
             </aside>
           </section>
         </div>
