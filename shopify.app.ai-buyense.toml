@@ -11,6 +11,10 @@ automatically_update_urls_on_dev = true
 [webhooks]
 api_version = "2026-10"
 
+[[webhooks.subscriptions]]
+topics = [ "app_subscriptions/update" ]
+uri = "/webhooks/app/subscriptions_update"
+
 [access_scopes]
 # Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
 scopes = "read_products,read_themes,read_locales,write_app_proxy"
@@ -22,3 +26,8 @@ redirect_urls = [ "https://example.com/api/auth" ]
 url = "/proxy/ai-search"
 subpath = "ai-search"
 prefix = "apps"
+
+[[access.metafields]]
+namespace = "ai_search"
+key = "theme_map"
+access = "public_read"

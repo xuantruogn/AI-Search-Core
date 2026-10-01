@@ -104,15 +104,20 @@ async function exactMatches(args: {
 
 async function canonicalCoverage(shop: string, searchableIds: string[]) {
   if (!searchableIds.length) return true;
-  const rows = await db.aiSearchShopContextTerm.groupBy({
-    by: ["productId"],
+
+  // Avoid Prisma groupBy + a large IN predicate here. On MySQL that path can
+  // intermittently return an empty engine response under concurrent search
+  // load. Read the shop's canonical rows once and compare coverage in memory.
+  const rows = await db.aiSearchShopContextTerm.findMany({
     where: {
       shop,
-      productId: { in: searchableIds },
       kind: "CANONICAL_PRODUCT_TYPE",
     },
+    select: { productId: true },
+    take: 50_000,
   });
-  return rows.length === searchableIds.length;
+  const covered = new Set(rows.map((row) => row.productId));
+  return searchableIds.every((productId) => covered.has(productId));
 }
 async function enrichmentCoverage(shop: string, productIds: string[]) {
   if (!productIds.length) return true;

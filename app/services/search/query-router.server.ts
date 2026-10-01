@@ -18,6 +18,9 @@ export function routeQuery(args: {
   const hasStrongModel = matches.some(
     (match) => match.entry.field === "MODEL" && match.confidence >= 0.99,
   );
+  const hasStrongBrand = matches.some(
+    (match) => match.entry.field === "BRAND" && match.confidence >= 0.9,
+  );
   const hasCanonicalIdentity = matches.some(
     (match) => match.entry.field === "PRODUCT_TYPE",
   );
@@ -33,6 +36,11 @@ export function routeQuery(args: {
       ["ATTRIBUTE", "CONTEXT", "AUDIENCE"].includes(match.entry.field) &&
       match.confidence >= 0.5,
   );
+  const hasSoftSemanticModifier = matches.some(
+    (match) =>
+      ["ATTRIBUTE", "CONTEXT", "AUDIENCE"].includes(match.entry.field) &&
+      match.confidence >= 0.5,
+  );
   const hasStrongStructuredConstraint =
     deterministic.measurements.length > 0 ||
     matches.some(
@@ -43,7 +51,18 @@ export function routeQuery(args: {
     );
   let route: QueryRoute;
 
-  if (hasExactIdentifier || hasStrongModel) {
+  if (
+    hasExactIdentifier ||
+    (
+      hasStrongModel &&
+      (
+        hasIdentitySignal ||
+        hasStrongBrand ||
+        deterministic.measurements.length > 0 ||
+        unresolvedSegments.length === 0
+      )
+    )
+  ) {
     route = "STRUCTURED_ONLY";
     reasons.push(hasExactIdentifier ? "EXACT_IDENTIFIER" : "STRONG_EXACT_MODEL");
   } else if (deterministic.hasComplexRelation || deterministic.hasConflictingConstraints) {
@@ -64,8 +83,20 @@ export function routeQuery(args: {
     route = "LIGHT_LLM";
     reasons.push("BROAD_CATEGORY_CONTEXT_DISCOVERY");
   } else if (unresolvedSegments.length === 0 && hasCanonicalIdentity) {
-    route = matches.length <= 2 ? "STRUCTURED_ONLY" : "CODE_SEMANTIC";
-    reasons.push("DICTIONARY_FULLY_RESOLVED");
+    // A fully resolved product identity can stay structured-only only when the
+    // remaining constraints are closed-world/exact. Ordinary color, material,
+    // style, audience and use-case terms are semantic preferences: they need
+    // vector recall plus typed reranking so nearby catalog concepts are not
+    // collapsed into exact equality.
+    route =
+      matches.length <= 2 && !hasSoftSemanticModifier
+        ? "STRUCTURED_ONLY"
+        : "CODE_SEMANTIC";
+    reasons.push(
+      hasSoftSemanticModifier
+        ? "IDENTITY_WITH_SOFT_SEMANTIC_MODIFIER"
+        : "DICTIONARY_FULLY_RESOLVED",
+    );
   } else if (unresolvedSegments.length === 0 && hasStrongIdentityAlias) {
     route = "CODE_SEMANTIC";
     reasons.push("IDENTITY_ALIAS_RESOLVED");

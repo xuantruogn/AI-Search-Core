@@ -94,6 +94,7 @@ export function shouldPromoteSourceNamedDirectTarget(args: {
   sourceMustTerms: string[];
   rawRoute: QueryPlan["route"];
   groundedIdentityOrCategory: boolean;
+  llmRetrievalMode?: QueryPlan["retrievalMode"];
 }) {
   const sourceNamesExactRequiredConcept = args.sourceMustTerms.some(
     (term) =>
@@ -101,6 +102,7 @@ export function shouldPromoteSourceNamedDirectTarget(args: {
   );
   return (
     args.rawRoute === "FULL_LLM" &&
+    args.llmRetrievalMode === "DIRECT" &&
     sourceNamesExactRequiredConcept &&
     args.groundedIdentityOrCategory
   );
@@ -415,15 +417,18 @@ export function buildQuerySemanticProfile(args: {
         normalizeQueryText(term) === normalizeQueryText(segment.canonicalValue),
       ),
     );
-  // Cross-language named product classes can be source-DIRECT even when
-  // Gemini occasionally labels the translated class as DISCOVERY. Promotion
-  // requires FULL_LLM source resolution plus independent typed grounding.
+  // Cross-language named product classes may be promoted from an unresolved
+  // source query to DIRECT only with three independent signals: the source
+  // explicitly names the required concept, pass 2 grounds it to the catalog,
+  // and the LLM classifies the shopping relation as DIRECT. The LLM is only a
+  // veto/corroboration signal here; it cannot promote an ungrounded query.
   const sourceGroundedDirectTarget =
     shouldPromoteSourceNamedDirectTarget({
       originalQuery: args.originalQuery,
       sourceMustTerms: safeLlm.analysis.semanticSourceMustTerms ?? [],
       rawRoute: args.rawPlan.route,
       groundedIdentityOrCategory: llmDirectIdentity || llmDirectCategory,
+      llmRetrievalMode: safeLlm.analysis.retrievalMode,
     });
   const hasDirectTargetIdentity =
     args.rawPlan.identities.some(
@@ -432,8 +437,11 @@ export function buildQuerySemanticProfile(args: {
         item.confidence >= 0.85,
     ) ||
     args.rawPlan.entities.identifiers.length > 0 ||
-    args.rawPlan.entities.models.some(
-      (item) => item.confidence >= 0.9,
+    (
+      args.rawPlan.retrievalMode === "DIRECT" &&
+      args.rawPlan.entities.models.some(
+        (item) => item.confidence >= 0.9,
+      )
     ) ||
     sourceGroundedDirectTarget;
 

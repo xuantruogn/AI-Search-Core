@@ -24,6 +24,28 @@ const FIELD_PRIORITY: Record<string, number> = {
   ALIAS: 20,
 };
 
+const NESTED_FACT_FIELDS = new Set([
+  "IDENTIFIER",
+  "MODEL",
+  "BRAND",
+  "AUDIENCE",
+  "MEASUREMENT",
+  "ATTRIBUTE",
+  "COMPATIBILITY",
+  "CONTEXT",
+]);
+
+function normalizeUnicodeTokens(value: string) {
+  return value
+    .toLocaleLowerCase("vi-VN")
+    .normalize("NFC")
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .split(" ")
+    .filter(Boolean);
+}
+
 function phraseTokenSpan(queryTokens: string[], phrase: string) {
   const phraseTokens = phrase.split(" ").filter(Boolean);
   if (phraseTokens.length === 0) return null;
@@ -57,6 +79,7 @@ export function matchCatalogTerms(
 ): CatalogTermMatch[] {
   const normalizedQuery = normalizeQueryText(query);
   const queryTokens = normalizedQuery.split(" ").filter(Boolean);
+  const unicodeQueryTokens = normalizeUnicodeTokens(query);
   const matches: CatalogTermMatch[] = [];
   const occupied = new Set<number>();
 
@@ -77,9 +100,62 @@ export function matchCatalogTerms(
   })) {
     const span = phraseTokenSpan(queryTokens, entry.normalized);
     if (!span) continue;
-    if (Array.from({ length: span.end - span.start }, (_, index) => span.start + index)
-      .some((index) => occupied.has(index))) continue;
-    for (let index = span.start; index < span.end; index += 1) occupied.add(index);
+
+    // Do not let diacritic folding turn a foreign-language source token into
+    // an unrelated shop-language catalog term. Examples: Vietnamese
+    // "hạt" -> English "hat", "màn" -> "man", "có" -> brand/vendor "Co".
+    // The translated/LLM pass may still match the catalog term later.
+    const rawUnicodeSpan = unicodeQueryTokens
+      .slice(span.start, span.end)
+      .join(" ");
+    const foldedUnicodeSpan = normalizeQueryText(rawUnicodeSpan);
+    const canonicalUnicode = normalizeUnicodeTokens(entry.canonical).join(" ");
+    const aliasUnicode = (entry.aliases ?? []).map((alias) =>
+      normalizeUnicodeTokens(alias).join(" "),
+    );
+    const sourceLostDiacritics =
+      rawUnicodeSpan &&
+      rawUnicodeSpan !== foldedUnicodeSpan &&
+      foldedUnicodeSpan === entry.normalized;
+    const catalogActuallyUsesSourceSpelling =
+      canonicalUnicode === rawUnicodeSpan ||
+      aliasUnicode.includes(rawUnicodeSpan);
+    if (sourceLostDiacritics && !catalogActuallyUsesSourceSpelling) continue;
+
+    const spanIndexes = Array.from(
+      { length: span.end - span.start },
+      (_, index) => span.start + index,
+    );
+    const overlapsPrimaryMatch = spanIndexes.some((index) => occupied.has(index));
+    const containingProductIdentity = overlapsPrimaryMatch
+      ? matches.find(
+          (match) =>
+            match.entry.field === "PRODUCT_TYPE" &&
+            span.start >= match.start &&
+            span.end <= match.end &&
+            span.end - span.start < match.end - match.start,
+        )
+      : null;
+    const allowNestedFact = Boolean(
+      containingProductIdentity && NESTED_FACT_FIELDS.has(entry.field),
+    );
+
+    if (overlapsPrimaryMatch && !allowNestedFact) continue;
+    if (
+      allowNestedFact &&
+      matches.some(
+        (match) =>
+          match.entry.field === entry.field &&
+          match.start === span.start &&
+          match.end === span.end,
+      )
+    ) {
+      continue;
+    }
+    if (!allowNestedFact) {
+      for (const index of spanIndexes) occupied.add(index);
+    }
+
     const sourceConfidence = Math.max(0, Math.min(entry.confidence ?? 1, 1));
     matches.push({
       text: entry.normalized,

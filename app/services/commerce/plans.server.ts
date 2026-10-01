@@ -151,14 +151,13 @@ export function getDevPlanOverride(): AiSearchPlan | null {
     return null;
   }
 
-  // Billing is intentionally not wired for the local development store yet.
-  // Keep local development usable and deterministic by defaulting to Basic.
-  // Set AI_SEARCH_DEV_PLAN=NONE/PRO/CUSTOM explicitly when another dev state
-  // is required. Production never gets this implicit fallback.
+  // DEV_OVERRIDE is an explicit test mode only. Local development must use
+  // real Shopify Billing unless AI_SEARCH_DEV_PLAN is deliberately set.
+  // Implicitly defaulting every non-production shop to Basic makes local DB
+  // state report ACTIVE/PAID even when Shopify has no subscription, which also
+  // prevents billing reconciliation from exercising the real provider flow.
   if (!value) {
-    return process.env.NODE_ENV === "production"
-      ? null
-      : AI_SEARCH_PLAN.basic;
+    return null;
   }
 
   return normalizePlan(value);

@@ -54,6 +54,16 @@ function buildSemanticQuery(query: string, deterministic: ReturnType<typeof pars
   return value || normalizeQueryText(query);
 }
 
+export function isApostropheSuffixCatalogMatch(
+  query: string,
+  matchText: string,
+) {
+  const token = matchText.trim().toLowerCase();
+  if (!/^[a-z]$/.test(token)) return false;
+  const raw = query.toLowerCase().replace(/’/g, "'");
+  return raw.includes("'" + token);
+}
+
 async function buildUncachedPlan(shop: string, query: string): Promise<QueryPlan> {
   const deterministic = parseDeterministicQuery(query);
   const dictionary = await getShopSearchDictionary(shop);
@@ -61,14 +71,25 @@ async function buildUncachedPlan(shop: string, query: string): Promise<QueryPlan
   const complementaryRelation = isComplementaryRelationQuery(normalizedQuery);
   const complementarySpan = complementaryRelationSpan(normalizedQuery);
   const rawMatches = matchCatalogTerms(query, dictionary)
-    .filter(
-      (match) =>
-        !(
-          deterministic.price &&
-          match.entry.field === "MEASUREMENT" &&
-          /^\d+(?:[.,]\d+)?$/.test(match.text.trim())
-        ),
-    )
+    .filter((match) => {
+      if (
+        deterministic.price &&
+        match.entry.field === "MEASUREMENT" &&
+        /^\d+(?:[.,]\d+)?$/.test(match.text.trim())
+      ) {
+        return false;
+      }
+
+      // Contractions/possessives such as "I'm" and "women's" normalize to
+      // separate one-letter tokens. Never let those apostrophe suffixes become
+      // size, variant, model or other catalog facets. Genuine standalone
+      // single-letter queries such as "shirt M" remain eligible.
+      if (isApostropheSuffixCatalogMatch(query, match.text)) {
+        return false;
+      }
+
+      return true;
+    })
     .map((match) => {
       if (
         match.entry.field === "MODEL" &&

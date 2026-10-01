@@ -349,14 +349,12 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
       if (subscriptionData?.userErrors && subscriptionData.userErrors.length > 0) {
         const errorMsg = subscriptionData.userErrors.map((e: any) => e.message).join(", ");
-        if (errorMsg.includes("public distribution")) {
-          return {
-            success: true,
-            devFallback: true,
-            message: "App currently in Dev/Custom mode. Billing API simulated successfully!",
-          };
-        }
-        return { success: false, message: `Shopify Error: ${errorMsg}` };
+        return {
+          success: false,
+          message: errorMsg.includes("public distribution")
+            ? "Shopify Billing is unavailable for the currently linked app because it does not have Public distribution enabled. Link/run a Public-distribution app configuration, then retry."
+            : `Shopify Error: ${errorMsg}`,
+        };
       }
 
       const createdSubscription = subscriptionData?.appSubscription;
@@ -453,6 +451,13 @@ export default function BillingPage() {
   };
 
   const currentPlanKey = data.entitlement.planLabel?.toUpperCase() || "NONE";
+  const subscribeError =
+    subscribeFetcher.data &&
+    "success" in subscribeFetcher.data &&
+    subscribeFetcher.data.success === false &&
+    "message" in subscribeFetcher.data
+      ? String(subscribeFetcher.data.message)
+      : null;
   const isNonRenewing = data.entitlement.cancellationStatus === "NON_RENEWING";
   const isActive =
     data.entitlement.subscriptionStatus === "ACTIVE" || isNonRenewing;
@@ -869,6 +874,25 @@ export default function BillingPage() {
           </button>
         </div>
       </div>
+
+      {subscribeError && (
+        <div
+          role="alert"
+          style={{
+            maxWidth: 960,
+            margin: "0 auto 20px auto",
+            padding: "12px 14px",
+            borderRadius: 8,
+            border: "1px solid #d72c0d",
+            background: "#fff4f4",
+            color: "#8e1f0b",
+            fontSize: 13,
+            fontWeight: 600,
+          }}
+        >
+          {subscribeError}
+        </div>
+      )}
 
       {/* SECTION 4: PRICING CARDS */}
       <div

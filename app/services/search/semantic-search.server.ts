@@ -9,7 +9,10 @@ import {
 } from "./vector-store.server";
 import { ensureProductCollection } from "./qdrant.server";
 import { rewriteSearchQuery, type QueryRewriteResult } from "./query-rewriter.server";
-import { applyShopContextToQuery } from "./shop-context-index.server";
+import {
+  applyShopContextToQuery,
+  normalizeIdentitySignalTokens,
+} from "./shop-context-index.server";
 
 import db from "../../db.server";
 import { listSearchableIndexedProducts } from "../commerce/indexed-products.server";
@@ -115,6 +118,13 @@ const GENERIC_DISCOVERY_BRANCH_CONTEXT = new Set([
   "product", "products", "goods", "outfit", "outfits", "fashion",
 ]);
 
+const DIRECT_RESIDUAL_STOP_WORDS = new Set([
+  "i", "m", "im", "do", "you", "have", "has", "that", "are", "is", "am",
+  "be", "been", "being", "a", "an", "the", "for", "with", "to", "in", "on",
+  "of", "and", "or", "but", "still", "something", "anything", "looking",
+  "need", "want", "suitable", "enough", "please", "show", "me", "find", "get",
+]);
+
 function normalizeEmbeddingBranch(value: string) {
   return value
     .toLocaleLowerCase("en-US")
@@ -123,6 +133,20 @@ function normalizeEmbeddingBranch(value: string) {
     .replace(/[^\p{L}\p{N}]+/gu, " ")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+const GENERIC_CATALOG_EVIDENCE_TOKENS = new Set([
+  "apparel", "clothing", "fashion", "style", "styles", "gear", "equipment",
+  "accessory", "accessories", "item", "items", "product", "products", "goods",
+  "outfit", "outfits", "wear",
+]);
+
+function isGenericCatalogEvidenceValue(value: string) {
+  const tokens = normalizeEmbeddingBranch(value).split(" ").filter(Boolean);
+  return (
+    tokens.length > 0 &&
+    tokens.every((token) => GENERIC_CATALOG_EVIDENCE_TOKENS.has(token))
+  );
 }
 
 export function buildDiscoveryEmbeddingBranches(
@@ -138,7 +162,7 @@ export function buildDiscoveryEmbeddingBranches(
   const semanticContext = [
     ...(rewrite.analysis.semanticMustTerms ?? []),
     ...rewrite.analysis.requiredAttributes,
-    ...rewrite.analysis.useCases,
+    ...(rewrite.analysis.useCases ?? []),
     ...rewrite.analysis.compatibility,
   ]
     .map((value) => value.replace(/\s+/g, " ").trim())
@@ -194,23 +218,43 @@ export function buildDirectEmbeddingPlan(
   if (!rewrite || retrievalModeOf(rewrite) !== "DIRECT") {
     return { primary: rewrite?.query ?? "", branches: [] as string[] };
   }
-  const identity = [
-    rewrite.analysis.shopLanguageProductType,
-    rewrite.analysis.productType,
-    ...(rewrite.analysis.productTypes ?? []),
-  ].map((value) => value?.replace(/\s+/g, " ").trim()).find(Boolean);
-  const primary = identity || rewrite.planning?.semanticQuery || rewrite.query;
-  const negative = new Set(
-    (rewrite.analysis.negativeTerms ?? []).map(normalizeEmbeddingBranch),
-  );
-  const facets = [
+  const planningContextValues = (rewrite.planning?.resolvedSegments ?? [])
+    .filter((segment) => segment.field === "CONTEXT")
+    .map((segment) => segment.canonicalValue);
+  const rawFacetValues = [
     ...rewrite.analysis.brands,
     ...rewrite.analysis.models,
     ...rewrite.analysis.requiredAttributes,
     ...rewrite.analysis.optionalPreferences,
     ...rewrite.analysis.attributes,
     ...rewrite.analysis.audience,
+    ...(rewrite.analysis.useCases ?? []),
+    ...planningContextValues,
   ]
+    .map((value) => value.replace(/\s+/g, " ").trim())
+    .filter(Boolean);
+  const facetTokens = new Set(
+    rawFacetValues.flatMap((value) => normalizeEmbeddingBranch(value).split(" ").filter(Boolean)),
+  );
+  const identity = [
+    rewrite.analysis.shopLanguageProductType,
+    rewrite.analysis.productType,
+    ...(rewrite.analysis.productTypes ?? []),
+  ]
+    .map((value) => value?.replace(/\s+/g, " ").trim())
+    .filter((value): value is string => Boolean(value))
+    .map((value) => {
+      const identityTokens = normalizeIdentitySignalTokens(value);
+      if (!identityTokens.length) return "";
+      const pruned = identityTokens.filter((token) => !facetTokens.has(token));
+      return (pruned.length > 0 ? pruned : identityTokens).join(" ");
+    })
+    .find(Boolean);
+  const primary = identity || rewrite.planning?.semanticQuery || rewrite.query;
+  const negative = new Set(
+    (rewrite.analysis.negativeTerms ?? []).map(normalizeEmbeddingBranch),
+  );
+  const facets = rawFacetValues
     .map((value) => value.replace(/\s+/g, " ").trim())
     .filter(Boolean)
     .filter((value) => !/\d/.test(value))
@@ -225,11 +269,44 @@ export function buildDirectEmbeddingPlan(
   const facetBranch = facets.length > 0
     ? [primary, ...facets].join(" ; ").slice(0, 260)
     : "";
+
+  const coveredTokens = new Set([
+    ...normalizeEmbeddingBranch(primary).split(" ").filter(Boolean),
+    ...rawFacetValues.flatMap((value) =>
+      normalizeEmbeddingBranch(value).split(" ").filter(Boolean),
+    ),
+  ]);
+  const semanticSource =
+    rewrite.planning?.semanticQuery ||
+    rewrite.query;
+  const residualTokens = normalizeEmbeddingBranch(semanticSource)
+    .split(" ")
+    .filter(Boolean)
+    .filter((token) => token.length > 1)
+    .filter((token) => !coveredTokens.has(token))
+    .filter((token) => !DIRECT_RESIDUAL_STOP_WORDS.has(token));
+  const residual = [...new Set(residualTokens)].join(" ");
+  const residualBranch = residual
+    ? [primary, residual].join(" ; ").slice(0, 260)
+    : "";
+
+  const branches = [facetBranch, residualBranch]
+    .map((value) => value.trim())
+    .filter(Boolean)
+    .filter(
+      (value, index, list) =>
+        normalizeEmbeddingBranch(value) !== normalizeEmbeddingBranch(primary) &&
+        list.findIndex(
+          (candidate) =>
+            normalizeEmbeddingBranch(candidate) ===
+            normalizeEmbeddingBranch(value),
+        ) === index,
+    )
+    .slice(0, 2);
+
   return {
     primary,
-    branches: facetBranch && normalizeEmbeddingBranch(facetBranch) !== normalizeEmbeddingBranch(primary)
-      ? [facetBranch]
-      : [],
+    branches,
   };
 }
 
@@ -1311,6 +1388,10 @@ export async function semanticSearch({
         )
       : retrievalMinimumScore;
 
+  const discoverySourceGroundedIds =
+    retrievalMode === "DISCOVERY"
+      ? (effectiveRewrite?.context?.discoverySourceGroundedProductIds ?? [])
+      : [];
   const discoveryExpansionGroundedIds =
     retrievalMode === "DISCOVERY"
       ? (effectiveRewrite?.context?.discoveryExpansionGroundedProductIds ?? [])
@@ -1326,19 +1407,54 @@ export async function semanticSearch({
     "AUDIENCE",
     "COMPATIBILITY",
   ]);
+  const selectedStrongCatalogEvidence = Boolean(
+    effectiveRewrite?.context?.selectedTerms.some(
+      (term) =>
+        strongContextKinds.has(term.kind) &&
+        term.score >= 12 &&
+        !isGenericCatalogEvidenceValue(term.value) &&
+        !(
+          retrievalMode === "DISCOVERY" &&
+          ["PRODUCT_TYPE", "ALIAS"].includes(term.kind)
+        ),
+    ),
+  );
+  const semanticNeedValues = [
+    ...(effectiveRewrite?.analysis.semanticMustTerms ?? []),
+    ...(effectiveRewrite?.analysis.semanticSourceMustTerms ?? []),
+  ]
+    .map(normalizeEmbeddingBranch)
+    .filter(Boolean);
+  const translatedTaxonomyEvidence = Boolean(
+    retrievalMode === "DISCOVERY" &&
+    effectiveRewrite?.context?.selectedTerms.some((term) => {
+      if (
+        !["CATEGORY", "CANONICAL_PRODUCT_TYPE"].includes(term.kind) ||
+        term.score < 25 ||
+        isGenericCatalogEvidenceValue(term.value)
+      ) {
+        return false;
+      }
+      const value = normalizeEmbeddingBranch(term.value);
+      return semanticNeedValues.some(
+        (need) =>
+          need === value ||
+          (need.length >= 4 && value.length >= 4 &&
+            (need.includes(value) || value.includes(need))),
+      );
+    }),
+  );
+  // DISCOVERY evidence has provenance: source-overlap is strongest; an exact
+  // typed taxonomy match may also ground a translated cross-language need
+  // (e.g. Vietnamese "kính mắt" -> CATEGORY=Eyewear). Expansion-only hits do
+  // not prove the shopper's need exists in the catalog.
   const hasStrongCatalogEvidence =
-    Boolean(
-      effectiveRewrite?.context?.selectedTerms.some(
-        (term) =>
-          strongContextKinds.has(term.kind) &&
-          term.score >= 12 &&
-          !(
-            retrievalMode === "DISCOVERY" &&
-            ["PRODUCT_TYPE", "ALIAS"].includes(term.kind)
-          ),
-      ),
-    ) ||
-    discoveryExpansionGroundedIds.length > 0;
+    retrievalMode === "DISCOVERY"
+      ? discoverySourceGroundedIds.length > 0 || translatedTaxonomyEvidence
+      : selectedStrongCatalogEvidence;
+  const hasBroadExpansionEvidence =
+    retrievalMode === "DISCOVERY" &&
+    discoveryExpansionGroundedIds.length >= 8;
   const discoveryMinRecallResults = readDiscoveryMinRecallResults();
   const effectiveMinimumScore = computeDiscoveryRecallThreshold({
     retrievalMode,
@@ -1358,18 +1474,26 @@ export async function semanticSearch({
       ? configuredTransientNoEvidenceTopScore
       : 0.30;
   const configuredNoEvidenceTopScore = Number.parseFloat(
-    process.env.AI_SEARCH_NO_EVIDENCE_MIN_TOP_SCORE || "0.45",
+    process.env.AI_SEARCH_NO_EVIDENCE_MIN_TOP_SCORE || "0.50",
   );
   const noEvidenceTopScore =
     Number.isFinite(configuredNoEvidenceTopScore) &&
     configuredNoEvidenceTopScore >= 0 && configuredNoEvidenceTopScore <= 1
       ? configuredNoEvidenceTopScore
-      : 0.45;
+      : 0.50;
 
   const transientNoEvidenceThreshold =
     retrievalMode === "COMPLEMENT"
       ? noEvidenceTopScore
       : transientNoEvidenceTopScore;
+  const hasAnyDiscoveryGrounding =
+    hasStrongCatalogEvidence || discoveryExpansionGroundedIds.length > 0;
+  const effectiveNoEvidenceTopScore =
+    retrievalMode === "DISCOVERY" && !hasAnyDiscoveryGrounding
+      ? Math.max(noEvidenceTopScore, 0.53)
+      : hasBroadExpansionEvidence
+        ? Math.min(noEvidenceTopScore, 0.45)
+        : noEvidenceTopScore;
   const weakNoEvidenceVector =
     !hasStrongCatalogEvidence &&
     typeof topVectorScore === "number" &&
@@ -1379,7 +1503,7 @@ export async function semanticSearch({
         (llmStatus === "SUCCESS" || llmStatus === "CACHE_HIT") &&
         effectiveRewrite?.fallbackReason === null &&
         effectiveRewrite?.model !== null &&
-        topVectorScore < noEvidenceTopScore
+        topVectorScore < effectiveNoEvidenceTopScore
       ) ||
       (
         transientLlmFallback &&
@@ -1529,7 +1653,7 @@ export async function semanticSearch({
     noEvidenceGuardTriggered: weakNoEvidenceVector,
     noEvidenceThreshold: transientLlmFallback
       ? transientNoEvidenceThreshold
-      : noEvidenceTopScore,
+      : effectiveNoEvidenceTopScore,
     topVectorScore: typeof topVectorScore === "number" ? topVectorScore : null,
     hasStrongCatalogEvidence,
     candidateCount:

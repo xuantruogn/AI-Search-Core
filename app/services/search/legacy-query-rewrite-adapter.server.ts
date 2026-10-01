@@ -146,7 +146,14 @@ export function mergeLlmRewriteIntoPlan(
       ...llm.analysis,
       productTypes: unique(baseline.analysis.productTypes, llm.analysis.productTypes),
       brands: unique(baseline.analysis.brands, llm.analysis.brands),
-      models: unique(baseline.analysis.models, llm.analysis.models),
+      // A model dictionary hit inside a broad recommendation sentence can be
+      // an ordinary adjective (for example MODEL=Simple). Preserve planner
+      // models automatically only for DIRECT lookup flows; DISCOVERY keeps a
+      // model only when the LLM independently identifies it.
+      models:
+        baseline.planning?.retrievalMode === "DIRECT"
+          ? unique(baseline.analysis.models, llm.analysis.models)
+          : llm.analysis.models,
       identifiers: unique(baseline.analysis.identifiers, llm.analysis.identifiers),
       audience: unique(baseline.analysis.audience, llm.analysis.audience),
       requiredAttributes: unique(baseline.analysis.requiredAttributes, llm.analysis.requiredAttributes),

@@ -64,6 +64,117 @@ assert.deepEqual(
   { primary: "cardigan", branches: ["cardigan ; black"] },
 );
 assert.deepEqual(
+  buildDirectEmbeddingPlan({
+    ...rewrite("DIRECT", "men's grey sneakers"),
+    query: "men's grey sneakers",
+    analysis: {
+      ...rewrite("DIRECT", "men's grey sneakers").analysis,
+      shopLanguageProductType: "men's",
+      productType: "men's",
+      productTypes: ["men's", "Sneakers"],
+      brands: [], models: [], requiredAttributes: [],
+      optionalPreferences: ["Grey"], attributes: ["Grey"],
+      audience: [], negativeTerms: [],
+    },
+  } as QueryRewriteResult),
+  { primary: "sneakers", branches: ["sneakers ; Grey", "sneakers ; men"] },
+);
+assert.deepEqual(
+  buildDirectEmbeddingPlan({
+    ...rewrite("DIRECT", "white women's top"),
+    query: "white women's top",
+    analysis: {
+      ...rewrite("DIRECT", "white women's top").analysis,
+      shopLanguageProductType: "women's top",
+      productType: "women's top",
+      productTypes: ["women's top"],
+      brands: [], models: [], requiredAttributes: [],
+      optionalPreferences: ["White"], attributes: ["White"],
+      audience: ["women"], negativeTerms: [],
+    },
+  } as QueryRewriteResult),
+  { primary: "top", branches: ["top ; White ; women"] },
+);
+assert.deepEqual(
+  buildDirectEmbeddingPlan({
+    ...rewrite("DIRECT", "leather jacket"),
+    query: "leather jacket",
+    analysis: {
+      ...rewrite("DIRECT", "leather jacket").analysis,
+      shopLanguageProductType: "leather jacket",
+      productType: "leather jacket",
+      productTypes: ["leather jacket"],
+      brands: [], models: [], requiredAttributes: [],
+      optionalPreferences: ["leather"], attributes: ["leather"],
+      audience: [], negativeTerms: [],
+    },
+  } as QueryRewriteResult),
+  { primary: "jacket", branches: ["jacket ; leather"] },
+);
+const commutingBag = {
+  ...rewrite("DIRECT", "a bag suitable for daily commuting"),
+  query: "a bag suitable for daily commuting",
+  planning: {
+    route: "VECTOR_SEMANTIC",
+    retrievalMode: "DIRECT",
+    semanticQuery: "a bag suitable for daily commuting",
+    semanticResolution: "VECTOR",
+    semanticResolutionConfidence: 1,
+    resolvedSegments: [
+      { field: "PRODUCT_TYPE", text: "bag", canonicalValue: "bag", confidence: 1 },
+      { field: "CONTEXT", text: "daily commuting", canonicalValue: "daily commuting", confidence: 0.72 },
+    ],
+    unresolvedSegments: ["suitable"],
+  },
+  analysis: {
+    ...rewrite("DIRECT", "a bag suitable for daily commuting").analysis,
+    shopLanguageProductType: "bag",
+    productType: "bag",
+    productTypes: ["bag"],
+    brands: [], models: [], requiredAttributes: [],
+    optionalPreferences: [], attributes: [], audience: [],
+    useCases: [], negativeTerms: [],
+  },
+} as QueryRewriteResult;
+assert.deepEqual(
+  buildDirectEmbeddingPlan(commutingBag),
+  { primary: "bag", branches: ["bag ; daily commuting"] },
+);
+
+const allDayShoes = {
+  ...rewrite("DIRECT", "Do you have shoes that are comfortable enough to walk in all day?"),
+  query: "Do you have shoes that are comfortable enough to walk in all day?",
+  planning: {
+    route: "VECTOR_SEMANTIC",
+    retrievalMode: "DIRECT",
+    semanticQuery: "Do you have shoes that are comfortable enough to walk in all day?",
+    semanticResolution: "VECTOR",
+    semanticResolutionConfidence: 1,
+    resolvedSegments: [
+      { field: "PRODUCT_TYPE", text: "shoes", canonicalValue: "Shoes", confidence: 0.86 },
+      { field: "ATTRIBUTE", text: "comfortable", canonicalValue: "Comfortable", confidence: 1 },
+    ],
+    unresolvedSegments: ["walk in all day"],
+  },
+  analysis: {
+    ...rewrite("DIRECT", "shoes").analysis,
+    shopLanguageProductType: "Shoes",
+    productType: "Shoes",
+    productTypes: ["Shoes"],
+    brands: [], models: [], requiredAttributes: [],
+    optionalPreferences: ["Comfortable"], attributes: ["Comfortable"],
+    audience: [], useCases: [], negativeTerms: [],
+  },
+} as QueryRewriteResult;
+assert.deepEqual(
+  buildDirectEmbeddingPlan(allDayShoes),
+  {
+    primary: "shoes",
+    branches: ["shoes ; Comfortable", "shoes ; walk all day"],
+  },
+);
+
+assert.deepEqual(
   buildDiscoveryEmbeddingBranches(winterDiscoveryRewrite),
   [
     "winter coat",
@@ -244,18 +355,21 @@ assert.equal(shouldPromoteSourceNamedDirectTarget({
   sourceMustTerms: ["kính mắt"],
   rawRoute: "FULL_LLM",
   groundedIdentityOrCategory: true,
+  llmRetrievalMode: "DIRECT",
 }), true);
 assert.equal(shouldPromoteSourceNamedDirectTarget({
   originalQuery: "I need something that keeps my feet comfortable all day",
   sourceMustTerms: ["comfortable footwear", "all-day wear"],
   rawRoute: "LIGHT_LLM",
   groundedIdentityOrCategory: true,
+  llmRetrievalMode: "DISCOVERY",
 }), false);
 assert.equal(shouldPromoteSourceNamedDirectTarget({
   originalQuery: "đồ gia dụng",
   sourceMustTerms: ["đồ gia dụng"],
   rawRoute: "FULL_LLM",
-  groundedIdentityOrCategory: false,
+  groundedIdentityOrCategory: true,
+  llmRetrievalMode: "DISCOVERY",
 }), false);
 
 const complementRawPlan = {

@@ -1,3 +1,4 @@
+import db from "../app/db.server";
 import { prepareParallelQueryPipeline } from "../app/services/search/parallel-query-pipeline.server";
 import { retrieveStructuredCandidates } from "../app/services/search/structured-candidate-retrieval.server";
 import { semanticSearch, type SemanticSearchDiagnostics } from "../app/services/search/semantic-search.server";
@@ -8,6 +9,13 @@ const shop = process.env.AI_SEARCH_REGRESSION_SHOP || "dev-app-6fvh2isn.myshopif
 const cases = [
   ["DIRECT", "waterproof jacket"],
   ["DIRECT", "blue dress"],
+  ["DIRECT", "black cardigan"],
+  ["DIRECT", "only black cardigan"],
+  ["DIRECT", "cardigan not black"],
+  ["DIRECT", "leather jacket"],
+  ["DIRECT", "jacket not leather"],
+  ["DIRECT", "700x35C tire"],
+  ["DIRECT", "Shimano Dura-Ace crankset"],
   ["DIRECT", "kính mắt"],
   ["DISCOVERY", "đồ gia dụng"],
   ["DISCOVERY", "What can I wear on a rainy day?"],
@@ -21,7 +29,7 @@ const cases = [
   ["DIRECT", "white women's top"],
   ["DIRECT", "navy coat for women"],
   ["DISCOVERY", "something useful for hiking"],
-  ["DISCOVERY", "a bag for commuting to work"],
+  ["DIRECT", "a bag for commuting to work"],
   ["DISCOVERY", "something to wear in warm weather"],
   ["DISCOVERY", "a gift for someone who loves jewelry"],
   ["COMPLEMENT", "what goes well with a navy coat"],
@@ -32,6 +40,26 @@ const settings = await getShopSettings(shop);
 const originalLog = console.log;
 const reports: unknown[] = [];
 const failures: string[] = [];
+const expectedTopFacetByQuery = new Map<string, string>([
+  ["blue dress", "blue"],
+  ["black cardigan", "black"],
+  ["men's grey sneakers", "grey"],
+  ["white women's top", "white"],
+]);
+async function topProductHasFacetToken(productId: string, facet: string) {
+  const rows = await db.aiSearchShopContextTerm.findMany({
+    where: {
+      shop,
+      productId,
+      kind: { in: ["ATTRIBUTE", "VARIANT_OPTION"] },
+    },
+    select: { normalizedValue: true },
+  });
+  const token = facet.trim().toLowerCase();
+  return rows.some((row) =>
+    ` ${row.normalizedValue.toLowerCase()} `.includes(` ${token} `),
+  );
+}
 for (const [group, query] of cases.filter(([, query]) =>
   !process.env.AI_SEARCH_REGRESSION_FILTER ||
   query.toLowerCase().includes(process.env.AI_SEARCH_REGRESSION_FILTER.toLowerCase()),
@@ -69,8 +97,20 @@ for (const [group, query] of cases.filter(([, query]) =>
       results: [...merged.values()].sort((a, b) => b.score - a.score),
       onDiagnostics(value) { filterDiagnostics = value; },
     });
-    if (plan.retrievalMode !== group) {
+    if (!rewrite.fallbackReason && plan.retrievalMode !== group) {
       failures.push(`${query}: expected mode ${group}, got ${plan.retrievalMode}`);
+    }
+    if (
+      ["blue dress", "black cardigan", "leather jacket", "white women's top"].includes(query) &&
+      plan.route === "STRUCTURED_ONLY"
+    ) {
+      failures.push(`${query}: soft semantic facet bypassed vector recall`);
+    }
+    if (
+      ["700x35C tire", "Shimano Dura-Ace crankset"].includes(query) &&
+      plan.route !== "STRUCTURED_ONLY"
+    ) {
+      failures.push(`${query}: exact commerce constraint left structured-only lane`);
     }
     if (group !== "COMPLEMENT" && (rewrite.analysis.referenceTerms ?? []).length > 0) {
       failures.push(`${query}: unexpected reference terms`);
@@ -101,12 +141,27 @@ for (const [group, query] of cases.filter(([, query]) =>
         /maintenance|protecting footwear|variety of footwear/i.test(contextual.query)) {
       failures.push(`${query}: context drift in embedding input`);
     }
+    const expectedTopFacet = expectedTopFacetByQuery.get(query);
+    if (expectedTopFacet) {
+      if (!final[0]) {
+        failures.push(`${query}: no top result available for preferred facet check`);
+      } else if (!(await topProductHasFacetToken(final[0].productId, expectedTopFacet))) {
+        failures.push(
+          `${query}: top result did not preserve preferred facet ${expectedTopFacet}`,
+        );
+      }
+    }
     reports.push({
       query, mode: plan.retrievalMode, route: plan.route,
       semanticQuery: rewrite.planning?.semanticQuery ?? rewrite.query,
+      productType: rewrite.analysis.productType,
+      productTypes: rewrite.analysis.productTypes,
+      shopLanguageProductType: rewrite.analysis.shopLanguageProductType,
       embeddingInput: contextual.query,
       selectedContext: contextual.context.selectedTerms.map(({ kind, value }) => ({ kind, value })),
       strongCatalogEvidence: semanticDiagnostics?.hasStrongCatalogEvidence ?? null,
+      primaryEmbeddingInput: semanticDiagnostics?.primaryEmbeddingInput ?? null,
+      semanticFacetBranches: semanticDiagnostics?.semanticFacetBranches ?? [],
       topVectorScore: semanticDiagnostics?.topVectorScore ?? null,
       threshold: semanticDiagnostics?.noEvidenceThreshold ?? null,
       noEvidenceGuard: semanticDiagnostics?.noEvidenceGuardTriggered ?? null,
@@ -124,9 +179,14 @@ if (process.argv.includes("--compact")) {
   for (const item of reports as Array<Record<string, any>>) {
     console.log(JSON.stringify({
       query: item.query, mode: item.mode, route: item.route,
-      semanticQuery: item.semanticQuery, embeddingInput: item.embeddingInput,
+      semanticQuery: item.semanticQuery,
+      productType: item.productType, productTypes: item.productTypes,
+      shopLanguageProductType: item.shopLanguageProductType,
+      embeddingInput: item.embeddingInput,
       selectedContext: item.selectedContext?.map((term: { value: string }) => term.value),
       strongCatalogEvidence: item.strongCatalogEvidence,
+      primaryEmbeddingInput: item.primaryEmbeddingInput,
+      semanticFacetBranches: item.semanticFacetBranches,
       topVectorScore: item.topVectorScore, threshold: item.threshold,
       noEvidenceGuard: item.noEvidenceGuard, finalProof: item.finalProof,
       candidateCount: item.candidateCount, finalCount: item.finalCount,
@@ -142,3 +202,4 @@ if (process.argv.includes("--compact")) {
 } else {
   console.log(JSON.stringify({ failures, reports }, null, 2));
 }
+await db.$disconnect();

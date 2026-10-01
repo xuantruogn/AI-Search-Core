@@ -102,5 +102,231 @@ const exactEntity = await filterResultsByExplicitGender({
   results: exactEntityCandidates.map((item) => ({ ...item, score: 0.6 })),
 });
 assert.deepEqual(exactEntity, [], "exact brand/model must not degrade to a similar competitor");
-console.log(JSON.stringify({ ordinary, strict, excluded, vietnameseExcluded: vietnameseExcluded.map((item) => item.handle), exactTire: exactTire.map((item) => item.handle), exactEntity }));
+
+const discoveryFixtures = await db.aiSearchIndexedProduct.findMany({
+  where: {
+    shop,
+    handle: { in: ["comfortable-jogger-pants", "business-jacket"] },
+  },
+  select: { productId: true, handle: true, title: true },
+});
+assert.equal(discoveryFixtures.length, 2, "discovery context fixtures unavailable");
+const business = discoveryFixtures.find((item) => item.handle === "business-jacket")!;
+const jogger = discoveryFixtures.find((item) => item.handle === "comfortable-jogger-pants")!;
+const discoveryBase = rewrite("");
+const officeDiscovery = await filterResultsByExplicitGender({
+  shop,
+  originalQuery: "comfortable office apparel",
+  rewrite: {
+    ...discoveryBase,
+    query: "comfortable office apparel",
+    planning: {
+      ...discoveryBase.planning!,
+      route: "LIGHT_LLM",
+      retrievalMode: "DISCOVERY",
+      semanticQuery: "comfortable office apparel",
+      resolvedSegments: [],
+      unresolvedSegments: ["office"],
+    },
+    analysis: {
+      ...discoveryBase.analysis,
+      retrievalMode: "DISCOVERY",
+      productType: "",
+      productTypes: [],
+      attributes: [],
+      optionalPreferences: ["Comfortable"],
+      semanticMustTerms: ["office", "comfortable"],
+      semanticSourceMustTerms: ["office", "comfortable"],
+    },
+    context: {
+      selectedTerms: [],
+      loadMs: 0,
+      filterMs: 0,
+      totalMs: 0,
+      cacheStatus: "HIT",
+      dbReadMs: 0,
+      aggregateCodeMs: 0,
+      signalBuildCodeMs: 0,
+      scoreCodeMs: 0,
+      sortSelectCodeMs: 0,
+      composeCodeMs: 0,
+      discoverySourceGroundedProductIds: [business.productId],
+      discoveryExpansionGroundedProductIds: [business.productId, jogger.productId],
+    },
+  },
+  // Give the generic comfortable product a much higher vector score. Direct
+  // shopper context must still lead in DISCOVERY without hard-filtering recall.
+  results: [
+    { ...jogger, score: 0.9 },
+    { ...business, score: 0.5 },
+  ],
+});
+assert.equal(
+  officeDiscovery[0]?.handle,
+  "business-jacket",
+  "source-grounded discovery context must outrank expansion-only similarity",
+);
+assert.equal(officeDiscovery.length, 2, "discovery context tier must remain soft");
+
+// DISCOVERY must rank fulfillment of the semantic need ahead of a generic
+// source-overlap tier. A phone mount may mention "phone", but a power bank
+// actually satisfies "portable charger".
+const chargerFixtures = await db.aiSearchIndexedProduct.findMany({
+  where: {
+    shop,
+    handle: { in: ["kodiak-mini-usb-power-bank", "quad-lock-iphone-mount"] },
+  },
+  select: { productId: true, handle: true, title: true },
+});
+assert.equal(chargerFixtures.length, 2, "charger discovery fixtures unavailable");
+const powerBank = chargerFixtures.find((item) => item.handle === "kodiak-mini-usb-power-bank")!;
+const phoneMount = chargerFixtures.find((item) => item.handle === "quad-lock-iphone-mount")!;
+const chargerBase = rewrite("");
+const chargerDiscovery = await filterResultsByExplicitGender({
+  shop,
+  originalQuery: "portable phone charger",
+  rewrite: {
+    ...chargerBase,
+    query: "portable phone charger",
+    planning: {
+      ...chargerBase.planning!,
+      route: "LIGHT_LLM",
+      retrievalMode: "DISCOVERY",
+      semanticQuery: "portable phone charger",
+      resolvedSegments: [],
+      unresolvedSegments: ["portable phone charger"],
+    },
+    analysis: {
+      ...chargerBase.analysis,
+      retrievalMode: "DISCOVERY",
+      productType: "",
+      productTypes: [],
+      attributes: [],
+      optionalPreferences: [],
+      semanticMustTerms: ["portable charger"],
+      semanticSourceMustTerms: ["portable charger"],
+    },
+    context: {
+      selectedTerms: [],
+      loadMs: 0, filterMs: 0, totalMs: 0, cacheStatus: "HIT",
+      dbReadMs: 0, aggregateCodeMs: 0, signalBuildCodeMs: 0,
+      scoreCodeMs: 0, sortSelectCodeMs: 0, composeCodeMs: 0,
+      discoverySourceGroundedProductIds: [phoneMount.productId],
+      discoveryExpansionGroundedProductIds: [powerBank.productId],
+    },
+  },
+  results: [
+    { ...phoneMount, score: 0.9 },
+    { ...powerBank, score: 0.5 },
+  ],
+});
+assert.equal(
+  chargerDiscovery[0]?.handle,
+  "kodiak-mini-usb-power-bank",
+  "semantic need coverage must outrank generic source overlap in DISCOVERY",
+);
+
+// A versioned named entity is closed-world once the catalog proves the entity
+// family exists. Never degrade iPhone 15 Pro Max into iPhone 18 accessories.
+const iphoneFixtures = await db.aiSearchIndexedProduct.findMany({
+  where: {
+    shop,
+    handle: {
+      in: [
+        "seashell-coastal-crustaceans-iphone-18-pro-case",
+        "quad-lock-iphone-mount",
+      ],
+    },
+  },
+  select: { productId: true, handle: true, title: true },
+});
+assert.equal(iphoneFixtures.length, 2, "versioned entity fixtures unavailable");
+const iphoneBase = rewrite("");
+const exactVersionedEntity = await filterResultsByExplicitGender({
+  shop,
+  originalQuery: "iphone 15 pro max",
+  rewrite: {
+    ...iphoneBase,
+    query: "iphone 15 pro max smartphone",
+    planning: {
+      ...iphoneBase.planning!,
+      route: "LIGHT_LLM",
+      retrievalMode: "DISCOVERY",
+      semanticQuery: "iphone 15 pro max smartphone",
+      resolvedSegments: [],
+      unresolvedSegments: ["iphone 15 pro max"],
+    },
+    analysis: {
+      ...iphoneBase.analysis,
+      retrievalMode: "DISCOVERY",
+      productType: "",
+      productTypes: [],
+      attributes: [],
+      optionalPreferences: [],
+      semanticMustTerms: ["iphone 15 pro max"],
+      semanticSourceMustTerms: ["iphone 15 pro max"],
+    },
+    context: {
+      selectedTerms: [
+        { kind: "COMPATIBILITY", value: "iPhone 18 Pro", score: 40, productCount: 3 },
+      ],
+      loadMs: 0, filterMs: 0, totalMs: 0, cacheStatus: "HIT",
+      dbReadMs: 0, aggregateCodeMs: 0, signalBuildCodeMs: 0,
+      scoreCodeMs: 0, sortSelectCodeMs: 0, composeCodeMs: 0,
+      discoverySourceGroundedProductIds: [],
+      discoveryExpansionGroundedProductIds: [],
+    },
+  },
+  results: iphoneFixtures.map((item) => ({ ...item, score: 0.8 })),
+});
+assert.deepEqual(
+  exactVersionedEntity,
+  [],
+  "versioned entity must not degrade to another version in the same family",
+);
+
+// Accent folding in source text must not invent a gender constraint: Vietnamese
+// "màn" is not English "man".
+const accentGenderCollision = await filterResultsByExplicitGender({
+  shop,
+  originalQuery: "vải màn che mắt",
+  rewrite: {
+    ...discoveryBase,
+    query: "veil fabric",
+    planning: {
+      ...discoveryBase.planning!,
+      route: "FULL_LLM",
+      retrievalMode: "DISCOVERY",
+      semanticQuery: "veil fabric",
+      resolvedSegments: [],
+      unresolvedSegments: ["veil fabric"],
+    },
+    analysis: {
+      ...discoveryBase.analysis,
+      retrievalMode: "DISCOVERY",
+      productType: "",
+      productTypes: [],
+      attributes: [],
+      audience: [],
+      semanticMustTerms: ["veil fabric"],
+      semanticSourceMustTerms: ["vải màn che mắt"],
+    },
+  },
+  results: candidates,
+});
+assert.equal(
+  accentGenderCollision.length,
+  candidates.length,
+  "Vietnamese màn must not be interpreted as male/man",
+);
+
+console.log(JSON.stringify({
+  ordinary,
+  strict,
+  excluded,
+  vietnameseExcluded: vietnameseExcluded.map((item) => item.handle),
+  exactTire: exactTire.map((item) => item.handle),
+  exactEntity,
+  officeDiscovery: officeDiscovery.map((item) => item.handle),
+}));
 await db.$disconnect();

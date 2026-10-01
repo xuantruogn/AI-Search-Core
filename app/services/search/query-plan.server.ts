@@ -1,5 +1,5 @@
 export const QUERY_PARSER_VERSION = "deterministic-v5-facet-strength";
-export const QUERY_ROUTER_VERSION = "coverage-router-v8-broad-category-discovery";
+export const QUERY_ROUTER_VERSION = "coverage-router-v11-multilingual-source-safety";
 
 export type QueryRoute =
   | "STRUCTURED_ONLY"

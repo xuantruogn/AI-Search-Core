@@ -70,10 +70,11 @@ function wantedTerms(plan: QueryPlan): WantedTerm[] {
 }
 
 export function hasStructuredAnchor(plan: QueryPlan) {
-  return wantedTerms(plan).some(({ kind, constraint }) =>
-    constraint.mode !== "MUST_NOT" &&
-    ["IDENTIFIER", "MODEL", "PRODUCT_TYPE", "BRAND"].includes(kind),
-  );
+  // Exact measurements and explicit compatibility are valid retrieval
+  // anchors too. A SHOULD color/style remains non-anchoring, but a MUST
+  // 700x35C/65W/128GB or exact fitment must be able to seed candidates even
+  // when a merchant taxonomy labels the product noun as a generic ATTRIBUTE.
+  return wantedTerms(plan).some(isRetrievalAnchor);
 }
 
 function rowMatchesWantedKind(rowKind: string, term: WantedTerm) {

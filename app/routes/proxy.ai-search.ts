@@ -85,7 +85,7 @@ const queryEmbeddingCache = new Map<
   { embedding: number[]; timestamp: number }
 >();
 const EMBEDDING_CACHE_TTL = 24 * 60 * 60 * 1000;
-const EMBEDDING_QUERY_PIPELINE_VERSION = "semantic-expansion-v7-facet-branches";
+const EMBEDDING_QUERY_PIPELINE_VERSION = "semantic-expansion-v10-evidence-provenance";
 
 const SEARCH_CACHE_IGNORED_PARAMS = new Set([
   "q",
