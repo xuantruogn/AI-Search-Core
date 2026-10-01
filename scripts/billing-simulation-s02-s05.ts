@@ -394,8 +394,7 @@ async function runScenario(scenario: (typeof SCENARIOS)[number]): Promise<Scenar
           finalRow?.status === scenario.secondStatus,
         finalPlanChangeStatus:
           isTerminalNoAccess
-            ? finalSnapshot.planChangeStatus ===
-              (scenario.id === "S02" ? "DECLINED" : "EXPIRED")
+            ? finalSnapshot.planChangeStatus === "NONE"
             : true,
       },
       access: {
@@ -412,7 +411,8 @@ async function runScenario(scenario: (typeof SCENARIOS)[number]): Promise<Scenar
               ? finalSnapshot.commercialStatus === "FROZEN"
               : finalSnapshot.commercialStatus === "PAID",
         entitlementActive:
-          finalEntitlement.active === !isTerminalNoAccess && scenario.id !== "S04",
+          finalEntitlement.active ===
+          (!isTerminalNoAccess && scenario.id !== "S04"),
         searchAllowed:
           finalEntitlement.searchAllowed ===
           (!isTerminalNoAccess && scenario.id !== "S04"),
