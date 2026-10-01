@@ -1,10 +1,6 @@
 import db from "../../db.server";
 import { deleteShopLeaseLocks } from "./lease-lock.server";
-import {
-  AI_SEARCH_PLAN,
-  getDevPlanOverride,
-  hasExplicitDevPlanOverride,
-} from "./plans.server";
+import { AI_SEARCH_PLAN } from "./plans.server";
 import type {
   ShopSettingsSnapshot,
   SubscriptionSnapshot,
@@ -254,57 +250,7 @@ export async function ensureShopRecord({
     `;
   }
 
-  const devPlan = getDevPlanOverride();
 
-  if (devPlan) {
-    const explicitOverride = hasExplicitDevPlanOverride();
-    const devStatus = devPlan === AI_SEARCH_PLAN.none ? "INACTIVE" : "ACTIVE";
-
-    if (explicitOverride) {
-      await db.$executeRaw`
-        UPDATE \`AiSearchSubscription\`
-        SET
-          \`plan\` = ${devPlan},
-          \`status\` = ${devStatus},
-          \`source\` = 'DEV_OVERRIDE',
-          \`lastSyncedAt\` = UTC_TIMESTAMP(3),
-          \`updatedAt\` = UTC_TIMESTAMP(3)
-        WHERE
-          \`shop\` = ${cleanShop}
-          AND (
-            \`plan\` <> ${devPlan}
-            OR \`status\` <> ${devStatus}
-            OR \`source\` <> 'DEV_OVERRIDE'
-          )
-          AND EXISTS (
-            SELECT 1 FROM \`AiSearchShop\`
-            WHERE \`shop\` = ${cleanShop} AND \`status\` = 'ACTIVE'
-          )
-      `;
-    } else {
-      await db.$executeRaw`
-        UPDATE \`AiSearchSubscription\`
-        SET
-          \`plan\` = ${devPlan},
-          \`status\` = ${devStatus},
-          \`source\` = 'DEV_OVERRIDE',
-          \`lastSyncedAt\` = UTC_TIMESTAMP(3),
-          \`updatedAt\` = UTC_TIMESTAMP(3)
-        WHERE
-          \`shop\` = ${cleanShop}
-          AND \`source\` IN ('LOCAL', 'DEV_OVERRIDE')
-          AND (
-            \`plan\` <> ${devPlan}
-            OR \`status\` <> ${devStatus}
-            OR \`source\` <> 'DEV_OVERRIDE'
-          )
-          AND EXISTS (
-            SELECT 1 FROM \`AiSearchShop\`
-            WHERE \`shop\` = ${cleanShop} AND \`status\` = 'ACTIVE'
-          )
-      `;
-    }
-  }
 }
 
 export async function ensureShopFromAdmin({
