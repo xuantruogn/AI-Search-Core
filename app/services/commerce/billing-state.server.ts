@@ -28,7 +28,6 @@ export type {
 import type { SubscriptionSnapshot } from "./types.server";
 import {
   AI_SEARCH_PLAN,
-  getDevPlanOverride,
   PLAN_DEFINITIONS,
   type AiSearchPlan,
   type PlanLimits,
@@ -305,20 +304,6 @@ export async function ensureBillingV2State(shop: string) {
 
   const legacy = await readLegacySubscription(shop);
 
-  const devPlanOverride = getDevPlanOverride();
-
-  // Local development currently uses the dev-plan bypass instead of Shopify
-  // Billing. getDevPlanOverride() also supplies the local Basic default, so a
-  // DEV_OVERRIDE row remains authoritative even when Shopify CLI does not
-  // propagate AI_SEARCH_DEV_PLAN from .env into the child server process.
-  if (devPlanOverride !== null && legacy?.source === "DEV_OVERRIDE") {
-    return {
-      subscription: null,
-      legacy,
-      devOverride: true,
-    } as const;
-  }
-
   // Current entitlement is anchored by AiSearchShop.currentSubscriptionGid.
   // A newly-created PENDING subscription must never displace the currently
   // active/frozen entitlement merely because it has a newer updatedAt.
@@ -395,18 +380,13 @@ export async function ensureBillingV2State(shop: string) {
     });
   }
 
-  if (
-      !subscription &&
-      legacy &&
-      legacy.source !== "DEV_OVERRIDE"
-    ) {
-      subscription = await migrateLegacySubscription(legacy);
-    }
+  if (!subscription && legacy) {
+    subscription = await migrateLegacySubscription(legacy);
+  }
 
   return {
     subscription,
     legacy,
-    devOverride: false,
   } as const;
 }
 
@@ -414,48 +394,6 @@ export async function getBillingSubscriptionSnapshot(
   shop: string,
 ): Promise<SubscriptionSnapshot> {
   const state = await ensureBillingV2State(shop);
-
-  if (state.devOverride && state.legacy) {
-  const devPlan = getDevPlanOverride();
-
-  const plan =
-    devPlan ??
-    (state.legacy.plan === AI_SEARCH_PLAN.basic
-      ? AI_SEARCH_PLAN.basic
-      : state.legacy.plan === AI_SEARCH_PLAN.pro
-        ? AI_SEARCH_PLAN.pro
-        : AI_SEARCH_PLAN.none);
-
-  return {
-    shop: state.legacy.shop,
-    plan,
-    planId: null,
-    planLabel:
-      PLAN_DEFINITIONS[plan]?.label ?? PLAN_DEFINITIONS.NONE.label,
-    limits:
-      PLAN_DEFINITIONS[plan]?.limits ?? PLAN_DEFINITIONS.NONE.limits,
-    status: state.legacy.status,
-    planHandle: state.legacy.planHandle,
-    shopifySubscriptionId: state.legacy.shopifySubscriptionId,
-    billingPeriodStart: state.legacy.billingPeriodStart,
-    billingPeriodEnd: state.legacy.billingPeriodEnd,
-    billingInterval: null,
-    commercialStatus: getCommercialStatus(state.legacy.status, "NONE"),
-    trialStatus: "NONE",
-    trialStartsAt: null,
-    trialEndsAt: null,
-    cancellationStatus: "NONE",
-    planChangeStatus: "NONE",
-    chargeStatus: "NONE",
-    paymentStatus: "NONE",
-    refundStatus: "NONE",
-    accessStatus: getAccessStatus(state.legacy.status, plan),
-    reconciliationStatus: "SYNCED",
-    reconciliationReason: null,
-    source: state.legacy.source,
-    lastSyncedAt: state.legacy.lastSyncedAt,
-  };
-}
 
   const subscription = state.subscription;
 
