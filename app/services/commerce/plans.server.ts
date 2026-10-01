@@ -127,39 +127,3 @@ export function planFromHandle(
   return AI_SEARCH_PLAN.none;
 }
 
-export function hasExplicitDevPlanOverride() {
-  return Boolean(process.env.AI_SEARCH_DEV_PLAN?.trim());
-}
-
-
-export function getDevPlanOverride(): AiSearchPlan | null {
-
-  if (process.env.AI_SEARCH_BILLING_DEBUG === "true") {
-    console.log(
-      "[BILLING DEBUG] AI_SEARCH_DEV_PLAN =",
-      process.env.AI_SEARCH_DEV_PLAN,
-      "NODE_ENV =",
-      process.env.NODE_ENV,
-    );
-  }
-
-  const value = process.env.AI_SEARCH_DEV_PLAN?.trim();
-  const allowInProduction =
-    process.env.AI_SEARCH_ALLOW_PLAN_OVERRIDE === "true";
-
-  if (process.env.NODE_ENV === "production" && !allowInProduction) {
-    return null;
-  }
-
-  // Billing is intentionally not wired for the local development store yet.
-  // Keep local development usable and deterministic by defaulting to Basic.
-  // Set AI_SEARCH_DEV_PLAN=NONE/PRO/CUSTOM explicitly when another dev state
-  // is required. Production never gets this implicit fallback.
-  if (!value) {
-    return process.env.NODE_ENV === "production"
-      ? null
-      : AI_SEARCH_PLAN.basic;
-  }
-
-  return normalizePlan(value);
-}
