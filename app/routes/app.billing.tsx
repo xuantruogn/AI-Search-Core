@@ -713,7 +713,16 @@ export default function BillingPage() {
                     disabled={isNonRenewing}
                     onChange={(event) => {
                       if (!event.target.checked || cancelFetcher.state !== "idle") return;
-                      event.currentTarget.form?.requestSubmit();
+
+                      const confirmed = window.confirm(
+                        `Are you sure you want to turn off automatic renewal? Your current \${data.entitlement.planLabel} plan will remain active until \${data.subscription.formattedPeriodEnd ?? "the end of the current billing period"}, then it will end and will not renew automatically.`,
+                      );
+
+                      if (confirmed) {
+                        event.currentTarget.form?.requestSubmit();
+                      } else {
+                        event.currentTarget.checked = false;
+                      }
                     }}
                   />
                   <span>
