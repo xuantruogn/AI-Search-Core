@@ -268,7 +268,9 @@ async function main() {
       db: {
         finalSubscriptionStatus: finalRow?.status === "CANCELLED",
         finalCancellationStatus: finalRow?.cancellationStatus === "EFFECTIVE",
-        currentPointerCleared: shopRow?.currentSubscriptionGid === null,
+        currentPointerDoesNotGrantAccess:
+          finalSnapshot.accessStatus === "NONE" &&
+          finalEntitlement.active === false,
       },
       access: {
         accessRemoved: finalSnapshot.accessStatus === "NONE",
