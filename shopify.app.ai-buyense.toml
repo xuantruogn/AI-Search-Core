@@ -2,11 +2,12 @@
 
 client_id = "922fd6e00a765659ee8b56ac583cf542"
 name = "AI-Buyense"
-application_url = "https://example.com"
+application_url = "https://buysenseshopify.com"
 embedded = true
 
 [build]
 automatically_update_urls_on_dev = true
+include_config_on_deploy = true
 
 [webhooks]
 api_version = "2026-10"
@@ -20,7 +21,7 @@ uri = "/webhooks/app/subscriptions_update"
 scopes = "read_products,read_themes,read_locales,write_app_proxy"
 
 [auth]
-redirect_urls = [ "https://example.com/api/auth" ]
+redirect_urls = [ "https://buysenseshopify.com/auth/callback" ]
 
 [app_proxy]
 url = "/proxy/ai-search"
