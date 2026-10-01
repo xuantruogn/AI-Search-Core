@@ -18,7 +18,7 @@ function pageHtml() {
     window.AI_SEARCH_CONFIG={version:4,theme_map_version:4,theme_id:"1",search_url:"/search",search_endpoint:"/apps/ai-search"};
   </script><script src="/runtime.js" defer></script></head><body>
     <form action="/search"><input name="q"></form>
-    <ul id="VerifiedMount"><li data-handle="native">native</li></ul>
+    <main><p role="status">No results found for "green".</p><ul id="VerifiedMount"><li data-handle="native">native</li></ul></main>
   </body></html>`;
 }
 
@@ -115,7 +115,14 @@ async function scenario(browser, options = {}) {
     return route.fulfill({ contentType: "text/html", body: pageHtml() });
   });
 
-  await page.goto("https://theme.test/search?q=green&type=product&ai_search=1");
+  if (options.fromHomepage) {
+    await page.goto("https://theme.test/");
+    await page.locator('input[name="q"]').fill("green");
+    await page.locator('form[action="/search"]').press("Enter");
+    await page.waitForURL(/\/search\?/);
+  } else {
+    await page.goto("https://theme.test/search?q=green&type=product&ai_search=1");
+  }
   if (options.backendError || options.changedTheme || options.missingMount) {
     await page.waitForFunction(() =>
       !document.documentElement.hasAttribute("aria-busy") &&
@@ -128,6 +135,29 @@ async function scenario(browser, options = {}) {
       await page.locator("#VerifiedMount > li").evaluateAll((nodes) => nodes.map((node) => node.dataset.handle)),
       ["beta", "alpha"],
     );
+    assert.equal(await page.getByRole("status").textContent(), "3 results");
+    assert.match(await page.title(), /^Search: 3 results found for/);
+    if (options.inPlaceOverlay) {
+      await page.evaluate(() => {
+        const details = document.createElement("details");
+        details.open = true;
+        details.dataset.testSearchOverlay = "";
+        details.innerHTML = '<summary>Search</summary><form action="/search"><input name="q" value="blue"></form>';
+        document.body.appendChild(details);
+        details.querySelector("form").requestSubmit();
+        window.setTimeout(() => {
+          details.open = true;
+        }, 0);
+      });
+      await page.waitForFunction(() =>
+        document.querySelector("[data-test-search-overlay]")?.open === false
+      );
+      await page.waitForFunction(() => document.documentElement.getAttribute("aria-busy") !== "true");
+      assert.equal(
+        await page.locator("[data-test-search-overlay]").evaluate((element) => element.open),
+        false,
+      );
+    }
     await page.locator("#VerifiedMount a").first().evaluate((anchor) => {
       anchor.addEventListener("click", (event) => event.preventDefault(), { once: true });
     });
@@ -138,8 +168,12 @@ async function scenario(browser, options = {}) {
     assert.equal(new URL(page.url()).searchParams.get("receipt"), null);
     assert.equal(new URL(page.url()).searchParams.get("page"), "2");
     assert.equal(await page.evaluate(() => history.state.receipt), "srch_fixture");
-    assert.equal(calls.search, 1);
-    assert.equal(calls.render, options.emptyFirstCandidate ? 4 : 2);
+    assert.match(await page.title(), /^Search: 3 results found for/);
+    assert.equal(calls.search, options.inPlaceOverlay ? 2 : 1);
+    assert.equal(
+      calls.render,
+      options.emptyFirstCandidate ? 4 : options.inPlaceOverlay ? 3 : 2,
+    );
     assert.equal(calls.nativeRender, 0);
     assert.equal(calls.click, 1);
   }
@@ -159,6 +193,8 @@ async function main() {
   });
   try {
     await scenario(browser);
+    await scenario(browser, { fromHomepage: true });
+    await scenario(browser, { inPlaceOverlay: true });
     await scenario(browser, { backendError: true });
     await scenario(browser, { changedTheme: true });
     await scenario(browser, { missingMount: true });

@@ -57,11 +57,12 @@ export const PLAN_DEFINITIONS: Record<AiSearchPlan, PlanDefinition> = {
     key: AI_SEARCH_PLAN.custom,
     label: "Custom",
     description:
-      "A shop-specific plan whose limits and pricing are stored in the Billing V2 plan record.",
+      "A shop-specific plan whose price and limits are stored on that shop's PlanAssignment.",
+    // Fail closed until explicit Custom terms are configured for the shop.
     limits: {
-      productLimit: null,
-      searchLimit: null,
-      vectorUpdateLimit: null,
+      productLimit: 0,
+      searchLimit: 0,
+      vectorUpdateLimit: 0,
     },
   },
 };
@@ -143,12 +144,6 @@ export function getDevPlanOverride(): AiSearchPlan | null {
   }
 
   const value = process.env.AI_SEARCH_DEV_PLAN?.trim();
-
-  if (!value) {
-    return null;
-  }
-
-  const plan = normalizePlan(value);
   const allowInProduction =
     process.env.AI_SEARCH_ALLOW_PLAN_OVERRIDE === "true";
 
@@ -156,5 +151,15 @@ export function getDevPlanOverride(): AiSearchPlan | null {
     return null;
   }
 
-  return plan;
+  // Billing is intentionally not wired for the local development store yet.
+  // Keep local development usable and deterministic by defaulting to Basic.
+  // Set AI_SEARCH_DEV_PLAN=NONE/PRO/CUSTOM explicitly when another dev state
+  // is required. Production never gets this implicit fallback.
+  if (!value) {
+    return process.env.NODE_ENV === "production"
+      ? null
+      : AI_SEARCH_PLAN.basic;
+  }
+
+  return normalizePlan(value);
 }

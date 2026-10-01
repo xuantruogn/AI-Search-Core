@@ -1,5 +1,8 @@
 import { fetchProductForIndexById } from "./product-sync.server";
-import { indexProduct } from "./product-indexer.server";
+import {
+  indexProduct,
+  type ProductIndexReason,
+} from "./product-indexer.server";
 
 import { deleteProductVectorForShop } from "../search/vector-store.server";
 import { ensureProductCollection } from "../search/qdrant.server";
@@ -262,12 +265,14 @@ export async function syncProductFromWebhook({
   admin,
   shop,
   productId,
+  indexReason = "WEBHOOK",
 }: {
   admin: AdminGraphqlClient;
   shop: string;
   productId:
     | string
     | number;
+  indexReason?: ProductIndexReason;
 }): Promise<ProductWebhookSyncResult> {
   const gid =
     normalizeProductGid(
@@ -343,8 +348,7 @@ export async function syncProductFromWebhook({
     await indexProduct({
       shop,
       product,
-      reason:
-        "WEBHOOK",
+      reason: indexReason,
     });
 
   if (

@@ -74,7 +74,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
 
   const catalogFailed =
     catalogStatus === "FAILED" ||
-    Boolean(catalogJob?.lastError);
+    Boolean(catalogJob?.lastError) ||
+    (catalogJob?.productsFailed ?? 0) > 0;
 
   const queueBusy =
     queue.pending > 0 ||
@@ -83,8 +84,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const catalogReady =
     catalogStatus === "DONE" &&
     !catalogFailed &&
-    !queueBusy &&
-    queue.failed === 0;
+    !queueBusy;
 
   const aiSearchEnabled = entitlement.aiSearchEnabled;
 
@@ -105,6 +105,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const allReady =
     subscriptionReady &&
     catalogReady &&
+    queue.failed === 0 &&
     aiEngineReady &&
     appEmbedReady &&
     themeMapReady;
@@ -122,7 +123,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     catalog: {
       ready: catalogReady,
       busy: catalogBusy || queueBusy,
-      failed: catalogFailed || queue.failed > 0,
+      failed: catalogFailed,
       status: catalogFailed
         ? "FAILED"
         : catalogBusy || queueBusy

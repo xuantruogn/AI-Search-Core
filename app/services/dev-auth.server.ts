@@ -78,7 +78,6 @@ export async function hashDevPassword(password: string) {
 
 export async function verifyDevPassword(hash: string, password: string) {
   try {
-    // return await argon2.verify(hash, password, { type: argon2.argon2id });
     return await argon2.verify(hash, password);
   } catch {
     return false;
@@ -131,7 +130,7 @@ export async function getDevMfaChallenge(request: Request) {
     WHERE c.\`tokenHash\` = ${hashOpaqueToken(token)} LIMIT 1
   `;
   const challenge = rows[0];
-  if (!challenge || challenge.expiresAt.getTime() <= Date.now() || !Boolean(challenge.isActive)) return null;
+  if (!challenge || challenge.expiresAt.getTime() <= Date.now() || !challenge.isActive) return null;
   return challenge;
 }
 
@@ -183,7 +182,7 @@ export async function getDevSession(request: Request): Promise<AuthenticatedDevU
   `;
   const session = rows[0];
   const expired = !session || session.expiresAt.getTime() <= Date.now() || session.absoluteExpiresAt.getTime() <= Date.now();
-  if (!session || session.revokedAt || expired || !Boolean(session.isActive) || !isDevRole(session.role)) {
+  if (!session || session.revokedAt || expired || !session.isActive || !isDevRole(session.role)) {
     if (session && !session.revokedAt) {
       await db.$executeRaw`UPDATE \`DevSession\` SET \`revokedAt\` = UTC_TIMESTAMP(3) WHERE \`id\` = ${session.id}`;
     }

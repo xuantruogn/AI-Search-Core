@@ -313,22 +313,6 @@ export default function UsagePage() {
             }}
           >
             <span style={{ color: "#616161", display: "block", fontSize: 12 }}>
-              Native Fallback Searches
-            </span>
-            <strong style={{ fontSize: 18, color: period.fallbackCount > 0 ? "#e67c00" : "#008060" }}>
-              {period.fallbackCount.toLocaleString("en-US")}
-            </strong>
-          </div>
-
-          <div
-            style={{
-              padding: 12,
-              borderRadius: 8,
-              background: "#fafafa",
-              border: "1px solid #f1f2f3",
-            }}
-          >
-            <span style={{ color: "#616161", display: "block", fontSize: 12 }}>
               Blocked Searches
             </span>
             <strong style={{ fontSize: 18, color: period.blockedSearchCount > 0 ? "#d32f2f" : "#008060" }}>

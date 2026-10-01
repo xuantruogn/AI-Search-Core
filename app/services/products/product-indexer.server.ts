@@ -4,6 +4,7 @@ import { getShopSettings } from "../commerce/shop-registry.server";
 import type { ProductForIndex } from "./product-document.server";
 import { buildProductDocument } from "./product-document.server";
 import {
+  isProductEnrichmentEnabled,
   prepareProductEmbeddingInput,
   PRODUCT_ENRICHMENT_VERSION,
 } from "./product-embedding-input.server";
@@ -44,6 +45,9 @@ import {
 export type ProductIndexReason =
   | "INITIAL_SYNC"
   | "WEBHOOK"
+  | "PRODUCT_LIMIT_RECOVERY"
+  | "SUBSCRIPTION_RECOVERY"
+  | "POLICY_RECOVERY"
   | "MANUAL_REINDEX";
 
 export type IndexProductInput = {
@@ -252,12 +256,28 @@ export async function indexProduct({
   const retryAt = registryProduct?.enrichmentRetryAt
     ? new Date(registryProduct.enrichmentRetryAt).getTime()
     : null;
+  const enrichmentMigrationDue = Boolean(
+    registryProduct?.hasVector &&
+      Boolean(registryProduct.searchable) &&
+      searchLanguage?.trim() &&
+      isProductEnrichmentEnabled() &&
+      (
+        registryProduct.enrichmentStatus === "BASE_ONLY" ||
+        registryProduct.enrichmentVersion !== PRODUCT_ENRICHMENT_VERSION
+      ),
+  );
+
   const enrichmentRetryDue = Boolean(
     registryProduct?.hasVector &&
-      ["PENDING", "FALLBACK", "FAILED"].includes(
-        registryProduct.enrichmentStatus,
-      ) &&
-      (retryAt === null || retryAt <= Date.now()),
+      (
+        (
+          ["PENDING", "FALLBACK", "FAILED"].includes(
+            registryProduct.enrichmentStatus,
+          ) &&
+          (retryAt === null || retryAt <= Date.now())
+        ) ||
+        enrichmentMigrationDue
+      ),
   );
 
   // Subscription state is authoritative even when the semantic document has
@@ -574,11 +594,54 @@ export async function indexProduct({
 
   // Re-embedding unchanged product data for this pipeline migration does not
   // consume the merchant's monthly product-update quota.
+  // Product capacity controls how many products may own vectors. Creating the
+  // first vector for any product inside that capacity is catalog bootstrap,
+  // not a vector update. The monthly vector-update quota applies only when an
+  // existing vector must be regenerated after product data changes.
   const countAsVectorUpdate =
+    alreadyIndexed &&
     reason !==
       "INITIAL_SYNC" &&
     !isPipelineMigration &&
     !enrichmentRetryDue;
+
+  // If the monthly vector-update quota is already exhausted, keep serving a
+  // retained cached vector instead of creating another blocked reservation.
+  // The vector remains STALE and can be refreshed after quota recovery.
+  if (
+    countAsVectorUpdate &&
+    alreadyIndexed &&
+    !entitlement.vectorUpdateAllowed
+  ) {
+    await markIndexedProductBlocked({
+      shop,
+      productId: product.id,
+      handle: product.handle,
+      title: product.title,
+      documentHash:
+        registryProduct?.documentHash ??
+        existingVector?.documentHash ??
+        documentHash,
+      reason: "VECTOR_UPDATE_LIMIT",
+      hasVector: true,
+    });
+
+    console.log("[AI Search] Product vector refresh deferred; cached vector retained:", {
+      shop,
+      productId: product.id,
+      handle: product.handle,
+      indexReason: reason,
+    });
+
+    return {
+      productId: product.id,
+      handle: product.handle,
+      title: product.title,
+      action: "skipped",
+      vectorDimensions: null,
+      documentHash,
+    };
+  }
 
   const reservationResult =
     await reserveProductEmbeddingUsage({
@@ -640,6 +703,11 @@ export async function indexProduct({
 
         handle:
           product.handle,
+
+        indexReason:
+          reason,
+
+        countAsVectorUpdate,
       },
     );
 

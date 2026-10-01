@@ -666,12 +666,21 @@ export async function searchProductVectors({
 
   // During the one-time Phase-1 -> V2 point-ID migration, a product can
   // temporarily have both a legacy numeric point and the new tenant UUID.
-  // Ask Qdrant for a small amount of headroom and deduplicate by productId so
-  // customers never see duplicate cards and the requested result count is
-  // preserved as much as possible.
-  // Earlier expanding passes replaced, rather than unioned, each response.
-  // Query the identical final horizon once to remove redundant ANN RTTs.
-  const candidateLimit = Math.min(1000, Math.max(safeLimit, safeLimit * 3));
+  // Keep only modest headroom for duplicate points. The old 3x window made
+  // broad searches return far more payload than the reranker can use.
+  const configuredHeadroom = Number.parseFloat(
+    process.env.AI_SEARCH_QDRANT_HEADROOM_RATIO || "",
+  );
+  const headroomRatio =
+    Number.isFinite(configuredHeadroom) &&
+    configuredHeadroom >= 1 &&
+    configuredHeadroom <= 2
+      ? configuredHeadroom
+      : 1.5;
+  const candidateLimit = Math.min(
+    1000,
+    Math.max(safeLimit, Math.ceil(safeLimit * headroomRatio)),
+  );
   const startedAt = Date.now();
   const passCount = 1;
   const response = await qdrant.query(QDRANT_COLLECTION, {
@@ -768,6 +777,148 @@ export async function searchProductVectors({
   });
 
   return results;
+}
+
+export async function searchProductVectorsBatch({
+  shop,
+  vectors,
+  limits,
+  scoreThreshold,
+  onDiagnostics,
+}: {
+  shop: string;
+  vectors: number[][];
+  limits?: number[];
+  scoreThreshold?: number;
+  onDiagnostics?: (diagnostics: {
+    requestMs: number;
+    responseMappingCodeMs: number;
+    totalMs: number;
+    passCount: number;
+    finalCandidateWindow: number;
+  }) => void;
+}): Promise<ProductVectorSearchResult[][]> {
+  const totalStartedAt = Date.now();
+  if (vectors.length === 0) return [];
+
+  const qdrant = getQdrantClient();
+  const eligibleRows = await db.$queryRaw<Array<{ productId: string }>>`
+    SELECT \`productId\` FROM \`AiSearchIndexedProduct\`
+    WHERE \`shop\` = ${shop} AND \`searchable\` = true AND \`hasVector\` = true
+  `;
+  const eligibleProductIds = eligibleRows.map((row) => row.productId);
+  if (eligibleProductIds.length === 0) {
+    onDiagnostics?.({
+      requestMs: 0,
+      responseMappingCodeMs: 0,
+      totalMs: Date.now() - totalStartedAt,
+      passCount: 0,
+      finalCandidateWindow: 0,
+    });
+    return vectors.map(() => []);
+  }
+
+  const configuredHeadroom = Number.parseFloat(
+    process.env.AI_SEARCH_QDRANT_HEADROOM_RATIO || "",
+  );
+  const headroomRatio =
+    Number.isFinite(configuredHeadroom) &&
+    configuredHeadroom >= 1 &&
+    configuredHeadroom <= 2
+      ? configuredHeadroom
+      : 1.5;
+  const safeLimits = vectors.map((_, index) => {
+    const requested = limits?.[index] ?? 20;
+    return Number.isFinite(requested)
+      ? Math.max(1, Math.min(Math.trunc(requested), 1000))
+      : 20;
+  });
+  const candidateLimits = safeLimits.map((safeLimit) =>
+    Math.min(
+      1000,
+      Math.max(safeLimit, Math.ceil(safeLimit * headroomRatio)),
+    ),
+  );
+  const filter = {
+    must: [
+      { key: "shop", match: { value: shop } },
+      { key: "productId", match: { any: eligibleProductIds } },
+    ],
+  };
+
+  const startedAt = Date.now();
+  const responses = await qdrant.queryBatch(QDRANT_COLLECTION, {
+    searches: vectors.map((vector, index) => ({
+      query: vector,
+      filter,
+      score_threshold: scoreThreshold,
+      limit: candidateLimits[index],
+      with_payload: [
+        "shop", "productId", "handle", "title",
+        "minVariantPrice", "maxVariantPrice", "currencyCode",
+      ],
+      with_vector: false,
+    })),
+  });
+  const requestMs = Date.now() - startedAt;
+  const mappingStartedAt = Date.now();
+
+  const resultSets = responses.map((response, responseIndex) => {
+    const seenProducts = new Set<string>();
+    const results: ProductVectorSearchResult[] = [];
+    for (const point of response.points) {
+      const payload = point.payload;
+      if (!payload || payload.shop !== shop) continue;
+      const productId =
+        typeof payload.productId === "string" ? payload.productId : null;
+      const handle = typeof payload.handle === "string" ? payload.handle : null;
+      const title = typeof payload.title === "string" ? payload.title : null;
+      if (!productId || !handle || !title || seenProducts.has(productId)) {
+        continue;
+      }
+      seenProducts.add(productId);
+      results.push({
+        score: point.score,
+        productId,
+        handle,
+        title,
+        minVariantPrice:
+          typeof payload.minVariantPrice === "number" &&
+          Number.isFinite(payload.minVariantPrice)
+            ? payload.minVariantPrice
+            : undefined,
+        maxVariantPrice:
+          typeof payload.maxVariantPrice === "number" &&
+          Number.isFinite(payload.maxVariantPrice)
+            ? payload.maxVariantPrice
+            : undefined,
+        currencyCode:
+          typeof payload.currencyCode === "string" && payload.currencyCode
+            ? payload.currencyCode.toUpperCase()
+            : undefined,
+      });
+      if (results.length >= safeLimits[responseIndex]) break;
+    }
+    return results;
+  });
+  const responseMappingCodeMs = Date.now() - mappingStartedAt;
+
+  console.log("[AI Search][PERF] Qdrant batch query", {
+    shop,
+    queryCount: vectors.length,
+    durationMs: requestMs,
+    requestedLimits: safeLimits,
+    fetchedPoints: responses.map((response) => response.points.length),
+    scoreThreshold: scoreThreshold ?? null,
+  });
+  onDiagnostics?.({
+    requestMs,
+    responseMappingCodeMs,
+    totalMs: Date.now() - totalStartedAt,
+    passCount: vectors.length,
+    finalCandidateWindow: candidateLimits.reduce((sum, value) => sum + value, 0),
+  });
+  return resultSets;
 }
 // =====================================================
 // DELETE ALL VECTORS FOR A SHOP

@@ -6,7 +6,6 @@ import { authenticate } from "../shopify.server";
 import { getShopEntitlement } from "../services/commerce/entitlement.server";
 import { getProductSyncQueueStats } from "../services/products/product-sync-job.server";
 import { getLatestCatalogSyncJob } from "../services/catalog/catalog-sync-job.server";
-// import { getShopifyPricingPlansUrl } from "../services/billing/shopify-app-pricing.server";
 import { getThemeAppEmbedDeepLink } from "../services/theme/app-embed.server";
 import { getThemeIntegrationStatus } from "../services/theme/theme-integration.server";
 import { getShopSettings } from "../services/commerce/shop-registry.server";
@@ -32,6 +31,31 @@ type DashboardStatus = {
   appEmbed: { ready: boolean; status: string; themeName: string | null };
   themeMap: { ready: boolean; status: string };
   allReady: boolean;
+};
+
+type CatalogLiveStatus = {
+  updatedAt: string;
+  busy: boolean;
+  failed: boolean;
+  ready: boolean;
+  status: string;
+  job: {
+    id: number;
+    status: string;
+    productsProcessed: number;
+    productsIndexed: number;
+    productsSkipped: number;
+    productsBlocked: number;
+    productsFailed: number;
+    pagesProcessed: number;
+    updatedAt: string;
+    lastError: string | null;
+  } | null;
+  queue: {
+    pending: number;
+    processing: number;
+    failed: number;
+  };
 };
 
 type ThemeSummary = {
@@ -135,7 +159,6 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
           lastError: catalogJob.lastError,
         }
       : null,
-    // pricingUrl: getShopifyPricingPlansUrl(session.shop),
     appEmbedUrl: getThemeAppEmbedDeepLink(session.shop),
   };
 };
@@ -155,18 +178,6 @@ function remaining(limit: number | null, used: number) {
 function percentage(used: number, limit: number | null) {
   if (limit === null || limit <= 0) return null;
   return Math.min(100, Math.max(0, Math.round((used / limit) * 100)));
-}
-
-function percent(part: number, total: number) {
-  if (total <= 0) return 0;
-  return Math.round((part / total) * 100);
-}
-
-function stateLabel(state: UiState) {
-  if (state === "success") return "Operational";
-  if (state === "warning") return "Needs attention";
-  if (state === "critical") return "Action required";
-  return "Paused";
 }
 
 function StatusPill({ state, children }: { state: UiState; children: string }) {
@@ -261,26 +272,6 @@ function ReadinessItem({
   );
 }
 
-function HealthRow({
-  label,
-  value,
-  state,
-}: {
-  label: string;
-  value: string;
-  state: UiState;
-}) {
-  return (
-    <div className="vip-health-row">
-      <div className="vip-health-label">
-        <span className={`vip-health-dot vip-health-dot--${state}`} />
-        {label}
-      </div>
-      <strong>{value}</strong>
-    </div>
-  );
-}
-
 function Notice({
   state,
   title,
@@ -300,43 +291,6 @@ function Notice({
         <div>{children}</div>
       </div>
     </div>
-  );
-}
-
-function QuickLink({
-  title,
-  detail,
-  href,
-  targetTop,
-}: {
-  title: string;
-  detail: string;
-  href: string;
-  targetTop?: boolean;
-}) {
-  const content = (
-    <>
-      <div>
-        <strong>{title}</strong>
-        <span>{detail}</span>
-      </div>
-      <span className="vip-quick-arrow">→</span>
-    </>
-  );
-
-  return targetTop ? (
-    <a
-      className="vip-quick-link"
-      href={href}
-      target="_top"
-      rel="noreferrer"
-    >
-      {content}
-    </a>
-  ) : (
-    <Link className="vip-quick-link" to={href}>
-      {content}
-    </Link>
   );
 }
 
@@ -399,10 +353,10 @@ function SearchPerformanceChart({
         : Math.ceil(rawMax / 10) * 10;
 
   const xFor = (index: number) =>
-    padLeft +
-    (index / Math.max(1, visible.length - 1)) * plotWidth;
+    padLeft + ((index + 0.5) / Math.max(1, visible.length)) * plotWidth;
   const yFor = (value: number) =>
     padTop + plotHeight - (value / maxY) * plotHeight;
+  const barWidth = Math.min(48, (plotWidth / Math.max(1, visible.length)) * 0.48);
 
   const buildPoints = (
     valueOf: (item: (typeof visible)[number]) => number,
@@ -411,36 +365,38 @@ function SearchPerformanceChart({
       .map((item, index) => `${xFor(index)},${yFor(valueOf(item))}`)
       .join(" ");
 
-  const lines = [
-    {
-      key: "searches",
-      label: "Total searches",
-      stroke: "#6f5cf5",
-      valueOf: (item: (typeof visible)[number]) => item.searches,
-    },
-    {
-      key: "clickedSearches",
-      label: "Searches with click",
-      stroke: "#21a366",
-      valueOf: (item: (typeof visible)[number]) => item.clickedSearches,
-    },
-    {
-      key: "abnormalSearches",
-      label: "Search anomalies",
-      stroke: "#d89a17",
-      valueOf: (item: (typeof visible)[number]) => item.abnormalSearches,
-    },
-  ];
+  const anomalyPoints = buildPoints((item) => item.abnormalSearches);
+  const totalClickedSearches = visible.reduce(
+    (sum, item) => sum + item.clickedSearches,
+    0,
+  );
+  const totalAnomalies = visible.reduce(
+    (sum, item) => sum + item.abnormalSearches,
+    0,
+  );
+  const totalWithoutClicks = Math.max(0, totalSearches - totalClickedSearches);
 
   return (
     <div className="vip-chart-shell">
-      <div className="vip-chart-legend" aria-label="Chart Legend">
-        {lines.map((line) => (
-          <span key={line.key}>
-            <i style={{ background: line.stroke }} />
-            {line.label}
+      <div className="vip-chart-toolbar">
+        <div className="vip-chart-total">
+          <strong>{totalSearches.toLocaleString("en-US")}</strong>
+          <span>Total searches</span>
+        </div>
+        <div className="vip-chart-legend" aria-label="Chart Legend">
+          <span>
+            <i className="vip-chart-key vip-chart-key--click" />
+            Product click <strong>{totalClickedSearches.toLocaleString("en-US")}</strong>
           </span>
-        ))}
+          <span>
+            <i className="vip-chart-key vip-chart-key--no-click" />
+            No click <strong>{totalWithoutClicks.toLocaleString("en-US")}</strong>
+          </span>
+          <span>
+            <i className="vip-chart-key vip-chart-key--anomaly" />
+            Anomaly <strong>{totalAnomalies.toLocaleString("en-US")}</strong>
+          </span>
+        </div>
       </div>
 
       <svg
@@ -459,8 +415,9 @@ function SearchPerformanceChart({
                 x2={width - padRight}
                 y1={y}
                 y2={y}
-                stroke="rgba(104,97,150,.12)"
+                stroke="rgba(79, 82, 94, .10)"
                 strokeWidth="1"
+                strokeDasharray={ratio === 1 ? undefined : "4 5"}
               />
               <text x={8} y={Math.max(12, y + 3)} className="vip-chart-label">
                 {value}
@@ -469,32 +426,66 @@ function SearchPerformanceChart({
           );
         })}
 
-        {lines.map((line) => (
-          <g key={line.key}>
-            <polyline
-              points={buildPoints(line.valueOf)}
-              fill="none"
-              stroke={line.stroke}
-              strokeWidth="3"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-            {visible.map((item, index) => {
-              const value = line.valueOf(item);
-              return (
-                <circle
-                  key={`${line.key}-${item.date}`}
-                  cx={xFor(index)}
-                  cy={yFor(value)}
-                  r="3.5"
-                  fill="#ffffff"
-                  stroke={line.stroke}
-                  strokeWidth="2"
-                >
-                  <title>{`${item.date} · ${line.label}: ${value}`}</title>
-                </circle>
-              );
-            })}
+        {visible.map((item, index) => {
+          const x = xFor(index) - barWidth / 2;
+          const totalY = yFor(item.searches);
+          const clickedY = yFor(item.clickedSearches);
+          const baselineY = padTop + plotHeight;
+          return (
+            <g key={`searches-${item.date}`}>
+              <rect
+                x={x}
+                y={totalY}
+                width={barWidth}
+                height={Math.max(0, clickedY - totalY)}
+                rx="6"
+                fill="#dcd8fa"
+              >
+                <title>{`${item.date} · Searches without click: ${Math.max(0, item.searches - item.clickedSearches)}`}</title>
+              </rect>
+              <rect
+                x={x}
+                y={clickedY}
+                width={barWidth}
+                height={Math.max(0, baselineY - clickedY)}
+                rx="5"
+                fill="#20a47a"
+              >
+                <title>{`${item.date} · Searches with product click: ${item.clickedSearches}`}</title>
+              </rect>
+              <text
+                x={xFor(index)}
+                y={Math.max(13, totalY - 7)}
+                textAnchor="middle"
+                className="vip-chart-value"
+              >
+                {item.searches}
+              </text>
+            </g>
+          );
+        })}
+        <polyline
+          points={anomalyPoints}
+          fill="none"
+          stroke="#c2413b"
+          strokeWidth="2.5"
+          strokeDasharray="6 5"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+
+        {visible.map((item, index) => (
+          <g key={`markers-${item.date}`}>
+            <circle
+              cx={xFor(index)}
+              cy={yFor(item.abnormalSearches)}
+              r="3.5"
+              fill="#fff"
+              stroke="#c2413b"
+              strokeWidth="2"
+            >
+              <title>{`${item.date} · Search anomalies: ${item.abnormalSearches}`}</title>
+            </circle>
           </g>
         ))}
       </svg>
@@ -509,14 +500,19 @@ function SearchPerformanceChart({
 }
 
 function AlertTypeLabel(type: string) {
-  if (type === "NO_RESULTS") return "No Results";
-  if (type === "LOW_SIMILARITY") return "Low Similarity";
-  if (type === "HIGH_SIMILARITY_NO_CLICK") return "High Similarity (No Click)";
+  if (type === "SEMANTIC_NO_RESULTS") return "Semantic No Results";
+  if (type === "LOW_CTR") return "Low CTR";
   if (type === "CTR_DROP") return "CTR Drop";
   return type;
 }
 
 const dashboardCss = `
+  .vip-page {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 4px 24px 56px;
+  }
+
   .vip-shell {
     --vip-text: #1a1c23;
     --vip-muted: #5c6270;
@@ -735,7 +731,7 @@ const dashboardCss = `
 
   .vip-metrics {
     display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 16px;
   }
 
@@ -824,6 +820,16 @@ const dashboardCss = `
   .vip-panel__head h3 { margin: 0; font-size: 19px; font-weight: 800; letter-spacing: -.02em; }
   .vip-panel__head p { margin: 6px 0 0; color: var(--vip-muted); font-size: 13px; line-height: 1.5; }
   .vip-panel__body { padding: 6px 26px 12px; }
+
+  .vip-attention-panel {
+    border-color: #ead8a8;
+    background: linear-gradient(180deg, #fffdf7 0%, #ffffff 34%);
+    box-shadow: 0 16px 44px rgba(121, 86, 16, .08);
+  }
+
+  .vip-attention-panel .vip-panel__head {
+    border-bottom-color: #f2e7c8;
+  }
 
   .vip-check-row {
     display: grid;
@@ -1007,10 +1013,38 @@ const dashboardCss = `
     display: flex;
     flex-wrap: wrap;
     gap: 16px;
-    padding: 2px 8px 10px;
+    padding: 0;
     color: var(--vip-muted);
     font-size: 12px;
     font-weight: 700;
+  }
+
+  .vip-chart-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 20px;
+    padding: 2px 8px 14px;
+  }
+
+  .vip-chart-total {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    white-space: nowrap;
+  }
+
+  .vip-chart-total strong {
+    color: var(--vip-text);
+    font-size: 22px;
+    font-weight: 800;
+    letter-spacing: -.03em;
+  }
+
+  .vip-chart-total span {
+    color: var(--vip-muted);
+    font-size: 12px;
+    font-weight: 650;
   }
 
   .vip-chart-legend span {
@@ -1019,11 +1053,61 @@ const dashboardCss = `
     gap: 8px;
   }
 
+  .vip-chart-legend strong {
+    margin-left: 2px;
+    color: var(--vip-text);
+    font-size: 12px;
+    font-weight: 800;
+  }
+
   .vip-chart-legend i {
     width: 10px;
     height: 10px;
     border-radius: 999px;
     display: inline-block;
+  }
+
+  .vip-chart-legend .vip-chart-key--bar {
+    width: 12px;
+    height: 10px;
+    border-radius: 3px;
+    background: linear-gradient(180deg, #7768e8, #aea5f5);
+  }
+
+  .vip-chart-legend .vip-chart-key--click {
+    width: 11px;
+    height: 11px;
+    border-radius: 3px;
+    background: #20a47a;
+  }
+
+  .vip-chart-legend .vip-chart-key--no-click {
+    width: 11px;
+    height: 11px;
+    border-radius: 3px;
+    background: #dcd8fa;
+  }
+
+  .vip-chart-legend .vip-chart-key--anomaly {
+    width: 16px;
+    height: 0;
+    border-top: 2px dashed #c2413b;
+    border-radius: 0;
+    background: transparent;
+  }
+
+  .vip-chart rect {
+    transition: opacity .16s ease, filter .16s ease;
+  }
+
+  .vip-chart rect:hover {
+    opacity: .86;
+  }
+
+  .vip-chart-value {
+    fill: #4a4d55;
+    font-size: 11px;
+    font-weight: 750;
   }
 
   .vip-chart-empty {
@@ -1158,6 +1242,189 @@ const dashboardCss = `
     font-weight: 900;
   }
 
+  /* Dashboard V2: compact, merchant-first visual system. */
+  .vip-shell {
+    --vip-text: #202223;
+    --vip-muted: #61656f;
+    --vip-border: #e1e3e5;
+    --vip-panel: #ffffff;
+    --vip-shadow: 0 1px 2px rgba(31, 33, 36, .04), 0 8px 24px rgba(31, 33, 36, .04);
+    gap: 20px;
+    max-width: 1520px;
+    margin: 0 auto;
+    padding-top: 8px;
+  }
+
+  .vip-overview-head {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 24px;
+    padding: 8px 2px 4px;
+  }
+
+  .vip-overview-head__eyebrow {
+    margin-bottom: 7px;
+    color: #087f5b;
+    font-size: 12px;
+    font-weight: 800;
+    letter-spacing: .09em;
+    text-transform: uppercase;
+  }
+
+  .vip-overview-head h2 {
+    margin: 0;
+    color: #202223;
+    font-size: clamp(25px, 2.4vw, 34px);
+    font-weight: 750;
+    letter-spacing: -.035em;
+    line-height: 1.12;
+  }
+
+  .vip-overview-head p {
+    max-width: 720px;
+    margin: 8px 0 0;
+    color: var(--vip-muted);
+    font-size: 14px;
+    line-height: 1.55;
+  }
+
+  .vip-overview-head__meta {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 8px;
+  }
+
+  .vip-overview-chip {
+    display: inline-flex;
+    align-items: center;
+    min-height: 34px;
+    border: 1px solid #dedfe3;
+    border-radius: 999px;
+    padding: 0 12px;
+    background: #fff;
+    color: #4a4d55;
+    font-size: 12px;
+    font-weight: 700;
+    box-shadow: 0 1px 2px rgba(31, 33, 36, .04);
+  }
+
+  .vip-panel {
+    border-radius: 16px;
+    box-shadow: var(--vip-shadow);
+  }
+
+  .vip-panel__head {
+    padding: 20px 22px 16px;
+  }
+
+  .vip-panel__body {
+    padding: 4px 22px 8px;
+  }
+
+  .vip-attention-panel {
+    border-left: 4px solid #d99b22;
+    border-radius: 14px;
+    background: #fffdf7;
+    box-shadow: 0 6px 22px rgba(121, 86, 16, .06);
+  }
+
+  .vip-metrics {
+    gap: 14px;
+  }
+
+  .vip-metric {
+    min-height: 142px;
+    border-radius: 16px;
+    padding: 20px;
+    box-shadow: var(--vip-shadow);
+  }
+
+  .vip-metric:before {
+    content: "";
+    position: absolute;
+    inset: 0 0 auto;
+    height: 3px;
+    background: currentColor;
+    opacity: .8;
+  }
+
+  .vip-metric:after {
+    display: none;
+  }
+
+  .vip-metric--violet { color: #635bce; }
+  .vip-metric--cyan { color: #167d9a; }
+  .vip-metric--green { color: #087f5b; }
+  .vip-metric--amber { color: #946200; }
+
+  .vip-metric__eyebrow {
+    color: #61656f;
+    font-size: 11px;
+    letter-spacing: .07em;
+  }
+
+  .vip-metric__value {
+    margin-top: 17px;
+    color: #202223;
+    font-size: clamp(27px, 2.2vw, 34px);
+  }
+
+  .vip-metric__detail {
+    min-height: 39px;
+    margin-top: 7px;
+    font-size: 12px;
+  }
+
+  .vip-metric__spark {
+    width: 9px;
+    height: 9px;
+    color: inherit;
+  }
+
+  .vip-progress {
+    height: 4px;
+    margin-top: 14px;
+  }
+
+  .vip-progress span {
+    background: currentColor;
+  }
+
+  .vip-analytics-grid {
+    grid-template-columns: minmax(0, 1.65fr) minmax(320px, .72fr);
+    gap: 16px;
+  }
+
+  .vip-impact, .vip-alerts {
+    padding: 22px;
+  }
+
+  .vip-impact-kpis {
+    gap: 10px;
+  }
+
+  .vip-impact-kpi {
+    border-color: #e6e7e9;
+    border-radius: 12px;
+    background: #fafbfb;
+  }
+
+  .vip-chart-shell {
+    border-color: #e6e7e9;
+    border-radius: 14px;
+    background: #fff;
+  }
+
+  .vip-alert {
+    padding: 15px 0;
+  }
+
+  .vip-notice {
+    border-radius: 14px;
+  }
+
   @media (max-width: 980px) {
     .vip-hero__content, .vip-grid, .vip-analytics-grid { grid-template-columns: 1fr; }
     .vip-metrics { grid-template-columns: repeat(2, minmax(0,1fr)); }
@@ -1166,6 +1433,11 @@ const dashboardCss = `
   }
 
   @media (max-width: 640px) {
+    .vip-page { padding: 2px 12px 36px; }
+    .vip-overview-head { align-items: flex-start; flex-direction: column; }
+    .vip-overview-head__meta { justify-content: flex-start; }
+    .vip-chart-toolbar { align-items: flex-start; flex-direction: column; }
+    .vip-chart-legend { gap: 10px 14px; }
     .vip-hero { padding: 24px; border-radius: 20px; }
     .vip-metrics, .vip-impact-kpis { grid-template-columns: 1fr; }
     .vip-check-row { grid-template-columns: 36px minmax(0,1fr); }
@@ -1177,8 +1449,11 @@ export default function Dashboard() {
   const data = useLoaderData<typeof loader>();
   const themeSyncFetcher = useFetcher<{ success?: boolean; message?: string }>();
   const statusFetcher = useFetcher<DashboardStatus>();
+  const catalogStatusFetcher = useFetcher<CatalogLiveStatus>();
   const themeSyncHandled = useRef(false);
+  const catalogCompletionHandled = useRef(false);
   const loadDashboardStatus = statusFetcher.load;
+  const loadCatalogStatus = catalogStatusFetcher.load;
   const themeSyncing = themeSyncFetcher.state !== "idle";
   const { entitlement } = data;
 
@@ -1202,28 +1477,32 @@ export default function Dashboard() {
   ]);
 
   const live = statusFetcher.data;
+  const catalogLive = catalogStatusFetcher.data;
   const catalogStatus =
+    catalogLive?.status ??
     live?.catalog.status ??
     (data.catalogJob?.status ?? "NOT_STARTED").toUpperCase();
   const catalogBusy =
+    catalogLive?.busy ??
     live?.catalog.busy ??
     (["PENDING", "PROCESSING", "RUNNING"].includes(catalogStatus) ||
       data.queue.pending > 0 ||
       data.queue.processing > 0);
   const catalogFailed =
+    catalogLive?.failed ??
     live?.catalog.failed ??
     (catalogStatus === "FAILED" ||
       Boolean(data.catalogJob?.lastError) ||
-      (data.catalogJob?.productsFailed ?? 0) > 0 ||
-      data.queue.failed > 0);
-  const queueHasFailures = live?.catalog.failed ?? data.queue.failed > 0;
+      (data.catalogJob?.productsFailed ?? 0) > 0);
+  const queueHasFailures =
+    (catalogLive?.queue.failed ?? live?.catalog.failedCount ?? data.queue.failed) > 0;
   const catalogReady =
+    catalogLive?.ready ??
     live?.catalog.ready ??
     (catalogStatus === "DONE" &&
       !catalogFailed &&
       data.queue.pending === 0 &&
-      data.queue.processing === 0 &&
-      data.queue.failed === 0);
+      data.queue.processing === 0);
   const subscriptionReady =
     live?.subscription.ready ??
     (entitlement.subscriptionStatus === "ACTIVE" && entitlement.plan !== "NONE");
@@ -1234,88 +1513,83 @@ export default function Dashboard() {
   const searchSettingReady =
     live?.aiEngine.ready ?? data.settings.aiSearchEnabled;
 
-  let overall: { state: UiState; title: string; detail: string };
+  // Poll only while catalog sync is actually busy. Use sequential polling:
+  // a new request is scheduled only after the previous fetcher request has
+  // completed, preventing React Router from repeatedly aborting in-flight
+  // requests before their data can commit.
+  useEffect(() => {
+    if (!catalogBusy) return;
+    if (catalogStatusFetcher.state !== "idle") return;
 
-  if (!subscriptionReady) {
-    overall = {
-      state: "warning",
-      title: "Activate Plan to Launch AI Search",
-      detail: "Subscription is currently inactive. Storefront searches are safely handled by Shopify Native Search.",
-    };
-  } else if (catalogFailed || queueHasFailures) {
-    overall = {
-      state: "critical",
-      title: "Action Required Before Launch",
-      detail: "Catalog sync or product processing queue encountered errors. Safe fallback remains active.",
-    };
-  } else if (!catalogReady) {
-    overall = {
-      state: "warning",
-      title: catalogBusy ? "Preparing Catalog Index" : "Catalog Index Not Ready",
-      detail: "Preparing product catalog and vector embeddings for storefront search.",
-    };
-  } else if (!searchSettingReady) {
-    overall = {
-      state: "neutral",
-      title: "AI Search Engine is Paused",
-      detail: "Storefront is using default Shopify Search. You can re-enable AI Search in Settings anytime.",
-    };
-  } else if (!embedReady) {
-    overall = {
-      state: "warning",
-      title: "One More Step: Enable App Embed",
-      detail: "Backend is ready. Enable App Embed in Theme Editor to display AI search on storefront.",
-    };
-  } else if (!rendererReady) {
-    overall = {
-      state: "warning",
-      title: "Pending Theme Integration Check",
-      detail: "Active theme render path is awaiting confirmation. Safe fallback is active.",
-    };
-  } else if (!entitlement.searchAllowed) {
-    overall = {
-      state: "warning",
-      title: "Shopify Native Search is Active",
-      detail: entitlement.disabledReason
-        ? `AI Search is temporarily paused: ${entitlement.disabledReason}.`
-        : "AI Search is currently paused by entitlement limits.",
-    };
-  } else {
-    overall = {
-      state: "success",
-      title: "AI Search is Operational",
-      detail: "Catalog, subscription, and theme integration are 100% ready for production traffic.",
-    };
-  }
+    const timer = window.setTimeout(
+      () => loadCatalogStatus("/app/catalog-status"),
+      catalogLive ? 1_000 : 0,
+    );
 
-  const readinessSteps = [
-    subscriptionReady,
-    catalogReady && !catalogFailed && !queueHasFailures,
-    searchSettingReady,
-    embedReady,
-    rendererReady,
-  ];
-  const readinessDone = readinessSteps.filter(Boolean).length;
-  const readinessPercent = Math.round((readinessDone / readinessSteps.length) * 100);
-  const isFullyReady = live?.allReady ?? readinessDone === readinessSteps.length;
-  const showLiveSetup = !isFullyReady;
+    return () => window.clearTimeout(timer);
+  }, [
+    catalogBusy,
+    catalogStatusFetcher.state,
+    catalogLive?.updatedAt,
+    loadCatalogStatus,
+  ]);
+
+  // Once the live catalog job finishes, refresh the broader readiness snapshot
+  // exactly once so the attention card disappears without a page reload.
+  useEffect(() => {
+    if (catalogBusy) {
+      catalogCompletionHandled.current = false;
+      return;
+    }
+
+    if (catalogLive?.ready && !catalogCompletionHandled.current) {
+      catalogCompletionHandled.current = true;
+      loadDashboardStatus("/app/dashboard-status");
+    }
+  }, [catalogBusy, catalogLive?.ready, loadDashboardStatus]);
+
   const isBackgroundSyncing = catalogBusy;
+  const catalogProgressJob = catalogLive?.job ?? data.catalogJob;
+  const catalogProgressQueue = catalogLive?.queue ?? data.queue;
+  const themeSyncFailed = themeSyncFetcher.data?.success === false;
+  const entitlementNeedsAttention =
+    subscriptionReady && searchSettingReady && !entitlement.searchAllowed;
+  const capacityNeedsAttention =
+    entitlement.productLimitBlockedProducts > 0 ||
+    entitlement.vectorQuotaBlockedProducts > 0;
+  const attentionCount = [
+    !subscriptionReady,
+    !catalogReady || catalogBusy || catalogFailed || queueHasFailures,
+    !searchSettingReady,
+    !embedReady,
+    !rendererReady || themeSyncing || themeSyncFailed,
+    entitlementNeedsAttention,
+  ].filter(Boolean).length;
+  const showOperationsAttention = attentionCount > 0;
+
+  // Grants/overrides may already be stored while billing is inactive.
+  // Keep them persisted, but do not present them as usable merchant quota until
+  // the Shopify subscription is ACTIVE.
+  const displayProductLimit = subscriptionReady
+    ? entitlement.limits.productLimit
+    : 0;
+  const displaySearchLimit = subscriptionReady
+    ? entitlement.limits.searchLimit
+    : 0;
 
   const searchRemaining = remaining(
-    entitlement.limits.searchLimit,
+    displaySearchLimit,
     entitlement.usage.searchCount,
   );
   const searchProgress = percentage(
     entitlement.usage.searchCount,
-    entitlement.limits.searchLimit,
+    displaySearchLimit,
   );
   const productProgress = percentage(
     entitlement.activeProductSlotsUsed,
-    entitlement.limits.productLimit,
+    displayProductLimit,
   );
 
-  const fallbackCount = entitlement.usage.fallbackCount;
-  const storefrontSearches = entitlement.usage.searchCount + fallbackCount;
   const impact = data.searchImpact;
   const current7dSeries = impact.series.slice(-7);
   const previous7dSeries = impact.series.slice(-14, -7);
@@ -1342,85 +1616,170 @@ export default function Dashboard() {
       ? ((current7dSearches - previous7dSearches) / previous7dSearches) * 100
       : null;
 
-  const aiCoverage = percent(entitlement.usage.searchCount, storefrontSearches);
-  const fallbackRate = percent(fallbackCount, storefrontSearches);
-
-  const queueState: UiState = queueHasFailures
-    ? "critical"
-    : data.queue.processing > 0 || data.queue.pending > 0
-      ? "warning"
-      : "success";
-
   return (
-    <div style={{ width: "100%", padding: "0 24px 60px 24px", boxSizing: "border-box" }}>
+    <div className="vip-page">
       <style>{dashboardCss}</style>
 
       <div className="vip-shell">
-        <section className="vip-hero">
-          <div className="vip-hero__content">
-            <div>
-              <div className="vip-kicker">AI Search · Merchant Console</div>
-              <StatusPill state={overall.state}>{stateLabel(overall.state)}</StatusPill>
-              <h2 style={{ marginTop: 16 }}>{overall.title}</h2>
-              <p className="vip-hero__subtitle">{overall.detail}</p>
-
-              <div className="vip-actions">
-                <Link className="vip-action vip-action--primary" to="/app/settings">
-                  Configure search
-                </Link>
-                <Link className="vip-action vip-action--ghost" to="/app/search-analytics">
-                  Search Analytics
-                </Link>
-                <a
-                    className="vip-action vip-action--ghost"
-                    href="/app/billing"
-                  >
-                    Plan & billing
-                  </a>
-              </div>
-
-              <div className="vip-hero__meta" style={{ marginTop: 22 }}>
-                <span>{data.shop}</span>
-                <span>{entitlement.planLabel}</span>
-                <span>{entitlement.subscriptionStatus}</span>
-                {data.theme.themeName ? <span>Theme · {data.theme.themeName}</span> : null}
-              </div>
-            </div>
-
-            <div className="vip-readiness-card">
-              <div className="vip-readiness-card__top">
-                <div>
-                  <div className="vip-readiness-card__label">Production readiness</div>
-                  <div className="vip-readiness-card__score">{readinessPercent}%</div>
-                </div>
-                <div
-                  className="vip-ring"
-                  style={{ "--value": readinessPercent } as React.CSSProperties}
-                  aria-label={`${readinessPercent}% production ready`}
-                />
-              </div>
-              <div className="vip-readiness-card__footer">
-                <div>
-                  <strong>{readinessDone}/{readinessSteps.length} checks passed</strong>
-                  <div style={{ marginTop: 4 }}>Live storefront safety remains protected by fallback.</div>
-                </div>
-              </div>
-            </div>
+        <header className="vip-overview-head">
+          <div>
+            <div className="vip-overview-head__eyebrow">Store intelligence</div>
+            <h2>Search performance overview</h2>
+            <p>
+              Monitor product discovery, shopper engagement, and issues that need action.
+            </p>
           </div>
-        </section>
+          <div className="vip-overview-head__meta" aria-label="Dashboard context">
+            <span className="vip-overview-chip">Last 7 days</span>
+            <span className="vip-overview-chip">{entitlement.planLabel}</span>
+            <span className="vip-overview-chip">{data.shop}</span>
+          </div>
+        </header>
 
-        {(catalogFailed || queueHasFailures) ? (
-          <Notice state="critical" title="Catalog Sync Attention Required">
-            Product queue has {data.queue.failed.toLocaleString("en-US")} FAILED jobs.
-            {data.catalogJob?.lastError
-              ? ` Latest catalog error: ${data.catalogJob.lastError}`
-              : " Check background queue and logs before opening live traffic."}
-          </Notice>
+        {showOperationsAttention ? (
+          <section className="vip-panel vip-attention-panel">
+            <div className="vip-panel__head">
+              <div>
+                <h3>Needs attention</h3>
+                <p>
+                  Only incomplete, syncing, or unhealthy services are shown here.
+                </p>
+              </div>
+              <StatusPill
+                state={catalogFailed || themeSyncFailed ? "critical" : "warning"}
+              >
+                {`${attentionCount} ${attentionCount === 1 ? "item" : "items"}`}
+              </StatusPill>
+            </div>
+            <div className="vip-panel__body">
+              {!subscriptionReady ? (
+                <ReadinessItem
+                  index={1}
+                  title="Subscription"
+                  state="warning"
+                  status="Needs activation"
+                  detail={`${entitlement.planLabel} · ${entitlement.subscriptionStatus}`}
+                  action={{
+                    label: "Manage plan",
+                    href: "/app/billing",
+                    targetTop: true,
+                  }}
+                />
+              ) : null}
+
+              {!catalogReady || catalogBusy || catalogFailed || queueHasFailures ? (
+                <ReadinessItem
+                  index={2}
+                  title="Product synchronization"
+                  state={catalogFailed ? "critical" : "warning"}
+                  status={
+                    catalogFailed
+                      ? "Error"
+                      : catalogBusy
+                        ? "Syncing"
+                        : queueHasFailures
+                          ? "Retry needed"
+                          : "Not ready"
+                  }
+                  detail={
+                    catalogProgressJob
+                      ? `Processed ${catalogProgressJob.productsProcessed.toLocaleString("en-US")} · Indexed ${catalogProgressJob.productsIndexed.toLocaleString("en-US")} · Skipped ${catalogProgressJob.productsSkipped.toLocaleString("en-US")} · Failed ${catalogProgressJob.productsFailed.toLocaleString("en-US")}${catalogProgressQueue.pending > 0 || catalogProgressQueue.processing > 0 ? ` · Queue ${catalogProgressQueue.pending.toLocaleString("en-US")} pending / ${catalogProgressQueue.processing.toLocaleString("en-US")} active` : ""}${catalogProgressQueue.failed > 0 ? ` · Queue ${catalogProgressQueue.failed.toLocaleString("en-US")} failed — retry required` : ""}`
+                      : "No catalog sync job recorded."
+                  }
+                  action={{ label: "Open catalog", href: "/app/catalog-sync" }}
+                />
+              ) : null}
+
+              {!searchSettingReady ? (
+                <ReadinessItem
+                  index={3}
+                  title="AI Search settings"
+                  state="neutral"
+                  status="Disabled"
+                  detail={`Language ${data.settings.searchLanguage ?? "not configured"}${data.settings.resultLimit ? ` · ${data.settings.resultLimit} results/search` : ""}`}
+                  action={{ label: "Configure", href: "/app/settings" }}
+                />
+              ) : null}
+
+              {!embedReady ? (
+                <ReadinessItem
+                  index={4}
+                  title="Theme App Embed"
+                  state="warning"
+                  status={
+                    data.theme.appEmbedReason === "STALE_APP_EMBED_ENABLED"
+                      ? "Enabled · update required"
+                      : data.theme.appEmbedEnabled === false
+                        ? "Disabled"
+                        : "Unknown"
+                  }
+                  detail={
+                    data.theme.appEmbedReason === "STALE_APP_EMBED_ENABLED"
+                      ? `Published theme: ${data.theme.themeName ?? "unknown"} · The toggle is ON, but this theme points to an older AI-Buyense extension deployment. Deploy the current extension, then reopen Theme Editor and save the current embed.`
+                      : data.theme.appEmbedReason === "STALE_OTHER_APP_EMBED_ONLY"
+                        ? `Published theme: ${data.theme.themeName ?? "unknown"} · A stale AI-Buyense embed exists, but the current extension is not enabled.`
+                        : `Published theme: ${data.theme.themeName ?? "unknown"} · Enable this app's embed in Theme Editor.`
+                  }
+                  action={
+                    data.appEmbedUrl
+                      ? { label: "Open theme editor", href: data.appEmbedUrl, targetTop: true }
+                      : { label: "Open settings", href: "/app/settings" }
+                  }
+                />
+              ) : null}
+
+              {!rendererReady || themeSyncing || themeSyncFailed ? (
+                <ReadinessItem
+                  index={5}
+                  title="Theme rendering"
+                  state={themeSyncFailed ? "critical" : "warning"}
+                  status={themeSyncing ? "Syncing" : themeSyncFailed ? "Sync failed" : "Needs check"}
+                  detail={
+                    themeSyncFetcher.data?.message ??
+                    `Theme renderer unavailable · ${data.theme.integrationStatus}`
+                  }
+                  actionNode={
+                    <themeSyncFetcher.Form method="post" action="/app/settings">
+                      <input type="hidden" name="intent" value="sync_theme_map" />
+                      <button
+                        type="submit"
+                        className="vip-check-button"
+                        disabled={themeSyncing}
+                      >
+                        {themeSyncing ? "Syncing theme..." : "Sync theme"}
+                      </button>
+                    </themeSyncFetcher.Form>
+                  }
+                />
+              ) : null}
+
+              {entitlementNeedsAttention ? (
+                <ReadinessItem
+                  index={6}
+                  title="Storefront search eligibility"
+                  state="warning"
+                  status="Paused"
+                  detail={
+                    entitlement.disabledReason
+                      ? `AI Search is temporarily paused: ${entitlement.disabledReason}.`
+                      : "AI Search is temporarily paused by entitlement limits."
+                  }
+                  action={{ label: "Review usage", href: "/app/usage" }}
+                />
+              ) : null}
+            </div>
+          </section>
         ) : null}
 
-        {entitlement.productLimitBlockedProducts > 0 ||
-        entitlement.vectorQuotaBlockedProducts > 0 ? (
-          <Notice state="warning" title="Product Capacity Restrictions Active">
+        {capacityNeedsAttention ? (
+          <Notice
+            state="warning"
+            title={
+              entitlement.productLimitBlockedProducts > 0
+                ? "Product Capacity Restrictions Active"
+                : "Product Vector Synchronization Pending"
+            }
+          >
             {entitlement.productLimitBlockedProducts > 0
               ? `${entitlement.productLimitBlockedProducts.toLocaleString("en-US")} products are excluded from AI Search by the product limit. `
               : ""}
@@ -1428,7 +1787,7 @@ export default function Dashboard() {
               ? `${entitlement.cachedProductLimitBlockedProducts.toLocaleString("en-US")} of them retain cached vectors for fast recovery but remain non-searchable. `
               : ""}
             {entitlement.vectorQuotaBlockedProducts > 0
-              ? `${entitlement.vectorQuotaBlockedProducts.toLocaleString("en-US")} products are pending vector quota.`
+              ? `${entitlement.vectorQuotaBlockedProducts.toLocaleString("en-US")} eligible products are waiting for vector synchronization.`
               : ""}
           </Notice>
         ) : null}
@@ -1436,34 +1795,38 @@ export default function Dashboard() {
         <section className="vip-metrics">
           <MetricCard
             eyebrow="Active products"
-            value={formatUsage(entitlement.activeProductSlotsUsed, entitlement.limits.productLimit)}
-            detail={`${entitlement.cachedVectorCount.toLocaleString("en-US")} vectors cached · ${entitlement.cachedProductLimitBlockedProducts.toLocaleString("en-US")} cached & blocked from AI Search.`}
+            value={formatUsage(entitlement.activeProductSlotsUsed, displayProductLimit)}
+            detail={
+              subscriptionReady
+                ? `${entitlement.cachedVectorCount.toLocaleString("en-US")} vectors cached · ${entitlement.cachedProductLimitBlockedProducts.toLocaleString("en-US")} cached & blocked from AI Search.`
+                : `${entitlement.cachedVectorCount.toLocaleString("en-US")} vectors cached. Product quota becomes usable after plan activation.`
+            }
             progress={productProgress}
             accent="violet"
             isSyncing={isBackgroundSyncing}
           />
           <MetricCard
             eyebrow="AI searches"
-            value={formatUsage(entitlement.usage.searchCount, entitlement.limits.searchLimit)}
+            value={formatUsage(entitlement.usage.searchCount, displaySearchLimit)}
             detail={
-              searchRemaining === null
-                ? "Unlimited plan · executions logged."
-                : `${searchRemaining.toLocaleString("en-US")} remaining in cycle.`
+              !subscriptionReady
+                ? "Search quota becomes usable after plan activation."
+                : searchRemaining === null
+                  ? "Unlimited plan · executions logged."
+                  : `${searchRemaining.toLocaleString("en-US")} remaining in cycle.`
             }
             progress={searchProgress}
             accent="cyan"
           />
           <MetricCard
-            eyebrow="AI coverage"
-            value={`${aiCoverage}%`}
-            detail={`${entitlement.usage.searchCount.toLocaleString("en-US")} / ${storefrontSearches.toLocaleString("en-US")} storefront searches processed by AI.`}
+            eyebrow="Product click rate · 7 days"
+            value={fmtPct(current7dCtr)}
+            detail={
+              current7dSearches > 0
+                ? `${current7dClickedSearches.toLocaleString("en-US")} of ${current7dSearches.toLocaleString("en-US")} searches produced a product click.`
+                : "No search sessions recorded in the last 7 days."
+            }
             accent="green"
-          />
-          <MetricCard
-            eyebrow="Safe fallback"
-            value={`${fallbackRate}%`}
-            detail={`${fallbackCount.toLocaleString("en-US")} searches routed to safe Shopify Search fallback.`}
-            accent="amber"
           />
         </section>
 
@@ -1511,7 +1874,7 @@ export default function Dashboard() {
               <div className="vip-impact-kpi">
                 <span>Search anomalies · 7 days</span>
                 <strong>{current7dAbnormalSearches.toLocaleString("en-US")}</strong>
-                <small>NO_RESULTS, LOW_SIMILARITY, or HIGH_SIMILARITY_NO_CLICK</small>
+                <small>Query class &gt;20 searches with CTR &lt;5%, or valid semantic facets with no results</small>
               </div>
             </div>
 
@@ -1520,9 +1883,9 @@ export default function Dashboard() {
             <div className="vip-baseline-note">
               <strong>7-day view:</strong>
               <span>
-                All three trend lines use the same daily SearchLog. "Search anomalies"
-                represent queries flagged with NO_RESULTS, LOW_SIMILARITY, or
-                HIGH_SIMILARITY_NO_CLICK. Search Alerts highlight recurring issues over a {impact.windowDays}-day window.
+                All three trend lines use the same daily SearchLog. Search anomalies
+                are counted only when a query class has more than 20 searches with CTR below 5%,
+                or when valid Product Semantic Facets produce no results. Search Alerts highlight recurring issues over a {impact.windowDays}-day window.
               </span>
             </div>
           </div>
@@ -1593,222 +1956,6 @@ export default function Dashboard() {
           </aside>
         </section>
 
-        <section
-          className="vip-grid"
-          style={showLiveSetup ? undefined : { gridTemplateColumns: "1fr" }}
-        >
-          {showLiveSetup ? (
-            <div className="vip-panel">
-            <div className="vip-panel__head">
-              <div>
-                <h3>Production readiness</h3>
-                <p>5 essential layers required before accepting live traffic.</p>
-              </div>
-              <StatusPill state={readinessPercent === 100 ? "success" : "warning"}>
-                {readinessPercent === 100 ? "Ready to launch" : `${readinessDone}/5 complete`}
-              </StatusPill>
-            </div>
-            <div className="vip-panel__body">
-              <ReadinessItem
-                index={1}
-                title="Subscription"
-                state={subscriptionReady ? "success" : "warning"}
-                status={subscriptionReady ? "Active" : "Needs activation"}
-                detail={`${entitlement.planLabel} · ${entitlement.subscriptionStatus}`}
-                action={{
-                  label: "Manage plan",
-                  href: "/app/billing",
-                  targetTop: true,
-                }}
-              />
-              <ReadinessItem
-                index={2}
-                title="Catalog & vector index"
-                state={
-                  catalogFailed
-                    ? "critical"
-                    : catalogReady
-                      ? "success"
-                      : catalogBusy
-                        ? "warning"
-                        : "neutral"
-                }
-                status={
-                  catalogFailed
-                    ? "Error"
-                    : catalogReady
-                      ? "Synced"
-                      : catalogBusy
-                        ? "Syncing"
-                        : "Not started"
-                }
-                detail={
-                  data.catalogJob
-                    ? `Processed ${data.catalogJob.productsProcessed.toLocaleString("en-US")} · Indexed ${data.catalogJob.productsIndexed.toLocaleString("en-US")} · Skipped ${data.catalogJob.productsSkipped.toLocaleString("en-US")} · Failed ${data.catalogJob.productsFailed.toLocaleString("en-US")}`
-                    : "No catalog sync job recorded."
-                }
-                action={{ label: "Open settings", href: "/app/settings" }}
-              />
-              <ReadinessItem
-                index={3}
-                title="AI Search settings"
-                state={searchSettingReady ? "success" : "neutral"}
-                status={searchSettingReady ? "Enabled" : "Disabled"}
-                detail={`Language ${data.settings.searchLanguage ?? "not configured"}${data.settings.resultLimit ? ` · ${data.settings.resultLimit} results/search` : ""}`}
-                action={{ label: "Configure", href: "/app/settings" }}
-              />
-              <ReadinessItem
-                index={4}
-                title="Theme App Embed"
-                state={embedReady ? "success" : "warning"}
-                status={
-                  data.theme.appEmbedEnabled === true
-                    ? "Enabled"
-                    : data.theme.appEmbedEnabled === false
-                      ? "Disabled"
-                      : "Unknown"
-                }
-                detail={
-                  data.theme.appEmbedEnabled === true
-                    ? `Published theme: ${data.theme.themeName ?? "unknown"} · Current app embed is active.`
-                    : data.theme.appEmbedReason === "STALE_OTHER_APP_EMBED_ONLY"
-                      ? `Published theme: ${data.theme.themeName ?? "unknown"} · A stale embed from another AI-Buyense app installation exists, but this app's embed is not enabled.`
-                      : `Published theme: ${data.theme.themeName ?? "unknown"} · Enable this app's embed in Theme Editor.`
-                }
-                action={
-                  data.appEmbedUrl
-                    ? { label: "Open theme editor", href: data.appEmbedUrl, targetTop: true }
-                    : { label: "Open settings", href: "/app/settings" }
-                }
-              />
-              <ReadinessItem
-                index={5}
-                title="Theme rendering"
-                state={
-                  themeSyncFetcher.data?.success === false
-                    ? "critical"
-                    : rendererReady
-                      ? "success"
-                      : "warning"
-                }
-                status={
-                  themeSyncing
-                    ? "Syncing"
-                    : themeSyncFetcher.data?.success === false
-                      ? "Sync failed"
-                      : rendererReady
-                        ? "Renderer ready"
-                        : "Needs check"
-                }
-                detail={
-                  themeSyncFetcher.data?.message
-                    ? themeSyncFetcher.data.message
-                    : rendererReady
-                      ? `Published theme renderer is available${
-                          data.theme.renderStrategy ? ` · ${data.theme.renderStrategy}` : ""
-                        }.`
-                      : `Theme renderer unavailable · ${data.theme.integrationStatus}`
-                }
-                actionNode={
-                  <themeSyncFetcher.Form method="post" action="/app/settings">
-                    <input type="hidden" name="intent" value="sync_theme_map" />
-                    <button
-                      type="submit"
-                      className="vip-check-button"
-                      disabled={themeSyncing}
-                    >
-                      {themeSyncing
-                        ? "Syncing theme..."
-                        : rendererReady
-                          ? "Resync theme"
-                          : "Sync theme"}
-                    </button>
-                  </themeSyncFetcher.Form>
-                }
-              />
-            </div>
-          </div>
-          ) : null}
-
-          <div className="vip-side-stack">
-            <div className="vip-panel vip-health">
-              <h3>System health</h3>
-              <p>Live status of critical layers affecting storefront search.</p>
-              <HealthRow
-                label="AI Search"
-                value={entitlement.searchAllowed && searchSettingReady ? "Online" : "Standby"}
-                state={entitlement.searchAllowed && searchSettingReady ? "success" : "warning"}
-              />
-              <HealthRow
-                label="Catalog"
-                value={catalogReady ? "Synced" : catalogBusy ? "Syncing" : catalogStatus}
-                state={catalogFailed ? "critical" : catalogReady ? "success" : "warning"}
-              />
-              <HealthRow
-                label="Theme"
-                value={rendererReady ? "Compatible" : "Check required"}
-                state={rendererReady ? "success" : "warning"}
-              />
-              <HealthRow
-                label="App Embed"
-                value={embedReady ? "Enabled" : "Disabled"}
-                state={embedReady ? "success" : "warning"}
-              />
-              <HealthRow
-                label="Background queue"
-                value={`${data.queue.pending} pending · ${data.queue.processing} active`}
-                state={queueState}
-              />
-            </div>
-
-            <div className="vip-panel vip-intel">
-              <div className="vip-intel__icon">AI</div>
-              <h3>Search Analytics</h3>
-              <p>
-                Track NO_RESULTS, LOW_SIMILARITY, and HIGH_SIMILARITY_NO_CLICK anomalies to understand what shoppers are searching for and optimize product discovery.
-              </p>
-              <Link to="/app/search-analytics">Open analytics →</Link>
-            </div>
-          </div>
-        </section>
-
-        <section className="vip-quick-grid">
-          <QuickLink
-            title="Catalog"
-            detail="Monitor product catalog sync jobs, vector indexes, and status."
-            href="/app/catalog-sync"
-          />
-          <QuickLink
-            title="Search Analytics"
-            detail="Track CTR, clicks, abnormal queries, and result quality."
-            href="/app/search-analytics"
-          />
-          <QuickLink
-            title="Usage"
-            detail="Monitor search quotas, embeddings, fallbacks, and usage logs."
-            href="/app/usage"
-          />
-          <QuickLink
-            title="Plans & Billing"
-            detail="Manage AI Search subscription plans and commercial quotas."
-            href="/app/billing"
-          />
-          <QuickLink
-            title="Settings"
-            detail="Configure search language, result limits, AI status, and storefront options."
-            href="/app/settings"
-          />
-          <QuickLink
-            title="Theme integration"
-            detail={
-              data.theme.themeName
-                ? `Current theme · ${data.theme.themeName}`
-                : "Check App Embed and theme integration status."
-            }
-            href={data.appEmbedUrl ?? "/app/settings"}
-            targetTop={Boolean(data.appEmbedUrl)}
-          />
-        </section>
       </div>
     </div>
   );

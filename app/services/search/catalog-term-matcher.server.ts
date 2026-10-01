@@ -17,6 +17,7 @@ const FIELD_PRIORITY: Record<string, number> = {
   PRODUCT_TYPE: 80,
   CATEGORY: 70,
   AUDIENCE: 60,
+  MEASUREMENT: 55,
   ATTRIBUTE: 50,
   COMPATIBILITY: 45,
   CONTEXT: 30,
@@ -60,18 +61,30 @@ export function matchCatalogTerms(
   const occupied = new Set<number>();
 
   for (const entry of dictionary.entries.slice().sort((a, b) => {
-    const tokenDelta = b.normalized.split(" ").length - a.normalized.split(" ").length;
-    return tokenDelta || (FIELD_PRIORITY[b.field] ?? 0) - (FIELD_PRIORITY[a.field] ?? 0);
+    // Identity-like phrases beat attributes/tags, then longest phrase wins.
+    // This prevents "chain" from occupying the first token of the stronger
+    // synonym "chain breaker", while still preventing a noisy long TAG from
+    // shadowing a real product identity.
+    const identityFields = new Set(["IDENTIFIER", "MODEL", "BRAND", "PRODUCT_TYPE"]);
+    const identityTierDelta =
+      Number(identityFields.has(b.field)) - Number(identityFields.has(a.field));
+    const tokenDelta =
+      b.normalized.split(" ").length - a.normalized.split(" ").length;
+    const confidenceDelta = (b.confidence ?? 1) - (a.confidence ?? 1);
+    const priorityDelta =
+      (FIELD_PRIORITY[b.field] ?? 0) - (FIELD_PRIORITY[a.field] ?? 0);
+    return identityTierDelta || tokenDelta || confidenceDelta || priorityDelta;
   })) {
     const span = phraseTokenSpan(queryTokens, entry.normalized);
     if (!span) continue;
     if (Array.from({ length: span.end - span.start }, (_, index) => span.start + index)
       .some((index) => occupied.has(index))) continue;
     for (let index = span.start; index < span.end; index += 1) occupied.add(index);
+    const sourceConfidence = Math.max(0, Math.min(entry.confidence ?? 1, 1));
     matches.push({
       text: entry.normalized,
       entry,
-      confidence: entry.field === "ALIAS" ? 0.94 : 1,
+      confidence: (entry.field === "ALIAS" ? 0.94 : 1) * sourceConfidence,
       matchType: entry.field === "ALIAS" ? "ALIAS" : "NORMALIZED",
       ...span,
     });
@@ -86,7 +99,16 @@ export function matchCatalogTerms(
         editDistanceAtMostOne(token, entry.normalized),
     );
     if (candidates.length !== 1) continue;
-    matches.push({ text: token, entry: candidates[0], confidence: 0.9, matchType: "FUZZY", start: index, end: index + 1 });
+    const entry = candidates[0];
+    const sourceConfidence = Math.max(0, Math.min(entry.confidence ?? 1, 1));
+    matches.push({
+      text: token,
+      entry,
+      confidence: 0.9 * sourceConfidence,
+      matchType: "FUZZY",
+      start: index,
+      end: index + 1,
+    });
   }
 
   return matches;

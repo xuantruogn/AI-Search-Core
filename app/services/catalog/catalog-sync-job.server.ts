@@ -302,6 +302,37 @@ export async function checkpointCatalogSyncJob(
   return updated === 1;
 }
 
+export async function updateCatalogSyncProgress(
+  jobId: number,
+  expectedAttempt: number,
+  progress: {
+    productsProcessed: number;
+    productsIndexed: number;
+    productsSkipped: number;
+    productsBlocked: number;
+    productsFailed: number;
+  },
+) {
+  // Live progress only. Deliberately do NOT advance cursor/pagesProcessed here:
+  // if the process dies mid-page, the page must be safe to replay.
+  const updated = await db.$executeRaw`
+    UPDATE \`AiSearchCatalogSyncJob\`
+    SET
+      \`productsProcessed\` = ${progress.productsProcessed},
+      \`productsIndexed\` = ${progress.productsIndexed},
+      \`productsSkipped\` = ${progress.productsSkipped},
+      \`productsBlocked\` = ${progress.productsBlocked},
+      \`productsFailed\` = ${progress.productsFailed},
+      \`updatedAt\` = UTC_TIMESTAMP(3)
+    WHERE
+      \`id\` = ${jobId}
+      AND \`status\` = 'PROCESSING'
+      AND \`attempts\` = ${expectedAttempt}
+  `;
+
+  return updated === 1;
+}
+
 export async function heartbeatCatalogSyncJob(
   jobId: number,
   expectedAttempt: number,

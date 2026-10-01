@@ -14,28 +14,84 @@ export type SearchAnalyticsDiagnostics = {
   topCandidateScore: number | null;
   vectorThreshold: number;
   embeddingCacheHit: boolean;
-  llmStatus: "SUCCESS" | "FALLBACK" | "CACHE_HIT" | "OUTSIDE_CATALOG";
+  llmStatus:
+    | "SUCCESS"
+    | "FALLBACK"
+    | "CACHE_HIT"
+    | "CODE_ONLY"
+    | "OUTSIDE_CATALOG"
+    | "NO_RESULT_PROOF";
   llmFallbackReason: string | null;
 };
 
 export type SearchClusterClassification =
   | "HEALTHY"
-  | "NO_RESULTS"
-  | "LOW_SIMILARITY"
-  | "HIGH_SIMILARITY_NO_CLICK";
+  | "SEMANTIC_NO_RESULTS"
+  | "LOW_CTR";
 
 const MAX_RANKED_PRODUCTS_FOR_ANALYTICS = 20;
 const QUERY_FINGERPRINT_DIMENSIONS = 64;
 const RESULT_CLUSTER_SIMILARITY = 0.7;
 const EMPTY_CLUSTER_SIMILARITY = 0.82;
-const LOW_SIMILARITY_MARGIN = 0.03;
-const HIGH_SIMILARITY_MARGIN = 0.08;
-const MIN_RECURRING_SEARCHES = 2;
-const MIN_NO_CLICK_SEARCHES = 3;
-const DEFAULT_NO_CLICK_GRACE_MINUTES = 30;
+export const ABNORMAL_QUERY_MIN_SEARCHES_EXCLUSIVE = 20;
+export const ABNORMAL_QUERY_MAX_CTR = 0.05;
+const MIN_RECURRING_SEARCHES = 1;
 
 function normalizeQuery(query: string) {
   return query.replace(/\s+/g, " ").trim().toLocaleLowerCase("en-US");
+}
+
+function hasMeaningfulString(value: unknown) {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function hasMeaningfulArray(value: unknown) {
+  return Array.isArray(value) && value.some(hasMeaningfulString);
+}
+
+export function hasReasonableProductSemanticFacets(
+  llmAnalysisJson: string | null | undefined,
+  llmStatus?: string | null,
+) {
+  if (!llmAnalysisJson || llmStatus === "OUTSIDE_CATALOG") return false;
+  try {
+    const parsed = JSON.parse(llmAnalysisJson) as Record<string, unknown>;
+    return (
+      hasMeaningfulString(parsed.productType) ||
+      hasMeaningfulString(parsed.category) ||
+      hasMeaningfulString(parsed.subcategory) ||
+      hasMeaningfulArray(parsed.productTypes) ||
+      hasMeaningfulArray(parsed.brands) ||
+      hasMeaningfulArray(parsed.models) ||
+      hasMeaningfulArray(parsed.identifiers) ||
+      hasMeaningfulArray(parsed.audience) ||
+      hasMeaningfulArray(parsed.requiredAttributes) ||
+      hasMeaningfulArray(parsed.compatibility) ||
+      hasMeaningfulArray(parsed.useCases) ||
+      hasMeaningfulArray(parsed.semanticMustTerms) ||
+      hasMeaningfulArray(parsed.semanticSourceMustTerms)
+    );
+  } catch {
+    return false;
+  }
+}
+
+export function classifyAbnormalSearchClass(args: {
+  searchCount: number;
+  clickedSearches: number;
+  semanticFacetNoResultCount: number;
+}): SearchClusterClassification {
+  const ctr = args.searchCount > 0
+    ? args.clickedSearches / args.searchCount
+    : 0;
+  if (args.semanticFacetNoResultCount > 0) return "SEMANTIC_NO_RESULTS";
+  if (
+    args.searchCount > ABNORMAL_QUERY_MIN_SEARCHES_EXCLUSIVE &&
+    ctr < ABNORMAL_QUERY_MAX_CTR
+  ) {
+    return "LOW_CTR";
+  }
+  return "HEALTHY";
 }
 
 /**
@@ -77,6 +133,7 @@ export async function recordSearchQueryLog({
   query,
   queryVector,
   analyzedQuery,
+  llmExpandedQuery,
   llmAnalysis,
   selectedContext,
   rankedProducts,
@@ -88,6 +145,7 @@ export async function recordSearchQueryLog({
   query: string;
   queryVector?: number[] | null;
   analyzedQuery?: string | null;
+  llmExpandedQuery?: string | null;
   llmAnalysis?: unknown;
   selectedContext?: unknown;
   rankedProducts: RankedSearchProduct[];
@@ -127,6 +185,7 @@ export async function recordSearchQueryLog({
       // is now a compact 64D semantic fingerprint, not the full embedding.
       queryVectorJson,
       analyzedQuery: analyzedQuery?.slice(0, 4_000) ?? null,
+      llmExpandedQuery: llmExpandedQuery?.slice(0, 4_000) ?? null,
       llmAnalysisJson,
       selectedContextJson,
       // Only the compact top-ranked set is needed for cluster similarity,
@@ -329,10 +388,11 @@ type ClusterAccumulator = {
   searchCount: number;
   searchesWithResults: number;
   clickedSearches: number;
-  matureSearches: number;
-  matureClickedSearches: number;
   clickCount: number;
   zeroResultCount: number;
+  semanticFacetNoResultCount: number;
+  logIds: string[];
+  semanticFacetNoResultLogIds: string[];
   scoreTotal: number;
   scoreCount: number;
   thresholdTotal: number;
@@ -358,13 +418,6 @@ export async function getMerchantSearchClusters(shop: string, days = 30) {
   });
 
   const clusters: ClusterAccumulator[] = [];
-  const configuredGrace = Number.parseFloat(
-    process.env.AI_SEARCH_QUALITY_NO_CLICK_GRACE_MINUTES ?? "",
-  );
-  const graceMinutes = Number.isFinite(configuredGrace)
-    ? Math.max(0, configuredGrace)
-    : DEFAULT_NO_CLICK_GRACE_MINUTES;
-  const graceCutoff = Date.now() - graceMinutes * 60_000;
 
   for (const log of logs) {
     const products = parseRankedProducts(log.rankedProductsJson);
@@ -405,10 +458,11 @@ export async function getMerchantSearchClusters(shop: string, days = 30) {
           searchCount: 0,
           searchesWithResults: 0,
           clickedSearches: 0,
-          matureSearches: 0,
-          matureClickedSearches: 0,
           clickCount: 0,
           zeroResultCount: 0,
+          semanticFacetNoResultCount: 0,
+          logIds: [],
+          semanticFacetNoResultLogIds: [],
           scoreTotal: 0,
           scoreCount: 0,
           thresholdTotal: 0,
@@ -421,11 +475,13 @@ export async function getMerchantSearchClusters(shop: string, days = 30) {
     cluster.searchCount += 1;
     cluster.searchesWithResults += hasResults ? 1 : 0;
     cluster.zeroResultCount += hasResults ? 0 : 1;
+    const semanticFacetNoResult =
+      !hasResults &&
+      hasReasonableProductSemanticFacets(log.llmAnalysisJson, log.llmStatus);
+    cluster.semanticFacetNoResultCount += semanticFacetNoResult ? 1 : 0;
+    cluster.logIds.push(log.id);
+    if (semanticFacetNoResult) cluster.semanticFacetNoResultLogIds.push(log.id);
     cluster.clickedSearches += log.clicks.length > 0 ? 1 : 0;
-    if (log.createdAt.getTime() <= graceCutoff) {
-      cluster.matureSearches += 1;
-      cluster.matureClickedSearches += log.clicks.length > 0 ? 1 : 0;
-    }
     cluster.clickCount += log.clicks.length;
     cluster.thresholdTotal += log.vectorThreshold;
 
@@ -466,26 +522,15 @@ export async function getMerchantSearchClusters(shop: string, days = 30) {
       const averageThreshold = cluster.thresholdTotal / cluster.searchCount;
       const resultRate = cluster.searchesWithResults / cluster.searchCount;
       const clickThroughRate =
-        cluster.searchesWithResults > 0
-          ? cluster.clickedSearches / cluster.searchesWithResults
+        cluster.searchCount > 0
+          ? cluster.clickedSearches / cluster.searchCount
           : 0;
 
-      let classification: SearchClusterClassification = "HEALTHY";
-      if (!cluster.hasResults) {
-        classification = "NO_RESULTS";
-      } else if (
-        averageTopScore !== null &&
-        averageTopScore < averageThreshold + LOW_SIMILARITY_MARGIN
-      ) {
-        classification = "LOW_SIMILARITY";
-      } else if (
-        cluster.matureSearches >= MIN_NO_CLICK_SEARCHES &&
-        cluster.matureClickedSearches === 0 &&
-        averageTopScore !== null &&
-        averageTopScore >= averageThreshold + HIGH_SIMILARITY_MARGIN
-      ) {
-        classification = "HIGH_SIMILARITY_NO_CLICK";
-      }
+      const classification = classifyAbnormalSearchClass({
+        searchCount: cluster.searchCount,
+        clickedSearches: cluster.clickedSearches,
+        semanticFacetNoResultCount: cluster.semanticFacetNoResultCount,
+      });
 
       const variants = [...cluster.queryCounts.entries()]
         .map(([query, stats]) => ({
@@ -506,8 +551,11 @@ export async function getMerchantSearchClusters(shop: string, days = 30) {
         variants,
         searchCount: cluster.searchCount,
         zeroResultCount: cluster.zeroResultCount,
+        semanticFacetNoResultCount: cluster.semanticFacetNoResultCount,
         resultRate,
         clickedSearches: cluster.clickedSearches,
+        logIds: cluster.logIds,
+        semanticFacetNoResultLogIds: cluster.semanticFacetNoResultLogIds,
         clickCount: cluster.clickCount,
         clickThroughRate,
         averageTopScore,

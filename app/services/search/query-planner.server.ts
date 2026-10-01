@@ -27,12 +27,28 @@ function constraint(value: string, confidence: number): QueryConstraint {
   };
 }
 
+const COMPLEMENTARY_RELATION_PATTERN =
+  /\b(?:pair(?:s|ed|ing)?(?: well)? with|go(?:es|ing)?(?: well)? with|match(?:es|ed|ing)? with|wear with|style with|mac(?: gi)? voi|phoi(?: do)? voi|ket hop voi|hop voi|di cung voi)\b/;
+
+function complementaryRelationSpan(normalizedQuery: string) {
+  const match = normalizedQuery.match(COMPLEMENTARY_RELATION_PATTERN);
+  if (!match || match.index === undefined) return null;
+  const before = normalizedQuery.slice(0, match.index).trim();
+  const start = before ? before.split(/\s+/).length : 0;
+  const width = match[0].trim().split(/\s+/).length;
+  return { start, end: start + width };
+}
+
+function isComplementaryRelationQuery(normalizedQuery: string) {
+  return complementaryRelationSpan(normalizedQuery) !== null;
+}
+
 function buildSemanticQuery(query: string, deterministic: ReturnType<typeof parseDeterministicQuery>) {
   let value = normalizeUnicodeQueryText(query);
   value = value
-    .replace(/\b(?:duoi|tren|khong qua|khong hon|toi da|toi thieu|it nhat|tu)\s+\d+(?:[.,]\d+)?\s*(?:k|tr|trieu|m|vnd|d|dong)?\b/g, " ")
-    .replace(/\b(?:re nhat|dat nhat|gia tang dan|gia giam dan|thap den cao|cao den thap|moi nhat)\b/g, " ")
-    .replace(/\b(?:gia re|binh dan|tiet kiem|hop tui tien|budget|affordable)\b/g, " ")
+    .replace(/\b(?:không dưới|khong duoi|không trên|khong tren|không quá|khong qua|không hơn|khong hon|dưới|duoi|trên|tren|tối đa|toi da|tối thiểu|toi thieu|ít nhất|it nhat|từ|tu)\s+\d+(?:[.,]\d+)?\s*(?:k|tr|triệu|trieu|m|vnd|đ|d|đồng|dong)?\b/g, " ")
+    .replace(/\b(?:rẻ nhất|re nhat|đắt nhất|dat nhat|giá tăng dần|gia tang dan|giá giảm dần|gia giam dan|thấp đến cao|thap den cao|cao đến thấp|cao den thap|mới nhất|moi nhat)\b/g, " ")
+    .replace(/\b(?:giá rẻ|gia re|bình dân|binh dan|tiết kiệm|tiet kiem|hợp túi tiền|hop tui tien|budget|affordable|inexpensive|cheap|low cost|not too expensive|doesn t cost too much|does not cost too much)\b/g, " ")
     .replace(/\s+/g, " ")
     .trim();
   return value || normalizeQueryText(query);
@@ -42,15 +58,42 @@ async function buildUncachedPlan(shop: string, query: string): Promise<QueryPlan
   const deterministic = parseDeterministicQuery(query);
   const dictionary = await getShopSearchDictionary(shop);
   const normalizedQuery = normalizeQueryText(query);
-  const rawMatches = matchCatalogTerms(query, dictionary).map((match) =>
-    match.entry.field === "MODEL" &&
-    new RegExp(`\\b(?:cho|for) ${match.text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`).test(normalizedQuery)
-      ? { ...match, entry: { ...match.entry, field: "COMPATIBILITY" as const } }
-      : match,
-  );
+  const complementaryRelation = isComplementaryRelationQuery(normalizedQuery);
+  const complementarySpan = complementaryRelationSpan(normalizedQuery);
+  const rawMatches = matchCatalogTerms(query, dictionary)
+    .filter(
+      (match) =>
+        !(
+          deterministic.price &&
+          match.entry.field === "MEASUREMENT" &&
+          /^\d+(?:[.,]\d+)?$/.test(match.text.trim())
+        ),
+    )
+    .map((match) => {
+      if (
+        match.entry.field === "MODEL" &&
+        new RegExp(`\\b(?:cho|for) ${match.text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`).test(normalizedQuery)
+      ) {
+        return { ...match, entry: { ...match.entry, field: "COMPATIBILITY" as const } };
+      }
+
+      if (
+        complementaryRelation &&
+        complementarySpan &&
+        match.entry.field === "PRODUCT_TYPE" &&
+        match.start >= complementarySpan.end
+      ) {
+        // In a complementary relation, a product mentioned after the relation
+        // phrase is the reference item ("top to wear with a skirt" => skirt).
+        // A product before the relation phrase remains the target identity.
+        return { ...match, entry: { ...match.entry, field: "CONTEXT" as const } };
+      }
+
+      return match;
+    });
   const fieldPriority: Record<string, number> = {
     IDENTIFIER: 100, MODEL: 90, PRODUCT_TYPE: 80, BRAND: 70,
-    COMPATIBILITY: 60, AUDIENCE: 50, ATTRIBUTE: 40,
+    COMPATIBILITY: 60, MEASUREMENT: 55, AUDIENCE: 50, ATTRIBUTE: 40,
     CATEGORY: 30, CONTEXT: 20, ALIAS: 10,
   };
   const strongestBySpan = new Map<string, (typeof rawMatches)[number]>();
@@ -86,7 +129,14 @@ async function buildUncachedPlan(shop: string, query: string): Promise<QueryPlan
         !/^\d+(?:[.,]\d+)?$/.test(token),
     );
   const unresolvedSegments = unresolvedTokens.length ? [unresolvedTokens.join(" ")] : [];
-  const routed = routeQuery({ deterministic, matches, unresolvedSegments });
+  const routedBase = routeQuery({ deterministic, matches, unresolvedSegments });
+  const routed = complementaryRelation
+    ? {
+        ...routedBase,
+        route: "FULL_LLM" as const,
+        reasons: [...new Set([...routedBase.reasons, "COMPLEMENTARY_RELATION"])],
+      }
+    : routedBase;
   const modeFor = (text: string): QueryConstraint["mode"] => {
     const normalized = normalizeQueryText(text);
     if (
@@ -94,9 +144,12 @@ async function buildUncachedPlan(shop: string, query: string): Promise<QueryPlan
         normalizeQueryText(negative.value).includes(normalized),
       )
     ) return "MUST_NOT";
-    if (
-      new RegExp(`\\b(?:bat buoc|phai co|must|required) ${normalized.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`).test(normalizedQuery)
-    ) return "MUST";
+    const at = ` ${normalizedQuery} `.indexOf(` ${normalized} `);
+    const prefix = at < 0 ? "" : normalizedQuery.slice(0, at)
+      .split(" ").filter(Boolean).slice(-3).join(" ");
+    if (/\b(?:only|must|requires?|required|exclusively|chi|bat buoc|phai co)\b/.test(prefix)) {
+      return "MUST";
+    }
     return "SHOULD";
   };
   const byField = (field: string) =>
@@ -116,19 +169,73 @@ async function buildUncachedPlan(shop: string, query: string): Promise<QueryPlan
     source: "DICTIONARY" as const,
   }));
 
+  const identityConstraints = byField("PRODUCT_TYPE");
+  const hardIdentityIntersection =
+    identityConstraints.length === 1 ||
+    deterministic.relation === "ALL";
+  const retrievalMode: QueryPlan["retrievalMode"] =
+    complementaryRelation
+      ? "COMPLEMENT"
+      : identityConstraints.length === 0 &&
+          (routed.route === "LIGHT_LLM" || routed.route === "FULL_LLM")
+        ? "DISCOVERY"
+        : "DIRECT";
+  const resolvedReferenceTerms =
+    complementaryRelation && complementarySpan
+      ? resolvedSegments
+          .filter(
+            (segment) =>
+              segment.field === "CONTEXT" &&
+              segment.start >= complementarySpan.end,
+          )
+          .map((segment) => segment.canonicalValue)
+          .filter(Boolean)
+      : [];
+  const referenceTail =
+    complementaryRelation && complementarySpan
+      ? normalizedQuery
+          .split(/\s+/)
+          .slice(complementarySpan.end)
+          .join(" ")
+          .trim()
+      : "";
+  const referenceTerms =
+    resolvedReferenceTerms.length > 0
+      ? [...new Set(resolvedReferenceTerms)]
+      : referenceTail
+        ? [referenceTail]
+        : [];
+
   return {
     rawQuery: query,
     normalizedQuery: normalizeUnicodeQueryText(query),
     foldedQuery: normalizedQuery,
     route: routed.route,
-    identities: byField("PRODUCT_TYPE").map((item) => ({ ...item, mode: "MUST" })),
+    retrievalMode,
+    referenceTerms,
+    identities: identityConstraints.map((item) => ({
+      ...item,
+      mode: hardIdentityIntersection ? "MUST" : "SHOULD",
+    })),
     entities: {
       brands: byField("BRAND"),
       models: byField("MODEL"),
       identifiers: byField("IDENTIFIER").map((item) => ({ ...item, mode: "MUST" })),
     },
-    attributes: byField("ATTRIBUTE").map((item) => ({ ...item, name: "attribute" })),
-    measurements: deterministic.measurements,
+    attributes: matches
+      .filter((match) =>
+        match.entry.field === "ATTRIBUTE" &&
+        (!complementaryRelation || !complementarySpan || match.start < complementarySpan.end),
+      )
+      .map((match) => ({
+        ...constraint(match.entry.canonical, match.confidence),
+        mode: modeFor(match.text),
+        name: "attribute",
+      })),
+    measurements: [
+      ...deterministic.measurements,
+      ...byField("MEASUREMENT").map((item) => ({ ...item, name: "measurement" })),
+    ],
     audiences: byField("AUDIENCE"),
     contexts: [...byField("CONTEXT"), ...byField("ALIAS")],
     compatibility: byField("COMPATIBILITY").map((item) => ({ ...item, mode: "MUST" })),

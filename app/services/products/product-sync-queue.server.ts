@@ -5,6 +5,10 @@ import {
   markProductSyncJobFailed,
   PRODUCT_SYNC_JOB_STATUS,
 } from "./product-sync-job.server";
+import {
+  backgroundJobsEnabledInThisProcess,
+  jitterInterval,
+} from "../maintenance/background-runtime.server";
 
 type ProductSyncQueueState = {
   running: boolean;
@@ -46,6 +50,11 @@ const QUEUE_POLL_MS = readPositiveInteger(
 const QUEUE_MAX_JOBS_PER_DRAIN = readPositiveInteger(
   "AI_SEARCH_SYNC_QUEUE_BATCH_SIZE",
   10,
+);
+
+const QUEUE_CONCURRENCY = Math.max(
+  1,
+  Math.min(readPositiveInteger("AI_SEARCH_SYNC_QUEUE_CONCURRENCY", 2), 8),
 );
 
 async function processNextProductSyncJob() {
@@ -121,13 +130,17 @@ export async function drainProductSyncQueue(options?: { maxJobs?: number }) {
 
   try {
     while (processed < maxJobs) {
-      const foundJob = await processNextProductSyncJob();
+      const width = Math.min(QUEUE_CONCURRENCY, maxJobs - processed);
+      const results = await Promise.all(
+        Array.from({ length: width }, () => processNextProductSyncJob()),
+      );
+      const foundJobs = results.filter(Boolean).length;
 
-      if (!foundJob) {
+      if (foundJobs === 0) {
         break;
       }
 
-      processed += 1;
+      processed += foundJobs;
     }
 
     hitBatchLimit = processed >= maxJobs;
@@ -150,6 +163,8 @@ export async function drainProductSyncQueue(options?: { maxJobs?: number }) {
 }
 
 export function kickProductSyncQueue() {
+  if (!backgroundJobsEnabledInThisProcess()) return;
+
   if (queueState.running) {
     queueState.rerunRequested = true;
     return;
@@ -176,6 +191,8 @@ export function kickProductSyncQueue() {
 }
 
 export function startProductSyncQueueWorker() {
+  if (!backgroundJobsEnabledInThisProcess()) return;
+
   if (queueState.timerStarted) {
     return;
   }
@@ -184,7 +201,7 @@ export function startProductSyncQueueWorker() {
 
   const timer = setInterval(() => {
     kickProductSyncQueue();
-  }, QUEUE_POLL_MS);
+  }, jitterInterval(QUEUE_POLL_MS));
 
   timer.unref?.();
 

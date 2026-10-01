@@ -40,6 +40,7 @@ export type SyncEntireCatalogInput = {
     nextCursor: string | null,
     progress: CatalogSyncProgress,
   ) => void | Promise<void>;
+  onProgress?: (progress: CatalogSyncProgress) => void | Promise<void>;
   onProductFailed?: (failure: {
     productId: string;
     handle: string;
@@ -56,6 +57,7 @@ export async function syncEntireCatalog({
   indexReason = "INITIAL_SYNC",
   stopWhenProductLimitReached = indexReason === "INITIAL_SYNC",
   onPageCompleted,
+  onProgress,
   onProductFailed,
 }: SyncEntireCatalogInput): Promise<CatalogSyncProgress> {
   console.log("[AI Search] Catalog sync started:", { shop, initialCursor });
@@ -155,6 +157,8 @@ export async function syncEntireCatalog({
         handle: product.handle,
         title: product.title,
       });
+
+      await onProgress?.(progress);
     }
 
     if (progress.stoppedByProductLimit) {

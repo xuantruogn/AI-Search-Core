@@ -106,7 +106,7 @@ export function parsePriceConstraint(query: string): PriceConstraint | null {
   }
 
   const maxPattern = new RegExp(
-    String.raw`(?:duoi|khong qua|khong hon|toi da|den|under|below|less than|up to|at most|<=)\s*(?:gia\s*)?${AMOUNT_PATTERN}`,
+    String.raw`(?:(?<!khong )duoi|khong qua|khong hon|khong tren|toi da|den|under|below|less than|up to|at most|<=)\s*(?:gia\s*)?${AMOUNT_PATTERN}`,
     "i",
   );
   const maxMatch = normalized.match(maxPattern);
@@ -147,7 +147,7 @@ export function parsePriceConstraint(query: string): PriceConstraint | null {
   }
 
   const minPattern = new RegExp(
-    String.raw`(?:tren|hon|tu|it nhat|toi thieu|over|above|more than|at least|from|>=)\s*(?:gia\s*)?${AMOUNT_PATTERN}`,
+    String.raw`(?:(?<!khong )tren|hon|khong duoi|tu|it nhat|toi thieu|over|above|more than|at least|from|>=)\s*(?:gia\s*)?${AMOUNT_PATTERN}`,
     "i",
   );
   const minMatch = normalized.match(minPattern);

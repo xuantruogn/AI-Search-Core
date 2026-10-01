@@ -1,9 +1,12 @@
-﻿import {
-  createEmbedding,
+import {
+  createEmbeddings,
   getEmbeddingModel,
   type EmbeddingRequestDiagnostics,
 } from "./embeddings.server";
-import { searchProductVectors } from "./vector-store.server";
+import {
+  searchProductVectors,
+  searchProductVectorsBatch,
+} from "./vector-store.server";
 import { ensureProductCollection } from "./qdrant.server";
 import { rewriteSearchQuery, type QueryRewriteResult } from "./query-rewriter.server";
 import { applyShopContextToQuery } from "./shop-context-index.server";
@@ -15,7 +18,7 @@ function readMinimumVectorScore() {
   const value = Number.parseFloat(
     process.env.AI_SEARCH_VECTOR_SCORE_THRESHOLD || "",
   );
-  return Number.isFinite(value) && value >= -1 && value <= 1 ? value : 0.25;
+  return Number.isFinite(value) && value >= -1 && value <= 1 ? value : 0.35;
 }
 
 function readRelativeVectorScoreRatio() {
@@ -25,9 +28,209 @@ function readRelativeVectorScoreRatio() {
   return Number.isFinite(value) && value >= 0.5 && value <= 1 ? value : 0.78;
 }
 
+function readDiscoveryRelativeVectorScoreRatio() {
+  const value = Number.parseFloat(
+    process.env.AI_SEARCH_DISCOVERY_VECTOR_RELATIVE_SCORE_RATIO || "",
+  );
+  return Number.isFinite(value) && value >= 0.5 && value <= 1 ? value : 0.88;
+}
+
+function readDiscoveryMinRecallResults() {
+  const value = Number.parseInt(
+    process.env.AI_SEARCH_DISCOVERY_MIN_RECALL_RESULTS || "",
+    10,
+  );
+  return Number.isSafeInteger(value) && value >= 1
+    ? Math.min(value, 50)
+    : 8;
+}
+
+export function computeDiscoveryRecallThreshold(args: {
+  retrievalMode: "DIRECT" | "DISCOVERY" | "COMPLEMENT";
+  baseThreshold: number;
+  retrievalMinimumScore: number;
+  candidateScores: number[];
+  hasStrongCatalogEvidence: boolean;
+  minRecallResults: number;
+}) {
+  if (
+    args.retrievalMode !== "DISCOVERY" ||
+    !args.hasStrongCatalogEvidence ||
+    args.minRecallResults <= 0
+  ) {
+    return args.baseThreshold;
+  }
+
+  const finiteScores = args.candidateScores.filter(Number.isFinite);
+  const passing = finiteScores.filter(
+    (score) => score >= args.baseThreshold,
+  ).length;
+  if (
+    passing >= args.minRecallResults ||
+    finiteScores.length < args.minRecallResults
+  ) {
+    return args.baseThreshold;
+  }
+
+  const nthScore = finiteScores[args.minRecallResults - 1];
+  return Math.max(
+    args.retrievalMinimumScore,
+    Math.min(args.baseThreshold, nthScore),
+  );
+}
+
+function retrievalModeOf(
+  rewrite: QueryRewriteResult | null | undefined,
+) {
+  return rewrite?.planning?.retrievalMode ?? "DIRECT";
+}
+
+function readDiscoveryVectorScore() {
+  const value = Number.parseFloat(
+    process.env.AI_SEARCH_DISCOVERY_VECTOR_SCORE_THRESHOLD || "0.24",
+  );
+  return Number.isFinite(value) && value >= 0 && value <= 1
+    ? value
+    : 0.24;
+}
+
+function readQueryEmbeddingTimeoutMs() {
+  const value = Number.parseInt(
+    process.env.AI_SEARCH_QUERY_EMBEDDING_TIMEOUT_MS || "",
+    10,
+  );
+
+  return Number.isSafeInteger(value) && value >= 500
+    ? Math.min(value, 5_000)
+    : 5_000;
+}
+
 function shouldLogEmbeddingInput() {
   const value = process.env.AI_SEARCH_LOG_EMBEDDING_INPUT?.trim().toLowerCase();
   return value === "1" || value === "true" || value === "yes" || value === "on";
+}
+
+const GENERIC_DISCOVERY_BRANCH_CONTEXT = new Set([
+  "apparel", "clothing", "gear", "equipment", "item", "items",
+  "product", "products", "goods", "outfit", "outfits", "fashion",
+]);
+
+function normalizeEmbeddingBranch(value: string) {
+  return value
+    .toLocaleLowerCase("en-US")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+export function buildDiscoveryEmbeddingBranches(
+  rewrite: QueryRewriteResult | null | undefined,
+) {
+  if (!rewrite || retrievalModeOf(rewrite) !== "DISCOVERY") return [];
+
+  const primary = normalizeEmbeddingBranch(
+    rewrite.analysis.intent ||
+      rewrite.planning?.semanticQuery ||
+      rewrite.query,
+  );
+  const semanticContext = [
+    ...(rewrite.analysis.semanticMustTerms ?? []),
+    ...rewrite.analysis.requiredAttributes,
+    ...rewrite.analysis.useCases,
+    ...rewrite.analysis.compatibility,
+  ]
+    .map((value) => value.replace(/\s+/g, " ").trim())
+    .filter(Boolean)
+    .filter((value) => !/\d/.test(value))
+    .filter((value) => {
+      const tokens = normalizeEmbeddingBranch(value).split(" ").filter(Boolean);
+      return (
+        tokens.length > 0 &&
+        !tokens.every((token) => GENERIC_DISCOVERY_BRANCH_CONTEXT.has(token))
+      );
+    })
+    .slice(0, 3);
+
+  const seen = new Set<string>();
+  const branches: string[] = [];
+  for (const rawExpansion of rewrite.analysis.semanticExpansions ?? []) {
+    const expansion = rawExpansion.replace(/\s+/g, " ").trim();
+    const normalizedExpansion = normalizeEmbeddingBranch(expansion);
+    if (!normalizedExpansion || normalizedExpansion === primary) continue;
+    if (
+      primary &&
+      (primary === normalizedExpansion ||
+        primary.includes(normalizedExpansion) ||
+        normalizedExpansion.includes(primary))
+    ) {
+      continue;
+    }
+    if (seen.has(normalizedExpansion)) continue;
+    seen.add(normalizedExpansion);
+
+    const parts = [expansion];
+    for (const context of semanticContext) {
+      const normalizedContext = normalizeEmbeddingBranch(context);
+      if (
+        !normalizedContext ||
+        normalizeEmbeddingBranch(parts.join(" ; ")).includes(normalizedContext)
+      ) {
+        continue;
+      }
+      parts.push(context);
+    }
+    const branch = parts.join(" ; ").slice(0, 260).trim();
+    if (branch) branches.push(branch);
+    if (branches.length >= 6) break;
+  }
+  return branches;
+}
+
+export function buildDirectEmbeddingPlan(
+  rewrite: QueryRewriteResult | null | undefined,
+) {
+  if (!rewrite || retrievalModeOf(rewrite) !== "DIRECT") {
+    return { primary: rewrite?.query ?? "", branches: [] as string[] };
+  }
+  const identity = [
+    rewrite.analysis.shopLanguageProductType,
+    rewrite.analysis.productType,
+    ...(rewrite.analysis.productTypes ?? []),
+  ].map((value) => value?.replace(/\s+/g, " ").trim()).find(Boolean);
+  const primary = identity || rewrite.planning?.semanticQuery || rewrite.query;
+  const negative = new Set(
+    (rewrite.analysis.negativeTerms ?? []).map(normalizeEmbeddingBranch),
+  );
+  const facets = [
+    ...rewrite.analysis.brands,
+    ...rewrite.analysis.models,
+    ...rewrite.analysis.requiredAttributes,
+    ...rewrite.analysis.optionalPreferences,
+    ...rewrite.analysis.attributes,
+    ...rewrite.analysis.audience,
+  ]
+    .map((value) => value.replace(/\s+/g, " ").trim())
+    .filter(Boolean)
+    .filter((value) => !/\d/.test(value))
+    .filter((value) => !negative.has(normalizeEmbeddingBranch(value)))
+    .filter((value, index, list) =>
+      list.findIndex((candidate) =>
+        normalizeEmbeddingBranch(candidate) === normalizeEmbeddingBranch(value),
+      ) === index,
+    )
+    .filter((value) => !normalizeEmbeddingBranch(primary).includes(normalizeEmbeddingBranch(value)))
+    .slice(0, 4);
+  const facetBranch = facets.length > 0
+    ? [primary, ...facets].join(" ; ").slice(0, 260)
+    : "";
+  return {
+    primary,
+    branches: facetBranch && normalizeEmbeddingBranch(facetBranch) !== normalizeEmbeddingBranch(primary)
+      ? [facetBranch]
+      : [],
+  };
 }
 
 export type SearchResult = {
@@ -40,12 +243,66 @@ export type SearchResult = {
   currencyCode?: string;
 };
 
+export function fuseSemanticVectorBranches(
+  resultSets: SearchResult[][],
+  limit: number,
+) {
+  const fused = new Map<
+    string,
+    { result: SearchResult; score: number; branchHits: number }
+  >();
+
+  resultSets.forEach((results, branchIndex) => {
+    const branchWeight = branchIndex === 0 ? 1 : 0.98;
+    for (const result of results) {
+      const weightedScore = result.score * branchWeight;
+      const current = fused.get(result.productId);
+      if (!current) {
+        fused.set(result.productId, {
+          result,
+          score: weightedScore,
+          branchHits: 1,
+        });
+        continue;
+      }
+      current.branchHits += 1;
+      if (weightedScore > current.score) {
+        current.result = result;
+        current.score = weightedScore;
+      }
+    }
+  });
+
+  return [...fused.values()]
+    .map(({ result, score, branchHits }) => ({
+      ...result,
+      // Tiny consensus bonus helps a product supported by both the general
+      // need vector and a product-class branch without allowing broad branch
+      // membership to dominate ranking.
+      score: Math.min(1, score + Math.min(0.03, (branchHits - 1) * 0.01)),
+    }))
+    .sort((left, right) => right.score - left.score)
+    .slice(0, Math.max(1, limit));
+}
+
 export type SemanticSearchDiagnostics = {
+  primaryEmbeddingInput?: string;
+  semanticFacetBranches?: string[];
+  retrievalMode: "DIRECT" | "DISCOVERY" | "COMPLEMENT";
+  noEvidenceGuardTriggered: boolean;
+  noEvidenceThreshold: number;
+  topVectorScore: number | null;
+  hasStrongCatalogEvidence: boolean;
   candidateCount: number;
   topCandidateScore: number | null;
   vectorThreshold: number;
   embeddingCacheHit: boolean;
-  llmStatus: "SUCCESS" | "FALLBACK" | "CACHE_HIT" | "OUTSIDE_CATALOG";
+  llmStatus:
+    | "SUCCESS"
+    | "FALLBACK"
+    | "CACHE_HIT"
+    | "CODE_ONLY"
+    | "OUTSIDE_CATALOG";
   llmFallbackReason: string | null;
   ensureCollectionMs: number;
   embeddingMs: number;
@@ -82,6 +339,21 @@ export type SemanticSearchInput = {
   onDiagnostics?: (diagnostics: SemanticSearchDiagnostics) => void;
 };
 
+function inferLlmStatus(
+  rewrite: QueryRewriteResult | undefined,
+): SemanticSearchDiagnostics["llmStatus"] {
+  if (!rewrite) return "CODE_ONLY";
+  if (rewrite.fallbackReason) return "FALLBACK";
+  if (!rewrite.model) return "CODE_ONLY";
+  if (
+    rewrite.timing?.cacheStatus === "HIT" ||
+    rewrite.timing?.cacheStatus === "JOINED"
+  ) {
+    return "CACHE_HIT";
+  }
+  return "SUCCESS";
+}
+
 export async function semanticSearch({
   preparedRewrite,
   shop,
@@ -107,6 +379,10 @@ export async function semanticSearch({
   const stageStartedAt = Date.now();
 
   let embeddingMs = 0;
+  let embeddingCallCount = 0;
+  let semanticBranchInputs: string[] = [];
+  let semanticBranchVectors: number[][] = [];
+  let primaryEmbeddingInputForDiagnostics = cleanQuery;
   let embeddingRequestDiagnostics:
     | EmbeddingRequestDiagnostics
     | null = null;
@@ -180,11 +456,19 @@ export async function semanticSearch({
 
   let llmStatus:
     SemanticSearchDiagnostics["llmStatus"] =
-      "CACHE_HIT";
+      inferLlmStatus(preparedRewrite);
 
   let llmFallbackReason:
     string | null =
-      null;
+      preparedRewrite?.fallbackReason ?? null;
+
+  const transientLlmFallbackReasons = new Set([
+    "LLM_TIMEOUT",
+    "LLM_ERROR",
+    "LLM_INCOMPLETE",
+    "LLM_OUTPUT_TRUNCATED",
+    "INVALID_LLM_OUTPUT",
+  ]);
 
   // ============================================================
   // 1. QUERY EMBEDDING
@@ -199,6 +483,49 @@ export async function semanticSearch({
   ) {
     queryVector =
       vectorOverride;
+
+    const directPlan = buildDirectEmbeddingPlan(preparedRewrite);
+    semanticBranchInputs = retrievalModeOf(preparedRewrite) === "DISCOVERY"
+      ? buildDiscoveryEmbeddingBranches(preparedRewrite)
+      : directPlan.branches;
+    if (semanticBranchInputs.length > 0) {
+      void ensureCollectionReady();
+      const embeddingStartedAt = Date.now();
+      semanticBranchVectors = await createEmbeddings(
+        semanticBranchInputs,
+        {
+          maxRetries: 0,
+          timeoutMs: readQueryEmbeddingTimeoutMs(),
+          usageContext: {
+            shop,
+            operation: "QUERY_EMBEDDING",
+          },
+          onDiagnostics: (diagnostics) => {
+            embeddingRequestDiagnostics = diagnostics;
+          },
+        },
+      );
+      embeddingCallCount = 1;
+      embeddingMs = Date.now() - embeddingStartedAt;
+
+      // The primary vector came from cache, but the expansion batch is a real
+      // provider call and must consume the same query-embedding reservation.
+      if (onEmbeddingCreated) {
+        const usageStartedAt = Date.now();
+        usageCompleted = (async () => {
+          try {
+            await onEmbeddingCreated(queryVector, { cacheable: false });
+          } catch (usageError) {
+            console.error(
+              "[AI Search] Query expansion embedding callback failed:",
+              usageError,
+            );
+          } finally {
+            usageMs = Date.now() - usageStartedAt;
+          }
+        })();
+      }
+    }
   } else {
     const preparationStartedAt =
       Date.now();
@@ -226,9 +553,7 @@ export async function semanticSearch({
     effectiveRewrite = rewrite;
 
     llmStatus =
-      rewrite.fallbackReason
-        ? "FALLBACK"
-        : "SUCCESS";
+      inferLlmStatus(rewrite);
 
     llmFallbackReason =
       rewrite.fallbackReason;
@@ -314,6 +639,11 @@ export async function semanticSearch({
       );
 
       onDiagnostics?.({
+        retrievalMode: retrievalModeOf(rewrite),
+        noEvidenceGuardTriggered: false,
+        noEvidenceThreshold: 0,
+        topVectorScore: null,
+        hasStrongCatalogEvidence: false,
         candidateCount:
           0,
 
@@ -393,6 +723,17 @@ export async function semanticSearch({
       return [];
     }
 
+    const directPlan = buildDirectEmbeddingPlan(rewrite);
+    const primaryEmbeddingInput = directPlan.primary || rewrite.query;
+    primaryEmbeddingInputForDiagnostics = primaryEmbeddingInput;
+    semanticBranchInputs = retrievalModeOf(rewrite) === "DISCOVERY"
+      ? buildDiscoveryEmbeddingBranches(rewrite)
+      : directPlan.branches;
+    const embeddingInputs = [
+      primaryEmbeddingInput,
+      ...semanticBranchInputs,
+    ];
+
     if (
       shouldLogEmbeddingInput()
     ) {
@@ -406,7 +747,11 @@ export async function semanticSearch({
             768,
 
           input:
-            rewrite.query,
+            primaryEmbeddingInput,
+
+          semanticBranchInputs,
+          batchInputCount:
+            embeddingInputs.length,
         },
       );
     }
@@ -422,12 +767,15 @@ export async function semanticSearch({
     const embeddingStartedAt =
       Date.now();
 
-    queryVector =
-      await createEmbedding(
-        rewrite.query,
+    const embeddingVectors =
+      await createEmbeddings(
+        embeddingInputs,
         {
           maxRetries:
             0,
+
+          timeoutMs:
+            readQueryEmbeddingTimeoutMs(),
 
           usageContext: {
             shop,
@@ -443,6 +791,10 @@ export async function semanticSearch({
             },
         },
       );
+
+    embeddingCallCount = 1;
+    queryVector = embeddingVectors[0];
+    semanticBranchVectors = embeddingVectors.slice(1);
 
     embeddingMs =
       Date.now() -
@@ -462,7 +814,7 @@ export async function semanticSearch({
           getEmbeddingModel(),
 
         inputLength:
-          rewrite.query.length,
+          primaryEmbeddingInput.length,
 
         dimensions:
           768,
@@ -550,10 +902,10 @@ export async function semanticSearch({
           rewrite.fallbackReason,
 
         embeddingInputLength:
-          rewrite.query.length,
+          primaryEmbeddingInput.length,
 
         embeddingInput:
-          rewrite.query,
+          primaryEmbeddingInput,
 
         route:
           rewrite.planning?.route ?? "LEGACY",
@@ -633,34 +985,89 @@ export async function semanticSearch({
   let qdrantMs =
     0;
 
+  const transientLlmFallback =
+    Boolean(
+      llmFallbackReason &&
+      transientLlmFallbackReasons.has(llmFallbackReason),
+    );
+
+  const configuredFallbackScore = Number.parseFloat(
+    process.env.AI_SEARCH_TRANSIENT_FALLBACK_VECTOR_SCORE_THRESHOLD || "0.18",
+  );
+  const safeFallbackScore =
+    Number.isFinite(configuredFallbackScore) &&
+    configuredFallbackScore >= 0 &&
+    configuredFallbackScore <= 1
+      ? configuredFallbackScore
+      : 0.18;
+
+  const retrievalMode =
+    retrievalModeOf(effectiveRewrite);
+  const discoveryMinimumScore =
+    readDiscoveryVectorScore();
+
+  const retrievalMinimumScore =
+    transientLlmFallback
+      ? Math.min(minimumScore, safeFallbackScore)
+      : retrievalMode === "DISCOVERY" ||
+          retrievalMode === "COMPLEMENT"
+        ? Math.min(minimumScore, discoveryMinimumScore)
+        : minimumScore;
+
+  const onQdrantDiagnostics = (
+    diagnostics: {
+      requestMs: number;
+      responseMappingCodeMs: number;
+      passCount: number;
+      finalCandidateWindow: number;
+    },
+  ) => {
+    qdrantRequestMs = diagnostics.requestMs;
+    qdrantResponseMappingCodeMs = diagnostics.responseMappingCodeMs;
+    qdrantPassCount = diagnostics.passCount;
+    qdrantFinalCandidateWindow = diagnostics.finalCandidateWindow;
+  };
+
+  const retrievalTask =
+    semanticBranchVectors.length > 0
+      ? searchProductVectorsBatch({
+          shop,
+          vectors: [
+            queryVector,
+            ...semanticBranchVectors,
+          ],
+          limits: [
+            limit,
+            ...semanticBranchVectors.map(() =>
+              Math.min(
+                60,
+                Math.max(
+                  20,
+                  Math.ceil(limit / Math.max(8, semanticBranchVectors.length * 2)),
+                ),
+              ),
+            ),
+          ],
+          scoreThreshold:
+            retrievalMinimumScore,
+          onDiagnostics:
+            onQdrantDiagnostics,
+        }).then((resultSets) =>
+          fuseSemanticVectorBranches(resultSets, limit),
+        )
+      : searchProductVectors({
+          shop,
+          vector:
+            queryVector,
+          limit,
+          scoreThreshold:
+            retrievalMinimumScore,
+          onDiagnostics:
+            onQdrantDiagnostics,
+        });
+
   const retrievalPromise =
-    searchProductVectors({
-      shop,
-
-      vector:
-        queryVector,
-
-      limit,
-
-      scoreThreshold:
-        minimumScore,
-
-      onDiagnostics:
-        (
-          diagnostics,
-        ) => {
-          qdrantRequestMs =
-            diagnostics
-              .requestMs;
-
-          qdrantResponseMappingCodeMs =
-            diagnostics
-              .responseMappingCodeMs;
-
-          qdrantPassCount = diagnostics.passCount;
-          qdrantFinalCandidateWindow = diagnostics.finalCandidateWindow;
-        },
-    }).then(
+    retrievalTask.then(
       (value) => {
         qdrantMs =
           Date.now() -
@@ -886,33 +1293,113 @@ export async function semanticSearch({
     ]?.score;
 
   const relativeRatio =
-    readRelativeVectorScoreRatio();
+    retrievalMode === "DIRECT"
+      ? readRelativeVectorScoreRatio()
+      : readDiscoveryRelativeVectorScoreRatio();
 
-  const effectiveMinimumScore =
+  const baseMinimumScore =
     typeof topVectorScore ===
       "number" &&
     Number.isFinite(
       topVectorScore,
     )
       ? Math.max(
-          minimumScore,
+          retrievalMinimumScore,
 
           topVectorScore *
             relativeRatio,
         )
-      : minimumScore;
+      : retrievalMinimumScore;
 
-  const relevantResults =
-    registryValidatedResults.filter(
+  const discoveryExpansionGroundedIds =
+    retrievalMode === "DISCOVERY"
+      ? (effectiveRewrite?.context?.discoveryExpansionGroundedProductIds ?? [])
+      : [];
+  const strongContextKinds = new Set([
+    "CATEGORY",
+    "CANONICAL_PRODUCT_TYPE",
+    "PRODUCT_TYPE",
+    "ALIAS",
+    "USE_CASE",
+    "SOFT_CONTEXT",
+    "ATTRIBUTE",
+    "AUDIENCE",
+    "COMPATIBILITY",
+  ]);
+  const hasStrongCatalogEvidence =
+    Boolean(
+      effectiveRewrite?.context?.selectedTerms.some(
+        (term) =>
+          strongContextKinds.has(term.kind) &&
+          term.score >= 12 &&
+          !(
+            retrievalMode === "DISCOVERY" &&
+            ["PRODUCT_TYPE", "ALIAS"].includes(term.kind)
+          ),
+      ),
+    ) ||
+    discoveryExpansionGroundedIds.length > 0;
+  const discoveryMinRecallResults = readDiscoveryMinRecallResults();
+  const effectiveMinimumScore = computeDiscoveryRecallThreshold({
+    retrievalMode,
+    baseThreshold: baseMinimumScore,
+    retrievalMinimumScore,
+    candidateScores: registryValidatedResults.map((result) => result.score),
+    hasStrongCatalogEvidence,
+    minRecallResults: discoveryMinRecallResults,
+  });
+  const configuredTransientNoEvidenceTopScore = Number.parseFloat(
+    process.env.AI_SEARCH_TRANSIENT_FALLBACK_NO_EVIDENCE_MIN_TOP_SCORE || "0.30",
+  );
+  const transientNoEvidenceTopScore =
+    Number.isFinite(configuredTransientNoEvidenceTopScore) &&
+    configuredTransientNoEvidenceTopScore >= 0 &&
+    configuredTransientNoEvidenceTopScore <= 1
+      ? configuredTransientNoEvidenceTopScore
+      : 0.30;
+  const configuredNoEvidenceTopScore = Number.parseFloat(
+    process.env.AI_SEARCH_NO_EVIDENCE_MIN_TOP_SCORE || "0.45",
+  );
+  const noEvidenceTopScore =
+    Number.isFinite(configuredNoEvidenceTopScore) &&
+    configuredNoEvidenceTopScore >= 0 && configuredNoEvidenceTopScore <= 1
+      ? configuredNoEvidenceTopScore
+      : 0.45;
+
+  const transientNoEvidenceThreshold =
+    retrievalMode === "COMPLEMENT"
+      ? noEvidenceTopScore
+      : transientNoEvidenceTopScore;
+  const weakNoEvidenceVector =
+    !hasStrongCatalogEvidence &&
+    typeof topVectorScore === "number" &&
+    Number.isFinite(topVectorScore) &&
+    (
       (
-        result,
-      ) =>
-        Number.isFinite(
-          result.score,
-        ) &&
-        result.score >=
-          effectiveMinimumScore,
+        (llmStatus === "SUCCESS" || llmStatus === "CACHE_HIT") &&
+        effectiveRewrite?.fallbackReason === null &&
+        effectiveRewrite?.model !== null &&
+        topVectorScore < noEvidenceTopScore
+      ) ||
+      (
+        transientLlmFallback &&
+        topVectorScore < transientNoEvidenceThreshold
+      )
     );
+
+  let relevantResults =
+    weakNoEvidenceVector
+      ? []
+      : registryValidatedResults.filter(
+          (
+            result,
+          ) =>
+            Number.isFinite(
+              result.score,
+            ) &&
+            result.score >=
+              effectiveMinimumScore,
+        );
 
   thresholdFilterCodeMs =
     Date.now() -
@@ -921,7 +1408,11 @@ export async function semanticSearch({
   console.log(
     "[AI Search] Qdrant results:",
     {
-      minimumScore,
+      minimumScore:
+        retrievalMinimumScore,
+
+      configuredMinimumScore:
+        minimumScore,
 
       effectiveMinimumScore:
         Number(
@@ -944,6 +1435,11 @@ export async function semanticSearch({
 
       relevantCount:
         relevantResults.length,
+
+      weakNoEvidenceVector,
+      noEvidenceTopScore,
+      topVectorScore,
+      hasStrongCatalogEvidence,
 
       resultsPreview:
         relevantResults
@@ -1027,6 +1523,15 @@ export async function semanticSearch({
       | null;
 
   onDiagnostics?.({
+    primaryEmbeddingInput: primaryEmbeddingInputForDiagnostics.slice(0, 300),
+    semanticFacetBranches: semanticBranchInputs.slice(0, 6).map((value) => value.slice(0, 300)),
+    retrievalMode,
+    noEvidenceGuardTriggered: weakNoEvidenceVector,
+    noEvidenceThreshold: transientLlmFallback
+      ? transientNoEvidenceThreshold
+      : noEvidenceTopScore,
+    topVectorScore: typeof topVectorScore === "number" ? topVectorScore : null,
+    hasStrongCatalogEvidence,
     candidateCount:
       registryValidatedResults.length,
 
@@ -1056,10 +1561,7 @@ export async function semanticSearch({
 
     embeddingMs,
 
-    embeddingCallCount:
-      vectorOverride
-        ? 0
-        : 1,
+    embeddingCallCount,
 
     embeddingOpenAiProcessingMs:
       finalEmbeddingDetails

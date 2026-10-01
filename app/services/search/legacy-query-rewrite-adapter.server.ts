@@ -40,6 +40,8 @@ export function queryPlanToLegacyRewrite(
     productType: productTypes[0] ?? "",
     productTypes,
     productRelation: productTypes.length ? plan.relation : "NONE",
+    retrievalMode: plan.retrievalMode,
+    referenceTerms: plan.referenceTerms ?? [],
     shopLanguageProductType: productTypes[0] ?? "",
     category: "",
     subcategory: "",
@@ -77,6 +79,7 @@ export function queryPlanToLegacyRewrite(
     fallbackReason: null,
     planning: {
       route: plan.route,
+      retrievalMode: plan.retrievalMode,
       semanticQuery: plan.semanticQuery,
       semanticResolution: plan.route === "VECTOR_SEMANTIC" ? "VECTOR" : "CODE",
       semanticResolutionConfidence: plan.unresolvedSegments.length === 0 ? 1 : 0.72,
@@ -104,15 +107,39 @@ export function mergeLlmRewriteIntoPlan(
     baseline.query ? [baseline.query] : [],
     llm.query ? [llm.query] : [],
   );
+  const isFullLlm = baseline.planning?.route === "FULL_LLM";
+  const detectedLanguage = llm.analysis.detectedLanguage
+    .trim()
+    .toLowerCase()
+    .replace(/_/g, "-")
+    .split("-")[0];
+  const shopLanguage = llm.analysis.shopLanguage
+    .trim()
+    .toLowerCase()
+    .replace(/_/g, "-")
+    .split("-")[0];
+  const isCrossLanguage =
+    Boolean(detectedLanguage) &&
+    Boolean(shopLanguage) &&
+    detectedLanguage !== "unknown" &&
+    shopLanguage !== "unknown" &&
+    detectedLanguage !== shopLanguage;
+  const embeddingQuery =
+    isFullLlm || isCrossLanguage
+      ? llm.query
+      : queryParts.join(" ; ");
+
   return {
     ...llm,
-    // LIGHT_LLM only receives the unresolved fragment. Preserve the code-built
-    // product identity and append the LLM expansion instead of replacing it.
-    query: queryParts.join(" ; "),
+    // FULL_LLM and cross-language semantic text is already normalized into
+    // the configured shop language by Gemini. Never mix the original shopper
+    // language back into the embedding input.
+    query: embeddingQuery,
     planning: {
       ...baseline.planning!,
-      semanticQuery: queryParts.join(" ; "),
-      semanticResolution: baseline.planning?.route === "LIGHT_LLM" ? "LIGHT_LLM" : "FULL_LLM",
+      semanticQuery: embeddingQuery,
+      semanticResolution:
+        baseline.planning?.route === "FULL_LLM" ? "FULL_LLM" : "LIGHT_LLM",
       semanticResolutionConfidence: llm.analysis.confidence,
     },
     analysis: {

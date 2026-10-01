@@ -176,10 +176,10 @@ export function classifySearchRequest({
     return native("QUERY_TOO_SHORT_FOR_SEMANTIC", normalizedQuery, nativePath);
   }
 
-  if (looksLikeExactIdentifier(normalizedQuery)) {
-    return native("EXACT_IDENTIFIER_QUERY", normalizedQuery, nativePath);
-  }
-
+  // Exact SKU/model/barcode-like queries are intentionally allowed into
+  // the AI pipeline. query-router.server.ts routes catalog-backed exact IDs
+  // to STRUCTURED_ONLY, so they avoid LLM/embedding while still using the
+  // indexed identifier vocabulary.
   if (looksLikeAdvancedShopifySyntax(normalizedQuery)) {
     return native("SHOPIFY_QUERY_SYNTAX", normalizedQuery, nativePath);
   }

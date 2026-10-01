@@ -71,7 +71,7 @@ export function parseDeterministicQuery(query: string): DeterministicQueryParse 
     sort = { field: "NEWEST", direction: "DESC" };
   }
 
-  const budget = /\b(?:gia re|binh dan|tiet kiem|hop tui tien|budget|affordable|value for money)\b/.test(normalizedQuery);
+  const budget = /\b(?:gia re|binh dan|tiet kiem|hop tui tien|budget|affordable|inexpensive|cheap|low cost|value for money|not too expensive|doesn t cost too much|does not cost too much)\b/.test(normalizedQuery);
   const premium = /\b(?:cao cap|hang sang|luxury|premium)\b/.test(normalizedQuery);
   const marketPreference = budget ? "BUDGET" : premium ? "PREMIUM" : "ANY";
 
@@ -80,7 +80,7 @@ export function parseDeterministicQuery(query: string): DeterministicQueryParse 
   const relation = hasAny ? "ANY" : hasAll ? "ALL" : "SINGLE";
 
   const measurements: AttributeConstraint[] = [];
-  const measurementPattern = /\b(?:size\s*\d+(?:[.,]\d+)?|\d+(?:[.,]\d+)?\s*(?:ml|l|gb|tb|inch|cm|mm|kg|g|w|mah)|xl|xxl)\b/giu;
+  const measurementPattern = /\b(?:size\s*(?:\d+(?:[.,]\d+)?|xs|s|m|l|xl|xxl)|\d+(?:[x×-]\d+)+(?:[a-z]+)?|\d+(?:[.,]\d+)?\s*(?:ml|l|gb|tb|inch|cm|mm|kg|g|w|mah)|(?:pack of|goi|bo)\s*\d+|xl|xxl)\b/giu;
   for (const match of query.matchAll(measurementPattern)) {
     const raw = match[0].replace(/\s+/g, " ").trim();
     measurements.push({
@@ -90,7 +90,7 @@ export function parseDeterministicQuery(query: string): DeterministicQueryParse 
   }
 
   const negatives: QueryConstraint[] = [];
-  const negativePattern = /\b(?:khong phai|khong mau|khong|loai tru|ngoai tru|without|except|not)\s+([^,;]+?)(?=\s+(?:va|hoac|nhung|phai|cang|and|or|but)\b|[,;]|$)/giu;
+  const negativePattern = /\b(?:khong phai|khong mau|khong(?!\s+(?:qua|hon|duoi|tren)\b)|loai tru|ngoai tru|without|except|not)\s+([^,;]+?)(?=\s+(?:va|hoac|nhung|phai|cang|and|or|but)\b|[,;]|$)/giu;
   for (const match of normalizedQuery.matchAll(negativePattern)) {
     const value = match[1]?.trim();
     if (value) negatives.push(constraint(value, "MUST_NOT"));

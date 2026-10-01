@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 
 import {
   getActiveTheme,
+  getThemeById,
   getThemeFiles,
   type ActiveTheme,
 } from "./theme-reader.server";
@@ -341,6 +342,7 @@ async function persistAndCacheCompiledMap(
     admin: AdminGraphqlClient;
     shop: string;
     theme: ActiveTheme;
+    confirmSpecificTheme?: boolean;
   },
 ): Promise<ThemeMapV4> {
   const map =
@@ -354,9 +356,14 @@ async function persistAndCacheCompiledMap(
    * Confirm identity again before persisting.
    */
   const confirmedTheme =
-    await getActiveTheme(
-      options.admin,
-    );
+    options.confirmSpecificTheme
+      ? await getThemeById(
+          options.admin,
+          options.theme.id,
+        )
+      : await getActiveTheme(
+          options.admin,
+        );
 
   if (
     confirmedTheme.id !==
@@ -927,6 +934,56 @@ export async function rebuildActiveThemeMapV4(
     ...options,
     forceRebuild: true,
   });
+}
+
+/**
+ * Explicit-theme rebuild used by development preview hosts.
+ *
+ * Production storefront requests must not call this automatically; merchant
+ * theme lifecycle remains explicit/manual outside development.
+ */
+export async function rebuildThemeMapV4ForTheme(
+  options: {
+    admin: AdminGraphqlClient;
+    shop: string;
+    themeId: string;
+  },
+): Promise<ThemeMapV4> {
+  const theme = await getThemeById(
+    options.admin,
+    options.themeId,
+  );
+
+  if (
+    theme.processing ||
+    theme.processingFailed
+  ) {
+    throw new Error("THEME_PROCESSING");
+  }
+
+  const flightKey = buildInFlightKey(
+    options.shop,
+    theme,
+  );
+  const pending = inFlight.get(flightKey);
+  if (pending) return pending;
+
+  const buildPromise =
+    persistAndCacheCompiledMap({
+      admin: options.admin,
+      shop: options.shop,
+      theme,
+      confirmSpecificTheme: true,
+    }).finally(() => {
+      inFlight.delete(flightKey);
+    });
+
+  inFlight.set(
+    flightKey,
+    buildPromise,
+  );
+
+  return buildPromise;
 }
 
 /**

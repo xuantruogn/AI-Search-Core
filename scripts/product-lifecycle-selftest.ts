@@ -24,8 +24,12 @@ assert.equal(upReady.filter((row) => row.searchable).length, 500);
 assert.equal(upReady.filter((row) => row.requiresReindex).length, 0);
 
 const upStale = planProductEligibility(rows(500, 100, 470), true, 500);
-assert.equal(upStale.filter((row) => row.searchable).length, 470);
+assert.equal(upStale.filter((row) => row.searchable).length, 500);
 assert.equal(upStale.filter((row) => row.requiresReindex).length, 30);
+const capacityRecoveryIds = upStale
+  .filter((row) => row.requiresReindex && row.blockedReason === null)
+  .map((row) => row.productId);
+assert.equal(capacityRecoveryIds.length, 30);
 
 const inactive = planProductEligibility(rows(500, 500), false, 500);
 assert.equal(inactive.filter((row) => row.searchable).length, 0);
@@ -33,21 +37,78 @@ assert.equal(inactive.filter((row) => row.hasVector).length, 500);
 const activeAgain = planProductEligibility(inactive, true, 500);
 assert.equal(activeAgain.filter((row) => row.searchable).length, 500);
 
+const neverIndexedDuringInactive: ProductEligibilityInput[] = [
+  {
+    productId: "gid://shopify/Product/never-indexed",
+    searchable: false,
+    hasVector: false,
+    vectorStatus: "MISSING",
+    blockedReason: "SUBSCRIPTION",
+    status: "SUBSCRIPTION_BLOCKED",
+    createdAt: new Date(0),
+  },
+];
+const reopenedMissing = planProductEligibility(
+  neverIndexedDuringInactive,
+  true,
+  1,
+);
+assert.equal(reopenedMissing[0]?.requiresReindex, true);
+assert.equal(reopenedMissing[0]?.blockedReason, null);
+assert.equal(
+  reopenedMissing[0]?.status,
+  "SUBSCRIPTION_RECOVERY_PENDING",
+);
+
+const legacyMissingAfterLimitIncrease = planProductEligibility(
+  [
+    {
+      ...neverIndexedDuringInactive[0],
+      blockedReason: null,
+      status: "VECTOR_QUOTA_BLOCKED",
+    },
+  ],
+  true,
+  1,
+  { recoverMissingAsProductCapacity: true },
+);
+assert.equal(
+  legacyMissingAfterLimitIncrease[0]?.status,
+  "PRODUCT_LIMIT_RECOVERY_PENDING",
+);
+
 const first = planProductEligibility(rows(200, 100), true, 100);
 assert.deepEqual(planProductEligibility(first, true, 100), first);
 
 const recoverySource = readFileSync("app/services/products/quota-recovery.server.ts", "utf8");
 const indexerSource = readFileSync("app/services/products/product-indexer.server.ts", "utf8");
+const catalogQueueSource = readFileSync("app/services/catalog/catalog-sync-queue.server.ts", "utf8");
 const processorSource = readFileSync("app/services/products/product-sync-job-processor.server.ts", "utf8");
+const syncJobSource = readFileSync("app/services/products/product-sync-job.server.ts", "utf8");
 const webhookSource = readFileSync("app/services/products/product-webhook-sync.server.ts", "utf8");
 const registrySource = readFileSync("app/services/commerce/indexed-products.server.ts", "utf8");
 assert.doesNotMatch(recoverySource, /topic:\s*["']PRODUCTS_UPDATE["']/);
-assert.match(recoverySource, /topic:\s*["']REINDEX_PRODUCT["']/);
+assert.match(recoverySource, /REINDEX_PRODUCT_CAPACITY/);
+assert.match(recoverySource, /REINDEX_PRODUCT_SUBSCRIPTION/);
+assert.match(recoverySource, /productCapacityReindex/);
+assert.match(recoverySource, /subscriptionRecoveryReindex/);
+assert.match(indexerSource, /countAsVectorUpdate\s*=\s*[\r\n\s]*alreadyIndexed\s*&&/);
+assert.match(registrySource, /PRODUCT_LIMIT_RECOVERY_PENDING/);
+assert.match(registrySource, /SUBSCRIPTION_RECOVERY_PENDING/);
+assert.match(catalogQueueSource, /job\.reason === ["']PLAN_RECONCILE["'][\s\S]*?["']POLICY_RECOVERY["']/);
+assert.match(processorSource, /REINDEX_PRODUCT_CAPACITY/);
+assert.match(processorSource, /PRODUCT_LIMIT_RECOVERY/);
+assert.match(processorSource, /REINDEX_PRODUCT_SUBSCRIPTION/);
+assert.match(processorSource, /SUBSCRIPTION_RECOVERY/);
+assert.match(syncJobSource, /!policyReindex \|\| policyVersion === null/);
+assert.match(syncJobSource, /REINDEX_PRODUCT_SUBSCRIPTION/);
 assert.doesNotMatch(readFileSync("app/services/commerce/reconciliation.server.ts", "utf8"), /deleteProductVectorForShop/);
 const vectorSource = readFileSync("app/services/search/vector-store.server.ts", "utf8");
 assert.ok(vectorSource.includes("AND \\`searchable\\` = true"));
 assert.match(vectorSource, /match:\s*\{\s*any:\s*eligibleProductIds/);
 assert.match(registrySource, /FOR UPDATE/);
+assert.ok(registrySource.includes("\\`blockedReason\\` IS NULL"));
+assert.ok(registrySource.includes("\\`status\\` = 'PRODUCT_SLOT_RESERVED'"));
 
 // D: blocked webhooks update metadata and return before paid AI work.
 assert.ok(indexerSource.indexOf("markIneligibleProductMetadata") < indexerSource.indexOf("getShopEntitlement(shop)"));

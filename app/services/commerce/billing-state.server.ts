@@ -305,13 +305,13 @@ export async function ensureBillingV2State(shop: string) {
 
   const legacy = await readLegacySubscription(shop);
 
-  const explicitDevOverride = Boolean(
-    process.env.AI_SEARCH_DEV_PLAN?.trim(),
-  );
+  const devPlanOverride = getDevPlanOverride();
 
-  // DEV_OVERRIDE chỉ có hiệu lực khi AI_SEARCH_DEV_PLAN
-  // thực sự được khai báo trong môi trường hiện tại.
-  if (explicitDevOverride && legacy?.source === "DEV_OVERRIDE") {
+  // Local development currently uses the dev-plan bypass instead of Shopify
+  // Billing. getDevPlanOverride() also supplies the local Basic default, so a
+  // DEV_OVERRIDE row remains authoritative even when Shopify CLI does not
+  // propagate AI_SEARCH_DEV_PLAN from .env into the child server process.
+  if (devPlanOverride !== null && legacy?.source === "DEV_OVERRIDE") {
     return {
       subscription: null,
       legacy,
@@ -495,6 +495,21 @@ export async function getBillingSubscriptionSnapshot(
       })
     : null;
 
+  let planAssignment = plan
+    ? await db.planAssignment.findFirst({
+        where: {
+          shop,
+          planId: plan.id,
+          isActive: true,
+          OR: [
+            { startsAt: null },
+            { startsAt: { lte: new Date() } },
+          ],
+        },
+        orderBy: { createdAt: "desc" },
+      })
+    : null;
+
   // A custom shop plan may be assigned independently of the Shopify handle.
   if (!plan) {
     const assignment = await db.planAssignment.findFirst({
@@ -510,6 +525,7 @@ export async function getBillingSubscriptionSnapshot(
       orderBy: { createdAt: "desc" },
     });
     plan = assignment?.plan ?? null;
+    planAssignment = assignment ?? null;
   }
 
   if (!plan) {
@@ -557,6 +573,20 @@ export async function getBillingSubscriptionSnapshot(
   }
 
   const planKey = mapPlanHandleToKey(plan.handle);
+  const limits =
+    planKey === AI_SEARCH_PLAN.custom
+      ? {
+          productLimit:
+            planAssignment?.customMaxIndexedProducts ??
+            PLAN_DEFINITIONS.CUSTOM.limits.productLimit,
+          searchLimit:
+            planAssignment?.customMaxMonthlySearches ??
+            PLAN_DEFINITIONS.CUSTOM.limits.searchLimit,
+          vectorUpdateLimit:
+            planAssignment?.customMaxMonthlyVectorUpdates ??
+            PLAN_DEFINITIONS.CUSTOM.limits.vectorUpdateLimit,
+        }
+      : limitsFromPlan(plan);
   const trialStatus = getTrialStatus(
     subscription.trialStartsAt,
     subscription.trialEndsAt,
@@ -574,7 +604,7 @@ export async function getBillingSubscriptionSnapshot(
     plan: planKey,
     planId: plan.id,
     planLabel: plan.name,
-    limits: limitsFromPlan(plan),
+    limits,
     status: subscription.status ?? "INACTIVE",
     planHandle: subscription.shopifyPlanHandle ?? plan.handle,
     shopifySubscriptionId: subscription.shopifySubscriptionGid,

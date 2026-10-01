@@ -67,6 +67,12 @@
 
     if (!mount) return;
 
+    concealMountWithSkeleton(mount);
+  }
+
+  function concealMountWithSkeleton(mount) {
+    if (!(mount instanceof Element)) return false;
+
     if (concealedMount && concealedMount !== mount) {
       concealedMount.removeAttribute("data-ai-search-v4-concealed");
       concealedMount.removeAttribute("aria-busy");
@@ -94,6 +100,8 @@
       "[data-ai-search-v4-loading]",
     );
     if (fallbackSpinner) fallbackSpinner.dataset.active = "false";
+
+    return true;
   }
 
   function concealCachedNativeResults() {
@@ -115,8 +123,12 @@
 
   let controller = null;
   let requestNumber = 0;
+  let activeExecutionKey = "";
   let activeSearchLogId = null;
   let activeProducts = [];
+  let activeSearchOverlayHost = null;
+  let activeSearchOverlayInput = null;
+  let searchOverlayObserver = null;
 
   const renderedPageCache = new Map();
   const pagePrefetches = new Map();
@@ -304,8 +316,18 @@
     }
     if (nextState === UI_STATE.IN_PLACE_SEARCH_LOADING) {
       const loading = ensureLoadingUi();
-      loading.dataset.active = "false";
-      setMountBusy(mount, "in-place");
+      const hasMountSkeleton =
+        concealMountWithSkeleton(mount);
+
+      loading.dataset.active =
+        hasMountSkeleton
+          ? "false"
+          : "true";
+
+      if (hasMountSkeleton) {
+        setMountBusy(mount, "in-place");
+      }
+
       document.documentElement.setAttribute("aria-busy", "true");
       return;
     }
@@ -317,6 +339,7 @@
       return;
     }
     clearMountBusy();
+    closeActiveSearchOverlay();
     hideLoading();
   }
 
@@ -2466,6 +2489,51 @@
       typeof countToken.index !==
         "number"
     ) {
+      const locale =
+        document.documentElement.lang ||
+        navigator.language ||
+        "en";
+
+      const formattedCount =
+        new Intl.NumberFormat(locale).format(
+          totalProducts,
+        );
+
+      const normalizedText =
+        currentText
+          .normalize("NFKC")
+          .toLocaleLowerCase(locale);
+
+      const replacementText =
+        /không\s+tìm\s+thấy\s+kết\s+quả/.test(
+          normalizedText,
+        )
+          ? `${formattedCount} kết quả`
+          : /no\s+(?:search\s+)?results?(?:\s+found)?/.test(
+                normalizedText,
+              )
+            ? `${formattedCount} ${totalProducts === 1 ? "result" : "results"}`
+            : null;
+
+      if (replacementText) {
+        statusElement.textContent =
+          replacementText;
+
+        console.info(
+          logPrefix,
+          "resultCount replaced native empty state",
+          {
+            totalProducts,
+            previousText:
+              currentText,
+            updatedText:
+              replacementText,
+          },
+        );
+
+        return;
+      }
+
       console.info(
         logPrefix,
         "resultCount skipped",
@@ -2505,6 +2573,263 @@
           statusElement.textContent,
       },
     );
+  }
+
+  let searchTitleSuffix = null;
+
+  function updateDocumentTitle(
+    query,
+    metadata,
+  ) {
+    const totalProducts =
+      Number(
+        metadata?.totalProducts,
+      );
+
+    if (
+      !Number.isSafeInteger(
+        totalProducts,
+      ) ||
+      totalProducts < 0
+    ) {
+      return;
+    }
+
+    const cleanQuery =
+      String(query || "").trim();
+
+    if (!cleanQuery) {
+      return;
+    }
+
+    if (
+      searchTitleSuffix ===
+      null
+    ) {
+      const currentTitle =
+        document.title || "";
+
+      const separators = [
+        " – ",
+        " | ",
+      ];
+
+      searchTitleSuffix = "";
+
+      for (
+        const separator of
+        separators
+      ) {
+        const index =
+          currentTitle.lastIndexOf(
+            separator,
+          );
+
+        if (index > 0) {
+          searchTitleSuffix =
+            currentTitle.slice(
+              index,
+            );
+
+          break;
+        }
+      }
+    }
+
+    const locale =
+      document.documentElement
+        .lang ||
+      navigator.language ||
+      "en";
+
+    const formattedCount =
+      new Intl.NumberFormat(
+        locale,
+      ).format(
+        totalProducts,
+      );
+
+    const isVietnamese =
+      String(locale)
+        .toLocaleLowerCase()
+        .startsWith("vi");
+
+    const title =
+      isVietnamese
+        ? `Tìm kiếm: đã tìm thấy ${formattedCount} kết quả cho “${cleanQuery}”`
+        : `Search: ${formattedCount} ${totalProducts === 1 ? "result" : "results"} found for “${cleanQuery}”`;
+
+    document.title =
+      title +
+      (searchTitleSuffix || "");
+
+    console.info(
+      logPrefix,
+      "document title updated",
+      {
+        query: cleanQuery,
+        totalProducts,
+        title:
+          document.title,
+      },
+    );
+  }
+
+  function closeActiveSearchOverlay() {
+    const host =
+      activeSearchOverlayHost;
+
+    const input =
+      activeSearchOverlayInput;
+
+    if (
+      host &&
+      typeof host.close ===
+        "function"
+    ) {
+      try {
+        // Dawn/Ride accepts false to close predictive results without
+        // clearing the shopper's submitted search term.
+        host.close(false);
+      } catch {
+        try {
+          host.close();
+        } catch {
+          // Continue with attribute-based cleanup below.
+        }
+      }
+    }
+
+    if (host instanceof Element) {
+      host.removeAttribute("open");
+    }
+
+    if (input instanceof Element) {
+      input.setAttribute("aria-expanded", "false");
+      input.blur();
+    }
+
+    if (
+      uiState !== UI_STATE.IN_PLACE_SEARCH_LOADING &&
+      uiState !== UI_STATE.INITIAL_SEARCH_LOADING
+    ) {
+      searchOverlayObserver?.disconnect();
+      searchOverlayObserver = null;
+      activeSearchOverlayHost = null;
+      activeSearchOverlayInput = null;
+    }
+  }
+
+  function guardSearchOverlayWhileLoading() {
+    searchOverlayObserver?.disconnect();
+
+    if (!(activeSearchOverlayHost instanceof Element)) {
+      searchOverlayObserver = null;
+      return;
+    }
+
+    searchOverlayObserver =
+      new MutationObserver(function () {
+        const host =
+          activeSearchOverlayHost;
+        const input =
+          activeSearchOverlayInput;
+
+        if (
+          host?.hasAttribute("open") ||
+          input?.getAttribute("aria-expanded") === "true"
+        ) {
+          closeActiveSearchOverlay();
+        }
+      });
+
+    searchOverlayObserver.observe(
+      activeSearchOverlayHost,
+      {
+        attributes: true,
+        attributeFilter: ["open"],
+        childList: true,
+        subtree: true,
+      },
+    );
+  }
+
+  function dismissSearchOverlay(form) {
+    let current = form.parentElement;
+    let closed = false;
+
+    activeSearchOverlayInput =
+      form.querySelector('input[name="q"]');
+
+    while (
+      current &&
+      current !== document.body
+    ) {
+      const canClose =
+        typeof current.close ===
+        "function";
+
+      const hasOpenState =
+        current.hasAttribute("open");
+
+      if (canClose) {
+        activeSearchOverlayHost = current;
+
+        try {
+          current.close(false);
+          closed = true;
+        } catch {
+          try {
+            current.close();
+            closed = true;
+          } catch {
+            // Some custom elements expose close() before they are ready.
+          }
+        }
+      }
+
+      if (hasOpenState) {
+        activeSearchOverlayHost = current;
+
+        if (
+          "open" in current &&
+          typeof current.open ===
+            "boolean"
+        ) {
+          current.open = false;
+        }
+
+        current.removeAttribute("open");
+        closed = true;
+      }
+
+      if (canClose || hasOpenState) {
+        break;
+      }
+
+      current = current.parentElement;
+    }
+
+    if (!closed) {
+      document.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Escape",
+          code: "Escape",
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    }
+
+    if (
+      document.activeElement instanceof
+      HTMLElement
+    ) {
+      document.activeElement.blur();
+    }
+
+    closeActiveSearchOverlay();
+    guardSearchOverlayWhileLoading();
   }
 
   function removePagination() {
@@ -2831,7 +3156,35 @@
     replaceUrl,
     requestedUiState,
   ) {
+    const executionKey = [
+      String(query || "").trim(),
+      String(page || 1),
+      String(receipt || ""),
+    ].join("|");
+
+    if (
+      executionKey &&
+      activeExecutionKey === executionKey &&
+      controller &&
+      !controller.signal.aborted
+    ) {
+      console.info(
+        logPrefix,
+        "duplicate execution suppressed",
+        {
+          query,
+          page,
+          receipt: receipt || null,
+        },
+      );
+
+      return;
+    }
+
     controller?.abort();
+
+    activeExecutionKey =
+      executionKey;
 
     controller =
       new AbortController();
@@ -3017,6 +3370,11 @@
         rendered.metadata,
       );
 
+      updateDocumentTitle(
+        query,
+        rendered.metadata,
+      );
+
       mountPagination(
         rendered.mount,
         rendered.metadata,
@@ -3135,6 +3493,9 @@
           executionUiState === UI_STATE.INITIAL_SEARCH_LOADING &&
           publicState().query === query
         ) {
+          // Native results for this query are already rendered underneath the
+          // initial loading shell. Releasing the shell is the fail-open path;
+          // reloading with bypass would only duplicate the navigation.
           transitionUi(UI_STATE.NATIVE_FALLBACK, { mount: activeMount });
         } else {
           transitionUi(UI_STATE.NATIVE_FALLBACK, { mount: activeMount });
@@ -3151,6 +3512,13 @@
           uiState !== UI_STATE.NATIVE_FALLBACK
         ) {
           transitionUi(UI_STATE.IDLE, { mount: activeMount });
+        }
+
+        if (
+          activeExecutionKey ===
+          executionKey
+        ) {
+          activeExecutionKey = "";
         }
       }
     }
@@ -3236,11 +3604,27 @@
           location.origin,
         );
 
-      if (
-        !isSearchPath(
-          action.pathname,
-        )
-      ) {
+      const searchHost =
+        form.closest(
+          "search-form, predictive-search, search-modal, [role=\"search\"]",
+        );
+
+      const formMarkers = [
+        form.id || "",
+        typeof form.className === "string" ? form.className : "",
+        form.getAttribute("role") || "",
+        form.getAttribute("action") || "",
+        searchHost?.tagName || "",
+      ]
+        .join(" ")
+        .toLowerCase();
+
+      const isLikelySearchForm =
+        isSearchPath(action.pathname) ||
+        String(input.type || "").toLowerCase() === "search" ||
+        /search|predictive/.test(formMarkers);
+
+      if (!isLikelySearchForm) {
         return;
       }
 
@@ -3252,6 +3636,7 @@
       }
 
       event.preventDefault();
+      event.stopImmediatePropagation();
 
       console.info(
         logPrefix,
@@ -3291,6 +3676,7 @@
         transitionUi(UI_STATE.IN_PLACE_SEARCH_LOADING, {
           mount: activeMount,
         });
+        dismissSearchOverlay(form);
 
         void execute(
           query,
@@ -3537,6 +3923,9 @@
       source:
         "search-interceptor.v4.js",
 
+      build:
+        "overlay-guard-2026-09-30",
+
       configVersion:
         config.version ??
         null,
@@ -3549,18 +3938,32 @@
     },
   );
 
-  const initial =
-    publicState();
+  function bootInitialSearchWhenDomReady() {
+    const initial =
+      publicState();
 
-  if (
-    initial.isSearchPage &&
-    !initial.bypass &&
-    initial.query
-  ) {
+    if (
+      !initial.isSearchPage ||
+      initial.bypass ||
+      !initial.query
+    ) {
+      return;
+    }
+
     transitionUi(UI_STATE.INITIAL_SEARCH_LOADING);
 
     runCurrentSearchEntry(
       true,
     );
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener(
+      "DOMContentLoaded",
+      bootInitialSearchWhenDomReady,
+      { once: true },
+    );
+  } else {
+    bootInitialSearchWhenDomReady();
   }
 })();

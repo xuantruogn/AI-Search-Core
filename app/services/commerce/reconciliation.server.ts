@@ -11,9 +11,11 @@ import { kickCatalogSyncQueue } from "../catalog/catalog-sync-queue.server";
 async function reconcileShopCommercialStateUnlocked({
   shop,
   forceCatalogRefresh = false,
+  productCapacityExpanded = false,
 }: {
   shop: string;
   forceCatalogRefresh?: boolean;
+  productCapacityExpanded?: boolean;
 }) {
   console.log("[COMMERCIAL DEBUG] reconcile:start", { shop, forceCatalogRefresh });
   let entitlement = await getShopEntitlement(shop);
@@ -23,7 +25,9 @@ async function reconcileShopCommercialStateUnlocked({
     catalogProductCount: entitlement.catalogProductCount,
   });
 
-  const recovery = await recoverBlockedProducts(shop);
+  const recovery = await recoverBlockedProducts(shop, {
+    productCapacityExpanded,
+  });
   entitlement = await getShopEntitlement(shop);
   console.log("[COMMERCIAL DEBUG] entitlement:afterRecovery", {
     shop, plan: entitlement.plan, active: entitlement.active,
@@ -44,7 +48,8 @@ async function reconcileShopCommercialStateUnlocked({
     latestCatalogJob?.planAtStart !== entitlement.plan;
 
   const shouldRefreshCatalog =
-    !needsInitialCatalogSync && (forceCatalogRefresh || planNeedsExpansionScan);
+    !needsInitialCatalogSync &&
+    (forceCatalogRefresh || planNeedsExpansionScan || productCapacityExpanded);
 
   console.log("[COMMERCIAL DEBUG] catalogDecision", {
     shop, latestCatalogJobId: latestCatalogJob?.id ?? null,
@@ -62,7 +67,7 @@ async function reconcileShopCommercialStateUnlocked({
   } else if (shouldRefreshCatalog) {
     catalogJobId = await enqueueCatalogRefresh(
       shop,
-      forceCatalogRefresh || planNeedsExpansionScan
+      forceCatalogRefresh || planNeedsExpansionScan || productCapacityExpanded
         ? "PLAN_RECONCILE"
         : "SLOT_REFILL",
     );
@@ -82,9 +87,11 @@ async function reconcileShopCommercialStateUnlocked({
 export async function reconcileShopCommercialState({
   shop,
   forceCatalogRefresh = false,
+  productCapacityExpanded = false,
 }: {
   shop: string;
   forceCatalogRefresh?: boolean;
+  productCapacityExpanded?: boolean;
 }) {
   return withDistributedLease({
     shop,
@@ -96,6 +103,7 @@ export async function reconcileShopCommercialState({
       reconcileShopCommercialStateUnlocked({
         shop,
         forceCatalogRefresh,
+        productCapacityExpanded,
       }),
   });
 }

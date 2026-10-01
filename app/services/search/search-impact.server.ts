@@ -25,9 +25,8 @@ export type SearchImpactPoint = {
 };
 
 export type SearchImpactAlertType =
-  | "NO_RESULTS"
-  | "LOW_SIMILARITY"
-  | "HIGH_SIMILARITY_NO_CLICK"
+  | "SEMANTIC_NO_RESULTS"
+  | "LOW_CTR"
   | "CTR_DROP";
 
 export type SearchImpactAlert = {
@@ -64,20 +63,11 @@ export type SearchImpactSnapshot = {
   series: SearchImpactPoint[];
   alerts: SearchImpactAlert[];
   anomalyCounts: {
-    noResults: number;
-    lowSimilarity: number;
-    highSimilarityNoClick: number;
+    semanticNoResults: number;
+    lowCtr: number;
   };
 };
 
-const LOW_SIMILARITY_MARGIN = 0.03;
-const HIGH_SIMILARITY_MARGIN = 0.08;
-const DEFAULT_NO_CLICK_GRACE_MINUTES = 30;
-
-function envNumber(name: string, fallback: number) {
-  const value = Number.parseFloat(process.env[name] ?? "");
-  return Number.isFinite(value) ? value : fallback;
-}
 
 function dayKey(date: Date) {
   return date.toISOString().slice(0, 10);
@@ -104,15 +94,6 @@ export async function getSearchImpactSnapshot(
   const windowStart = new Date(now);
   windowStart.setUTCDate(windowStart.getUTCDate() - (windowDays - 1));
   windowStart.setUTCHours(0, 0, 0, 0);
-
-  const noClickGraceMinutes = Math.max(
-    0,
-    envNumber(
-      "AI_SEARCH_QUALITY_NO_CLICK_GRACE_MINUTES",
-      DEFAULT_NO_CLICK_GRACE_MINUTES,
-    ),
-  );
-  const graceCutoff = new Date(now.getTime() - noClickGraceMinutes * 60_000);
 
   const logs: SearchImpactLogRow[] = await db.aiSearchQueryLog.findMany({
     where: {
@@ -159,37 +140,33 @@ export async function getSearchImpactSnapshot(
   let clickCount = 0;
   let clickedRankSum = 0;
 
+  const abnormalLogIds = new Set<string>();
+  for (const cluster of clusters) {
+    if (cluster.classification === "LOW_CTR") {
+      cluster.logIds.forEach((id) => abnormalLogIds.add(id));
+    } else if (cluster.classification === "SEMANTIC_NO_RESULTS") {
+      cluster.semanticFacetNoResultLogIds.forEach((id) => abnormalLogIds.add(id));
+    }
+  }
 
   for (const log of logs) {
-    const comparisonScore = log.topScore ?? log.topCandidateScore;
-    const noResults = log.resultCount <= 0;
-    const lowSimilarity =
-      !noResults &&
-      comparisonScore !== null &&
-      comparisonScore < log.vectorThreshold + LOW_SIMILARITY_MARGIN;
-    const highSimilarityNoClick =
-      !noResults &&
-      comparisonScore !== null &&
-      comparisonScore >= log.vectorThreshold + HIGH_SIMILARITY_MARGIN &&
-      log.clicks.length === 0 &&
-      log.createdAt <= graceCutoff;
-    const abnormalSearch =
-      noResults || lowSimilarity || highSimilarityNoClick;
-
     const key = dayKey(log.createdAt);
     const bucket = seriesMap.get(key);
     if (bucket) {
       bucket.searches += 1;
       if (log.clicks.length > 0) bucket.clickedSearches += 1;
-      if (abnormalSearch) bucket.abnormalSearches += 1;
+      if (abnormalLogIds.has(log.id)) bucket.abnormalSearches += 1;
     }
 
     if (log.clicks.length > 0) {
       clickedSearches += 1;
       clickCount += log.clicks.length;
-      clickedRankSum += log.clicks.reduce((sum: number, click: SearchImpactLogRow["clicks"][number]) => sum + click.rank, 0);
+      clickedRankSum += log.clicks.reduce(
+        (sum: number, click: SearchImpactLogRow["clicks"][number]) =>
+          sum + click.rank,
+        0,
+      );
     }
-
   }
 
   const series = Array.from(seriesMap.entries()).map(([date, value]) => ({
@@ -233,38 +210,24 @@ export async function getSearchImpactSnapshot(
     .sort((a, b) => b.searchCount - a.searchCount)
     .slice(0, 6)
     .map((cluster) => {
-      if (cluster.classification === "NO_RESULTS") {
+      if (cluster.classification === "SEMANTIC_NO_RESULTS") {
         return {
-          type: "NO_RESULTS" as const,
-          severity: severityFor(cluster.searchCount),
+          type: "SEMANTIC_NO_RESULTS" as const,
+          severity: severityFor(cluster.semanticFacetNoResultCount),
           query: cluster.label,
-          count: cluster.searchCount,
-          detail: `Không có kết quả hợp lệ trong ${cluster.searchCount} lượt search cùng lớp.`,
-        };
-      }
-
-      if (cluster.classification === "LOW_SIMILARITY") {
-        return {
-          type: "LOW_SIMILARITY" as const,
-          severity: severityFor(cluster.searchCount),
-          query: cluster.label,
-          count: cluster.searchCount,
+          count: cluster.semanticFacetNoResultCount,
           detail:
-            cluster.averageTopScore == null
-              ? "Kết quả có độ tương đồng thấp."
-              : `Top similarity trung bình ${cluster.averageTopScore.toFixed(2)} (threshold TB ${cluster.averageThreshold.toFixed(2)}).`,
+            `${cluster.semanticFacetNoResultCount} lượt search có Product Semantic Facets hợp lý nhưng không trả về sản phẩm.`,
         };
       }
 
       return {
-        type: "HIGH_SIMILARITY_NO_CLICK" as const,
+        type: "LOW_CTR" as const,
         severity: severityFor(cluster.searchCount),
         query: cluster.label,
         count: cluster.searchCount,
         detail:
-          cluster.averageTopScore == null
-            ? "Kết quả có độ tương đồng cao nhưng không tạo click sau thời gian chờ."
-            : `Top similarity trung bình ${cluster.averageTopScore.toFixed(2)} nhưng không có click sau thời gian chờ.`,
+          `Query class có ${cluster.searchCount} lượt search, CTR ${(cluster.clickThroughRate * 100).toFixed(1)}% (<5%).`,
       };
     });
 
@@ -286,14 +249,11 @@ export async function getSearchImpactSnapshot(
   }
 
   const anomalyCounts = {
-    noResults: clusters
-      .filter((cluster) => cluster.classification === "NO_RESULTS")
-      .reduce((sum, cluster) => sum + cluster.searchCount, 0),
-    lowSimilarity: clusters
-      .filter((cluster) => cluster.classification === "LOW_SIMILARITY")
-      .reduce((sum, cluster) => sum + cluster.searchCount, 0),
-    highSimilarityNoClick: clusters
-      .filter((cluster) => cluster.classification === "HIGH_SIMILARITY_NO_CLICK")
+    semanticNoResults: clusters
+      .filter((cluster) => cluster.classification === "SEMANTIC_NO_RESULTS")
+      .reduce((sum, cluster) => sum + cluster.semanticFacetNoResultCount, 0),
+    lowCtr: clusters
+      .filter((cluster) => cluster.classification === "LOW_CTR")
       .reduce((sum, cluster) => sum + cluster.searchCount, 0),
   };
 

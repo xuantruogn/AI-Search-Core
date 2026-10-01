@@ -1,10 +1,24 @@
-import type { HeadersFunction, LoaderFunctionArgs } from "react-router";
-import { NavLink, Outlet, useLoaderData, useRouteError } from "react-router";
+import type {
+  HeadersFunction,
+  LoaderFunctionArgs,
+  ShouldRevalidateFunction,
+} from "react-router";
+import {
+  NavLink,
+  Outlet,
+  redirect,
+  useLoaderData,
+  useNavigation,
+  useRouteError,
+} from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { AppProvider } from "@shopify/shopify-app-react-router/react";
 
 import { authenticate } from "../shopify.server";
-import { ensureShopFromAdmin } from "../services/commerce/shop-registry.server";
+import {
+  ensureShopFromAdmin,
+  getShopSettings,
+} from "../services/commerce/shop-registry.server";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const debugId = crypto.randomUUID().slice(0, 8);
@@ -22,17 +36,56 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   console.log("[APP DEBUG] ensureShopFromAdmin:done", { debugId, shop: session.shop });
 
-  // LƯU Ý KIẾN TRÚC: Đã loại bỏ hoàn toàn reconcileShopCommercialState() tại đây.
-  // Nhiệm vụ Reconcile Product Policy (khóa/mở catalog) được chuyển 100% cho Webhook đảm nhận.
-  // Parent Route tuyệt đối không kích hoạt Reconcile để tránh nghẽn Session Token của App Bridge.
+  // Billing/commercial reconciliation is event-driven (callback/webhook/API).
+  // Do not run it from the parent /app loader: that path executes frequently
+  // and previously caused duplicate billing refresh/reconciliation loops.
+
+  // First-install onboarding remains parent-route owned so merchants cannot
+  // use catalog/search features before choosing the canonical shop language.
+  const settings = await getShopSettings(session.shop, { ensure: false });
+  const isLanguageSetupRoute = url.pathname.startsWith("/app/settings");
+
+  if (!settings.searchLanguage?.trim() && !isLanguageSetupRoute) {
+    throw redirect("/app/settings?onboarding=language");
+  }
 
   return {
     apiKey: process.env.SHOPIFY_API_KEY || "",
   };
 };
 
+/**
+ * Child routes authenticate and load their own data. Re-running this root
+ * loader on every tab/page/query-string navigation needlessly repeats shop
+ * registry and billing freshness work. Keep explicit same-URL revalidation
+ * working, and reload when Shopify returns with a different plan handle.
+ */
+export const shouldRevalidate: ShouldRevalidateFunction = ({
+  currentUrl,
+  nextUrl,
+  defaultShouldRevalidate,
+}) => {
+  const currentPlanHandle = currentUrl.searchParams.get("plan_handle");
+  const nextPlanHandle = nextUrl.searchParams.get("plan_handle");
+
+  if (nextPlanHandle && nextPlanHandle !== currentPlanHandle) {
+    return true;
+  }
+
+  if (
+    currentUrl.pathname !== nextUrl.pathname ||
+    currentUrl.search !== nextUrl.search
+  ) {
+    return false;
+  }
+
+  return defaultShouldRevalidate;
+};
+
 export default function App() {
   const { apiKey } = useLoaderData<typeof loader>();
+  const navigation = useNavigation();
+  const isNavigating = navigation.state === "loading";
 
   const navItems = [
     { label: "Dashboard", to: "/app", end: true },
@@ -49,6 +102,7 @@ export default function App() {
       {/* THANH TAB NAVIGATION CAO CẤP */}
       <div
         style={{
+          position: "relative",
           background: "#ffffff",
           borderBottom: "1px solid #e1e3e5",
           padding: "0 24px",
@@ -56,6 +110,22 @@ export default function App() {
           boxShadow: "0 1px 0 rgba(0, 0, 0, 0.05)",
         }}
       >
+        <div
+          aria-hidden="true"
+          style={{
+            position: "absolute",
+            top: 0,
+            left: 0,
+            width: isNavigating ? "72%" : "0%",
+            height: 2,
+            opacity: isNavigating ? 1 : 0,
+            background: "linear-gradient(90deg, #008060, #00a47c)",
+            transition: isNavigating
+              ? "width 0.8s ease-out, opacity 0.1s"
+              : "width 0.15s, opacity 0.2s",
+            pointerEvents: "none",
+          }}
+        />
         <nav
           aria-label="AI Search navigation"
           style={{
@@ -97,6 +167,7 @@ export default function App() {
                 key={item.to}
                 to={item.to}
                 end={item.end}
+                prefetch="intent"
                 style={({ isActive }) => ({
                   padding: "12px 18px", // Tăng đệm trong tab giúp tab to rõ nét hơn
                   fontSize: 13,

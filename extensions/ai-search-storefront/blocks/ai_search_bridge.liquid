@@ -304,14 +304,14 @@
           * V4 — EXISTING THEME MAP FLOW
           * =====================================================
           *
-          * Giữ nguyên behaviour V4:
-          * chỉ load V4 trên native Shopify /search page.
-          * Các trang khác không bị V4 can thiệp.
+          * Load V4 on every storefront page so the capture-phase submit
+          * interceptor can normalize Homepage / Collection / Product /
+          * predictive-search forms into the same /search route.
+          *
+          * search-interceptor.v4.js only executes AI retrieval/rendering when
+          * publicState().isSearchPage is true, so loading it globally does not
+          * run Qdrant/LLM/search work on ordinary storefront pages.
           */
-          if (!isSearchPage) {
-            return;
-          }
-
           var v4Src =
             {{ 'search-interceptor.v4.js' | asset_url | json }};
 

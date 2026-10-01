@@ -2,6 +2,10 @@ export type ProductVariantForIndex = {
   title: string;
   sku?: string | null;
   barcode?: string | null;
+  selectedOptions?: Array<{
+    name: string;
+    value: string;
+  }>;
 };
 
 export type ProductForIndex = {
@@ -165,6 +169,52 @@ export function buildProductDocument(product: ProductForIndex): string {
 
     if (barcodes.length > 0) {
       parts.push(`Barcodes: ${barcodes.join(", ")}.`);
+    }
+
+    const variantOptions = uniqueSorted(
+      product.variants.flatMap((variant) =>
+        (variant.selectedOptions ?? []).map((option) => {
+          const name = cleanText(option.name);
+          const value = cleanText(option.value);
+          return name && value ? `${name}=${value}` : "";
+        }),
+      ),
+      MAX_VARIANTS * 3,
+    );
+
+    if (variantOptions.length > 0) {
+      parts.push(`Variant options: ${variantOptions.join(" | ")}.`);
+    }
+
+    const variantRecords = uniqueSorted(
+      product.variants.map((variant) => {
+        const fields: string[] = [];
+        const title = cleanText(variant.title);
+        if (title && title !== "Default Title") fields.push(`title=${title}`);
+
+        const options = (variant.selectedOptions ?? [])
+          .map((option) => {
+            const name = cleanText(option.name);
+            const value = cleanText(option.value);
+            return name && value ? `${name}=${value}` : "";
+          })
+          .filter(Boolean);
+
+        if (options.length > 0) fields.push(`options=[${options.join(", ")}]`);
+
+        const sku = cleanText(variant.sku);
+        if (sku) fields.push(`sku=${sku}`);
+
+        const barcode = cleanText(variant.barcode);
+        if (barcode) fields.push(`barcode=${barcode}`);
+
+        return fields.join(" | ");
+      }),
+      MAX_VARIANTS,
+    );
+
+    if (variantRecords.length > 0) {
+      parts.push(`Variant records: ${variantRecords.join(" || ")}.`);
     }
   }
 

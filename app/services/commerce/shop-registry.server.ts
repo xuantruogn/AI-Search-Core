@@ -429,17 +429,20 @@ export async function updateShopSettings({
 
   const safeLimit = Math.max(1, Math.min(Math.trunc(resultLimit), 20));
 
-  await db.$executeRaw`
-    UPDATE \`AiSearchShopSettings\`
-    SET
-      \`aiSearchEnabled\` = ${aiSearchEnabled},
-      \`customDataModeEnabled\` = COALESCE(${customDataModeEnabled ?? null}, \`customDataModeEnabled\`),
-      \`fallbackEnabled\` = true,
-      \`resultLimit\` = ${safeLimit},
-      \`searchLanguage\` = COALESCE(${searchLanguage ?? null}, \`searchLanguage\`),
-      \`updatedAt\` = UTC_TIMESTAMP(3)
-    WHERE \`shop\` = ${shop}
-  `;
+  await db.aiSearchShopSettings.update({
+    where: { shop },
+    data: {
+      aiSearchEnabled,
+      ...(customDataModeEnabled === undefined
+        ? {}
+        : { customDataModeEnabled }),
+      fallbackEnabled: true,
+      resultLimit: safeLimit,
+      ...(searchLanguage === undefined
+        ? {}
+        : { searchLanguage }),
+    },
+  });
 }
 
 export async function markShopUninstalled(shop: string) {

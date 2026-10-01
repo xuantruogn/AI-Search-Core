@@ -43,13 +43,19 @@ function boundedPositiveInteger(value: number) {
   return Math.min(integer, 1_000_000_000);
 }
 
-async function reconcileProductPolicyAfterQuotaChange(shop: string) {
+async function reconcileProductPolicyAfterQuotaChange(
+  shop: string,
+  productCapacityExpanded: boolean,
+) {
   // Dynamic import avoids a static quota-grants -> reconciliation ->
   // entitlement -> quota-grants cycle while keeping the invariant at the
   // mutation boundary: whenever product capacity changes, eligibility is
   // reconciled before the mutation is considered complete.
   const { reconcileShopCommercialState } = await import("./reconciliation.server");
-  await reconcileShopCommercialState({ shop });
+  await reconcileShopCommercialState({
+    shop,
+    productCapacityExpanded,
+  });
 }
 
 function emptyTotals(): QuotaGrantTotals {
@@ -204,7 +210,7 @@ export async function createQuotaGrant({
   });
   invalidate(targetShop);
   if (kind === QUOTA_GRANT_KIND.product) {
-    await reconcileProductPolicyAfterQuotaChange(targetShop);
+    await reconcileProductPolicyAfterQuotaChange(targetShop, true);
   }
   return id;
 }
@@ -252,7 +258,7 @@ export async function revokeQuotaGrant({
   });
   invalidate(grant.shop);
   if (grant.kind === QUOTA_GRANT_KIND.product) {
-    await reconcileProductPolicyAfterQuotaChange(grant.shop);
+    await reconcileProductPolicyAfterQuotaChange(grant.shop, false);
   }
   return { shop: grant.shop, kind: grant.kind as QuotaGrantKind, alreadyRevoked: false };
 }
@@ -316,8 +322,18 @@ export async function setAbsoluteQuotaOverridesWithAudit({
     });
   });
   invalidate(targetShop);
-  if (before.productLimitOverride !== after.productLimitOverride) {
-    await reconcileProductPolicyAfterQuotaChange(targetShop);
+  if (
+    before.productLimitOverride !== after.productLimitOverride ||
+    after.productLimitOverride !== null
+  ) {
+    const capacityExpanded =
+      after.productLimitOverride !== null &&
+      (before.productLimitOverride === null ||
+        after.productLimitOverride >= before.productLimitOverride);
+    await reconcileProductPolicyAfterQuotaChange(
+      targetShop,
+      capacityExpanded,
+    );
   }
 }
 

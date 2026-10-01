@@ -1,5 +1,5 @@
-export const QUERY_PARSER_VERSION = "deterministic-v1";
-export const QUERY_ROUTER_VERSION = "coverage-router-v1";
+export const QUERY_PARSER_VERSION = "deterministic-v5-facet-strength";
+export const QUERY_ROUTER_VERSION = "coverage-router-v8-broad-category-discovery";
 
 export type QueryRoute =
   | "STRUCTURED_ONLY"
@@ -7,6 +7,11 @@ export type QueryRoute =
   | "VECTOR_SEMANTIC"
   | "LIGHT_LLM"
   | "FULL_LLM";
+
+export type RetrievalMode =
+  | "DIRECT"
+  | "DISCOVERY"
+  | "COMPLEMENT";
 
 export type ConstraintMode = "MUST" | "SHOULD" | "MUST_NOT";
 export type ConstraintSource =
@@ -41,6 +46,8 @@ export type QueryPlan = {
   normalizedQuery: string;
   foldedQuery: string;
   route: QueryRoute;
+  retrievalMode: RetrievalMode;
+  referenceTerms?: string[];
   identities: QueryConstraint[];
   entities: {
     brands: QueryConstraint[];

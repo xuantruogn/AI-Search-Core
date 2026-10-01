@@ -108,9 +108,15 @@ export async function getShopEntitlement(
   } else if (productLimitExceeded) {
     disabledReason = "PRODUCT_LIMIT_RECONCILIATION_REQUIRED";
   } else if (
-    catalogSyncStatus === "PENDING" ||
-    catalogSyncStatus === "PROCESSING"
+    indexedProducts === 0 &&
+    (
+      catalogSyncStatus === "PENDING" ||
+      catalogSyncStatus === "PROCESSING"
+    )
   ) {
+    // A background/manual refresh must never take an already indexed shop
+    // offline. Only the true bootstrap state (no usable vectors yet) blocks
+    // storefront search.
     disabledReason = "INITIAL_SYNC_IN_PROGRESS";
   } else if (catalogSyncStatus === "FAILED" && indexedProducts === 0) {
     disabledReason = "INITIAL_SYNC_FAILED";

@@ -48,6 +48,10 @@ type ShopifyProductNode = {
       title: string;
       sku: string | null;
       barcode: string | null;
+      selectedOptions: Array<{
+        name: string;
+        value: string;
+      }>;
     }>;
   };
 };
@@ -115,6 +119,7 @@ function mapShopifyProduct(
       title: variant.title,
       sku: variant.sku,
       barcode: variant.barcode,
+      selectedOptions: variant.selectedOptions,
     }),
   );
 
@@ -254,6 +259,10 @@ export async function fetchProductsForIndex(
                   title
                   sku
                   barcode
+                  selectedOptions {
+                    name
+                    value
+                  }
                 }
               }
             }
@@ -559,6 +568,10 @@ export async function fetchProductForIndexById(
                 title
                 sku
                 barcode
+                selectedOptions {
+                  name
+                  value
+                }
               }
             }
           }

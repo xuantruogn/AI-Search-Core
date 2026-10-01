@@ -48,15 +48,28 @@ type ThemeFilesPayload = {
 
 function errorMessage(
   response: Response,
-  errors: GraphqlError[] | undefined,
+  errors: unknown,
   fallback: string,
 ) {
-  return (
-    errors
-      ?.map((error) => error.message)
+  if (Array.isArray(errors)) {
+    const message = errors
+      .flatMap((error) =>
+        error &&
+        typeof error === "object" &&
+        typeof (error as GraphqlError).message === "string"
+          ? [(error as GraphqlError).message]
+          : [],
+      )
       .filter(Boolean)
-      .join("; ") || `${fallback} (${response.status})`
-  );
+      .join("; ");
+    if (message) return message;
+  }
+
+  if (typeof errors === "string" && errors.trim()) {
+    return errors.trim();
+  }
+
+  return `${fallback} (${response.status})`;
 }
 
 function collectThemeFiles(
@@ -87,6 +100,70 @@ export function activeThemeVersionKey(theme: {
  * the version key, so publishing a different theme OR editing files/settings of
  * the same live theme invalidates a renderer catalog before OpenAI is called.
  */
+export async function getThemeById(
+  admin: AdminGraphqlClient,
+  themeId: string,
+): Promise<ActiveTheme> {
+  const normalized =
+    themeId.match(/^(?:gid:\/\/shopify\/OnlineStoreTheme\/)?(\d+)$/)?.[1] ??
+    themeId.trim();
+
+  if (!normalized) {
+    throw new Error("Invalid theme id");
+  }
+
+  const gid = `gid://shopify/OnlineStoreTheme/${normalized}`;
+  const response = await admin.graphql(
+    `#graphql
+      query GetThemeIdentity($themeId: ID!) {
+        theme(id: $themeId) {
+          id
+          name
+          updatedAt
+          processing
+          processingFailed
+        }
+      }
+    `,
+    { variables: { themeId: gid } },
+  );
+
+  const json = (await response.json()) as {
+    data?: {
+      theme?: {
+        id?: string;
+        name?: string;
+        updatedAt?: string;
+        processing?: boolean;
+        processingFailed?: boolean;
+      } | null;
+    };
+    errors?: GraphqlError[];
+  };
+
+  if (!response.ok || json.errors?.length) {
+    throw new Error(
+      errorMessage(response, json.errors, "Unable to read theme identity"),
+    );
+  }
+
+  const theme = json.data?.theme;
+  if (!theme?.id || !theme.name || !theme.updatedAt) {
+    throw new Error(`Theme not found or inaccessible: ${themeId}`);
+  }
+
+  const result: ActiveTheme = {
+    id: theme.id,
+    name: theme.name,
+    updatedAt: theme.updatedAt,
+    processing: Boolean(theme.processing),
+    processingFailed: Boolean(theme.processingFailed),
+    versionKey: "",
+  };
+  result.versionKey = activeThemeVersionKey(result);
+  return result;
+}
+
 export async function getActiveTheme(
   admin: AdminGraphqlClient,
 ): Promise<ActiveTheme> {

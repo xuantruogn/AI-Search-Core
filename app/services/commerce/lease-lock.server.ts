@@ -1,6 +1,10 @@
 import { randomUUID } from "node:crypto";
 
 import db from "../../db.server";
+import {
+  backgroundJobsEnabledInThisProcess,
+  jitterInterval,
+} from "../maintenance/background-runtime.server";
 
 function sleep(ms: number) {
   return new Promise<void>((resolve) => setTimeout(resolve, ms));
@@ -237,6 +241,8 @@ const leaseCleanupGlobal = globalThis as typeof globalThis & {
 };
 
 export function startDistributedLeaseCleanupWorker() {
+  if (!backgroundJobsEnabledInThisProcess()) return;
+
   if (leaseCleanupGlobal.aiSearchLeaseCleanupStarted) return;
   leaseCleanupGlobal.aiSearchLeaseCleanupStarted = true;
 
@@ -253,7 +259,14 @@ export function startDistributedLeaseCleanupWorker() {
     });
   };
 
-  const timer = setInterval(cleanup, Math.max(60_000, intervalMs));
+  const timer = setInterval(
+    cleanup,
+    jitterInterval(Math.max(60_000, intervalMs)),
+  );
   timer.unref?.();
-  cleanup();
+
+  // Expired leases are reclaimable during lock acquisition, so startup does
+  // not need to compete with migrations and queue recovery just to delete rows.
+  const firstRun = setTimeout(cleanup, 60_000);
+  firstRun.unref?.();
 }

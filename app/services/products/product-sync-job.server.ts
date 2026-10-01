@@ -141,11 +141,26 @@ export async function enqueueProductSyncJob({
 
   const gid = normalizeProductGid(productId);
 
-  if (cleanTopic === "REINDEX_PRODUCT") {
+  if (
+    cleanTopic === "REINDEX_PRODUCT" ||
+    cleanTopic === "REINDEX_PRODUCT_CAPACITY" ||
+    cleanTopic === "REINDEX_PRODUCT_SUBSCRIPTION" ||
+    cleanTopic === "REINDEX_PRODUCT_ENRICHMENT"
+  ) {
+    const policyReindexTopics = [
+      "REINDEX_PRODUCT",
+      "REINDEX_PRODUCT_CAPACITY",
+      "REINDEX_PRODUCT_SUBSCRIPTION",
+    ];
+    const policyReindex = policyReindexTopics.includes(cleanTopic);
     const existingWork = await db.aiSearchSyncJob.findFirst({
       where: {
         shop: cleanShop,
         productId: gid,
+        topic: {
+          in: policyReindex ? policyReindexTopics : [cleanTopic],
+        },
+        ...(!policyReindex || policyVersion === null ? {} : { policyVersion }),
         status: { in: [PRODUCT_SYNC_JOB_STATUS.pending, PRODUCT_SYNC_JOB_STATUS.processing] },
       },
       select: { id: true },

@@ -5,8 +5,10 @@ export const INDEXED_PRODUCT_STATUS = {
   indexed: "INDEXED",
   productSlotReserved: "PRODUCT_SLOT_RESERVED",
   productLimitBlocked: "PRODUCT_LIMIT_BLOCKED",
+  productLimitRecoveryPending: "PRODUCT_LIMIT_RECOVERY_PENDING",
   vectorQuotaBlocked: "VECTOR_QUOTA_BLOCKED",
   subscriptionBlocked: "SUBSCRIPTION_BLOCKED",
+  subscriptionRecoveryPending: "SUBSCRIPTION_RECOVERY_PENDING",
 } as const;
 
 export type IndexedProductRow = {
@@ -70,6 +72,7 @@ export function planProductEligibility(
   input: ProductEligibilityInput[],
   policyActive: boolean,
   productLimit: number | null,
+  options?: { recoverMissingAsProductCapacity?: boolean },
 ) {
   const rows = [...input].sort((left, right) =>
     Number(right.searchable) - Number(left.searchable) ||
@@ -83,13 +86,45 @@ export function planProductEligibility(
   return rows.map((row) => {
     const unpublished = row.blockedReason === "UNPUBLISHED";
     const chosen = selected.has(row.productId);
-    const ready = row.hasVector && row.vectorStatus === "READY";
-    const searchable = chosen && ready;
+    // A retained cached vector stays usable even when it is STALE. STALE
+    // means "refresh when quota/capacity allows", not "remove from search".
+    const hasUsableVector = row.hasVector;
+    const searchable = chosen && hasUsableVector;
+    const productCapacityRecovery =
+      chosen &&
+      !row.hasVector &&
+      (
+        options?.recoverMissingAsProductCapacity === true ||
+        row.blockedReason === "PRODUCT_LIMIT" ||
+        row.status === INDEXED_PRODUCT_STATUS.productLimitBlocked ||
+        row.status === INDEXED_PRODUCT_STATUS.productLimitRecoveryPending
+      );
+    const subscriptionRecovery =
+      chosen &&
+      !row.hasVector &&
+      !productCapacityRecovery &&
+      (
+        row.blockedReason === "SUBSCRIPTION" ||
+        row.status === INDEXED_PRODUCT_STATUS.subscriptionBlocked ||
+        row.status === INDEXED_PRODUCT_STATUS.subscriptionRecoveryPending
+      );
     return {
       ...row, chosen, searchable,
       blockedReason: unpublished ? "UNPUBLISHED" : chosen ? null : policyActive ? "PRODUCT_LIMIT" : "SUBSCRIPTION",
-      status: unpublished ? "UNPUBLISHED" : searchable ? "INDEXED" : chosen ? "VECTOR_QUOTA_BLOCKED" : policyActive ? "PRODUCT_LIMIT_BLOCKED" : "SUBSCRIPTION_BLOCKED",
-      requiresReindex: chosen && !ready,
+      status: unpublished
+        ? "UNPUBLISHED"
+        : searchable
+          ? "INDEXED"
+          : productCapacityRecovery
+            ? INDEXED_PRODUCT_STATUS.productLimitRecoveryPending
+            : subscriptionRecovery
+              ? INDEXED_PRODUCT_STATUS.subscriptionRecoveryPending
+              : chosen
+                ? "VECTOR_QUOTA_BLOCKED"
+                : policyActive
+                  ? "PRODUCT_LIMIT_BLOCKED"
+                  : "SUBSCRIPTION_BLOCKED",
+      requiresReindex: chosen && (!row.hasVector || row.vectorStatus !== "READY"),
     };
   });
 }
@@ -155,8 +190,9 @@ export async function countIndexedProducts(shop: string) {
   return Number(rows[0]?.count ?? 0);
 }
 
-// A slot is either a product that already owns a vector or a product whose
-// worker has atomically reserved capacity before calling OpenAI.
+// A slot belongs to a product currently selected by policy, or to a worker
+// that atomically reserved capacity before calling OpenAI. Retained vectors
+// blocked by a downgrade/subscription do not consume active product capacity.
 export async function countProductSlotsUsed(shop: string) {
   const rows = await db.$queryRaw<Array<{ count: bigint | number }>>`
     SELECT COUNT(*) AS \`count\`
@@ -322,7 +358,7 @@ export async function reserveProductSlot({
       WHERE
         \`shop\` = ${shop}
         AND (
-          \`hasVector\` = true
+          \`blockedReason\` IS NULL
           OR \`status\` = 'PRODUCT_SLOT_RESERVED'
         )
     `;
@@ -430,7 +466,9 @@ export async function markIndexedProductBlocked({
       ? INDEXED_PRODUCT_STATUS.productLimitBlocked
       : reason === "SUBSCRIPTION_INACTIVE"
         ? INDEXED_PRODUCT_STATUS.subscriptionBlocked
-        : INDEXED_PRODUCT_STATUS.vectorQuotaBlocked;
+        : hasVector
+          ? INDEXED_PRODUCT_STATUS.indexed
+          : INDEXED_PRODUCT_STATUS.vectorQuotaBlocked;
 
   await db.$executeRaw`
     INSERT INTO \`AiSearchIndexedProduct\` (
@@ -449,7 +487,7 @@ export async function markIndexedProductBlocked({
       \`title\` = ${title},
       \`status\` = ${status},
       \`hasVector\` = (\`hasVector\` OR ${hasVector}),
-      \`searchable\` = CASE WHEN ${reason === "VECTOR_UPDATE_LIMIT"} AND (\`hasVector\` OR ${hasVector}) THEN \`searchable\` ELSE false END,
+      \`searchable\` = CASE WHEN ${reason === "VECTOR_UPDATE_LIMIT"} AND (\`hasVector\` OR ${hasVector}) THEN true ELSE false END,
       \`blockedReason\` = ${reason === "VECTOR_UPDATE_LIMIT" ? null : reason === "SUBSCRIPTION_INACTIVE" ? "SUBSCRIPTION" : reason},
       \`vectorStatus\` = CASE
         WHEN (\`hasVector\` OR ${hasVector}) = false THEN 'MISSING'
@@ -631,9 +669,12 @@ export async function markIneligibleProductMetadata({
 }
 
 export async function reconcileIndexedProductEligibility({
-  shop, policyActive, productLimit,
+  shop, policyActive, productLimit, recoverMissingAsProductCapacity = false,
 }: {
-  shop: string; policyActive: boolean; productLimit: number | null;
+  shop: string;
+  policyActive: boolean;
+  productLimit: number | null;
+  recoverMissingAsProductCapacity?: boolean;
 }) {
   return db.$transaction(async (tx) => {
     const versionRows = await tx.$queryRaw<Array<{ productPolicyVersion: number }>>`
@@ -651,8 +692,11 @@ export async function reconcileIndexedProductEligibility({
     `;
     const decisions = planProductEligibility(rows.map((row) => ({
       ...row, searchable: Boolean(row.searchable), hasVector: Boolean(row.hasVector),
-    })), policyActive, productLimit);
+    })), policyActive, productLimit, { recoverMissingAsProductCapacity });
     const requiresReindex: string[] = [];
+    const productCapacityReindex: string[] = [];
+    const subscriptionRecoveryReindex: string[] = [];
+    const missingVectorReindex: string[] = [];
     const reactivateReady: string[] = [];
     const deactivate: string[] = [];
     let policyChanged = false;
@@ -660,7 +704,30 @@ export async function reconcileIndexedProductEligibility({
       const original = rows.find((row) => row.productId === decision.productId)!;
       if (decision.searchable && !Boolean(original.searchable)) reactivateReady.push(decision.productId);
       if (!decision.searchable && Boolean(original.searchable)) deactivate.push(decision.productId);
-      if (decision.requiresReindex) requiresReindex.push(decision.productId);
+      if (decision.requiresReindex) {
+        requiresReindex.push(decision.productId);
+        if (!Boolean(original.hasVector)) {
+          missingVectorReindex.push(decision.productId);
+          if (
+            original.blockedReason === "SUBSCRIPTION" ||
+            original.status === INDEXED_PRODUCT_STATUS.subscriptionBlocked ||
+            original.status === INDEXED_PRODUCT_STATUS.subscriptionRecoveryPending
+          ) {
+            subscriptionRecoveryReindex.push(decision.productId);
+          }
+        }
+        if (
+          !Boolean(original.hasVector) &&
+          (
+            original.blockedReason === "PRODUCT_LIMIT" ||
+            original.status === INDEXED_PRODUCT_STATUS.productLimitBlocked ||
+            original.status === INDEXED_PRODUCT_STATUS.productLimitRecoveryPending ||
+            recoverMissingAsProductCapacity
+          )
+        ) {
+          productCapacityReindex.push(decision.productId);
+        }
+      }
       if (Boolean(original.searchable) !== decision.searchable || original.blockedReason !== decision.blockedReason || original.status !== decision.status) {
         policyChanged = true;
       }
@@ -688,6 +755,9 @@ export async function reconcileIndexedProductEligibility({
       activeBefore: rows.filter((row) => Boolean(row.searchable)).length,
       activeAfter: decisions.filter((row) => row.searchable).length,
       reactivateReady, deactivate, requiresReindex,
+      productCapacityReindex,
+      subscriptionRecoveryReindex,
+      missingVectorReindex,
     };
   });
 }

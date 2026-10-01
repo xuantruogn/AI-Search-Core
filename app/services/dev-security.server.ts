@@ -10,8 +10,13 @@ import {
 
 import db from "../db.server";
 
-export const DEV_SESSION_IDLE_MS = 30 * 60_000;
-export const DEV_SESSION_ABSOLUTE_MS = 8 * 60 * 60_000;
+// Dev Center sessions are persistent so the internal owner does not need to
+// repeat password + MFA every time the browser is reopened. We still keep a
+// bounded idle timeout and absolute lifetime; sensitive actions can require
+// recent strong authentication separately.
+// Keep a trusted Dev Center browser signed in for normal daily use.
+export const DEV_SESSION_IDLE_MS = 7 * 24 * 60 * 60_000;
+export const DEV_SESSION_ABSOLUTE_MS = 30 * 24 * 60 * 60_000;
 export const DEV_STRONG_AUTH_MS = 10 * 60_000;
 export const DEV_MFA_CHALLENGE_MS = 5 * 60_000;
 
@@ -124,17 +129,36 @@ function allowedOrigins(request: Request) {
     .split(",")
     .map((value) => value.trim())
     .filter(Boolean);
-  if (process.env.NODE_ENV === "production") {
-    return new Set(configured.length ? configured : [
-      "https://app.aibuyense.com",
-      "https://dev.aibuyense.com",
-    ]);
-  }
+
+  const allowed = new Set(
+    process.env.NODE_ENV === "production"
+      ? configured.length
+        ? configured
+        : ["https://app.aibuyense.com", "https://dev.aibuyense.com"]
+      : configured,
+  );
+
   const current = new URL(request.url);
-  const local = ["localhost", "127.0.0.1", "::1"].includes(current.hostname)
-    ? [current.origin]
-    : [];
-  return new Set([...configured, ...local]);
+  if (process.env.NODE_ENV !== "production") {
+    allowed.add(current.origin);
+  }
+
+  // Shopify CLI can run the web process with NODE_ENV=production while still
+  // exposing it through a temporary HTTPS quick tunnel. In that case only
+  // trust the exact tunnel origin supplied by Shopify CLI via SHOPIFY_APP_URL.
+  const appUrl = process.env.SHOPIFY_APP_URL?.trim();
+  if (appUrl) {
+    try {
+      const parsed = new URL(appUrl);
+      if (parsed.protocol === "https:" && parsed.hostname.endsWith(".trycloudflare.com")) {
+        allowed.add(parsed.origin);
+      }
+    } catch {
+      // Invalid configuration stays denied by default.
+    }
+  }
+
+  return allowed;
 }
 
 export function assertDevOrigin(request: Request) {
@@ -144,7 +168,7 @@ export function assertDevOrigin(request: Request) {
   }
 }
 
-export function createLoginCsrf(request: Request) {
+export function createLoginCsrf() {
   const nonce = randomOpaqueToken();
   const signature = createHmac("sha256", requiredSecret("DEV_SESSION_SECRET"))
     .update(`login-csrf:${nonce}`)

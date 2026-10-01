@@ -4,6 +4,10 @@ import { useLoaderData, useSubmit, useNavigation } from "react-router";
 
 import prisma from "../db.server";
 import { authenticate } from "../shopify.server";
+import {
+  classifyAbnormalSearchClass,
+  hasReasonableProductSemanticFacets,
+} from "../services/search/search-analytics.server";
 
 export type FilterMode = "all" | "total" | "good" | "abnormal";
 
@@ -83,6 +87,8 @@ async function getShopAnalyticsData(shop: string, requestedDays: number = 30) {
     variants: Set<string>;
     searches: number;
     clicks: number;
+    clickedSearches: number;
+    semanticFacetNoResultCount: number;
     resultCount: number;
     productsClicked: Map<string, number>;
     logs: typeof queryLogs;
@@ -95,6 +101,8 @@ async function getShopAnalyticsData(shop: string, requestedDays: number = 30) {
       variants: new Set<string>(),
       searches: 0,
       clicks: 0,
+      clickedSearches: 0,
+      semanticFacetNoResultCount: 0,
       resultCount: log.resultCount,
       productsClicked: new Map<string, number>(),
       logs: [],
@@ -103,6 +111,12 @@ async function getShopAnalyticsData(shop: string, requestedDays: number = 30) {
     existing.variants.add(log.query);
     existing.searches += 1;
     existing.clicks += log.clicks.length;
+    existing.clickedSearches += log.clicks.length > 0 ? 1 : 0;
+    existing.semanticFacetNoResultCount +=
+      log.resultCount === 0 &&
+      hasReasonableProductSemanticFacets(log.llmAnalysisJson, log.llmStatus)
+        ? 1
+        : 0;
     existing.logs.push(log);
 
     log.clicks.forEach((c) => {
@@ -117,43 +131,39 @@ async function getShopAnalyticsData(shop: string, requestedDays: number = 30) {
   const abnormalLogIds = new Set<string>();
 
   const tableRows = Array.from(clusterMap.values()).map((cluster) => {
-    const ctrValue = cluster.searches > 0 ? (cluster.clicks / cluster.searches) * 100 : 0;
+    const ctrValue = cluster.searches > 0
+      ? (cluster.clickedSearches / cluster.searches) * 100
+      : 0;
+    const classification = classifyAbnormalSearchClass({
+      searchCount: cluster.searches,
+      clickedSearches: cluster.clickedSearches,
+      semanticFacetNoResultCount: cluster.semanticFacetNoResultCount,
+    });
     
-    let isAbnormal = false;
-    let statusText = "Good";
-    let statusBg = "#e4f8f0";
-    let statusColor = "#008060";
-    let abnormalReason = "—";
+    const isAbnormal = classification !== "HEALTHY";
+    const statusText = isAbnormal ? "Abnormal" : "Good";
+    const statusBg = isAbnormal ? "#ffebe9" : "#e4f8f0";
+    const statusColor = isAbnormal ? "#d32f2f" : "#008060";
+    const abnormalReason =
+      classification === "SEMANTIC_NO_RESULTS"
+        ? "Valid Product Semantic Facets but no results"
+        : classification === "LOW_CTR"
+          ? "Query class >20 searches with CTR <5%"
+          : cluster.searches <= 20
+            ? "Insufficient volume for CTR anomaly (<=20 searches)"
+            : "—";
 
-    if (cluster.resultCount === 0) {
-      isAbnormal = true;
-      statusText = "Abnormal";
-      statusBg = "#ffebe9";
-      statusColor = "#d32f2f";
-      abnormalReason = "No products found";
-    } else if (cluster.searches >= 20 && cluster.clicks === 0) {
-      isAbnormal = true;
-      statusText = "Abnormal";
-      statusBg = "#ffebe9";
-      statusColor = "#d32f2f";
-      abnormalReason = "High search volume with 0 clicks (>=20 searches)";
-    } else if (cluster.clicks > 0 && ctrValue < 3) {
-      isAbnormal = true;
-      statusText = "Abnormal";
-      statusBg = "#ffebe9";
-      statusColor = "#d32f2f";
-      abnormalReason = "Low click-through rate (<3%)";
-    } else {
-      isAbnormal = false;
-      statusText = "Good";
-      statusBg = "#e4f8f0";
-      statusColor = "#008060";
-      abnormalReason = cluster.clicks === 0 ? "Insufficient data (<20 searches)" : "—";
-    }
-
-    if (isAbnormal) {
-      abnormalSearchesCount += cluster.searches;
+    if (classification === "LOW_CTR") {
+      abnormalSearchesCount += cluster.logs.length;
       cluster.logs.forEach((l) => abnormalLogIds.add(l.id));
+    } else if (classification === "SEMANTIC_NO_RESULTS") {
+      const abnormalLogs = cluster.logs.filter(
+        (log) =>
+          log.resultCount === 0 &&
+          hasReasonableProductSemanticFacets(log.llmAnalysisJson, log.llmStatus),
+      );
+      abnormalSearchesCount += abnormalLogs.length;
+      abnormalLogs.forEach((log) => abnormalLogIds.add(log.id));
     }
 
     const productListDetails: ClickedProductDetail[] = Array.from(cluster.productsClicked.entries())

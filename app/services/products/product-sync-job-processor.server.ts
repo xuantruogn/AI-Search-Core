@@ -37,11 +37,22 @@ export type ProcessClaimedProductSyncJobInput = {
 };
 
 function requiresAdmin(topic: string) {
-  return topic === "PRODUCTS_CREATE" || topic === "PRODUCTS_UPDATE" || topic === "REINDEX_PRODUCT";
+  return topic === "PRODUCTS_CREATE" ||
+    topic === "PRODUCTS_UPDATE" ||
+    topic === "REINDEX_PRODUCT" ||
+    topic === "REINDEX_PRODUCT_CAPACITY" ||
+    topic === "REINDEX_PRODUCT_SUBSCRIPTION" ||
+    topic === "REINDEX_PRODUCT_ENRICHMENT";
+}
+
+function isPolicyReindex(topic: string) {
+  return topic === "REINDEX_PRODUCT" ||
+    topic === "REINDEX_PRODUCT_CAPACITY" ||
+    topic === "REINDEX_PRODUCT_SUBSCRIPTION";
 }
 
 async function runJobWorkWithPolicyStable({ job, admin }: ProcessClaimedProductSyncJobInput) {
-  if (job.topic === "REINDEX_PRODUCT") {
+  if (isPolicyReindex(job.topic)) {
     const policyRows = await db.$queryRaw<Array<{ productPolicyVersion: number }>>`
       SELECT \`productPolicyVersion\` FROM \`AiSearchShopSettings\`
       WHERE \`shop\` = ${job.shop} LIMIT 1
@@ -81,6 +92,12 @@ async function runJobWorkWithPolicyStable({ job, admin }: ProcessClaimedProductS
       admin,
       shop: job.shop,
       productId: job.productId,
+      indexReason:
+        job.topic === "REINDEX_PRODUCT_CAPACITY"
+          ? "PRODUCT_LIMIT_RECOVERY"
+          : job.topic === "REINDEX_PRODUCT_SUBSCRIPTION"
+            ? "SUBSCRIPTION_RECOVERY"
+          : "WEBHOOK",
     });
   }
 
@@ -95,7 +112,7 @@ async function runJobWorkWithPolicyStable({ job, admin }: ProcessClaimedProductS
 }
 
 async function runJobWork(input: ProcessClaimedProductSyncJobInput) {
-  if (input.job.topic !== "REINDEX_PRODUCT") {
+  if (!isPolicyReindex(input.job.topic)) {
     return runJobWorkWithPolicyStable(input);
   }
 

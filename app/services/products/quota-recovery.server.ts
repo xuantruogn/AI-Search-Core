@@ -5,23 +5,51 @@ import { withDistributedLease } from "../commerce/lease-lock.server";
 import { enqueueProductSyncJob } from "./product-sync-job.server";
 import { kickProductSyncQueue } from "./product-sync-queue.server";
 
-async function queueReindexRows(shop: string, policyVersion: number, productIds: string[]) {
+async function queueReindexRows(
+  shop: string,
+  policyVersion: number,
+  productIds: string[],
+  productCapacityIds: Set<string>,
+  subscriptionRecoveryIds: Set<string>,
+) {
   let queued = 0;
-  for (const productId of productIds) {
-    const result = await enqueueProductSyncJob({
-      shop,
-      webhookId: `reindex:${shop}:${productId}:policy:${policyVersion}`,
-      topic: "REINDEX_PRODUCT",
-      productId,
-      policyVersion,
-    });
-    if (result.created) queued += 1;
+
+  // Queue every newly eligible catalog product, but use bounded concurrency so
+  // a large limit increase does not serialize hundreds of database round trips.
+  for (let offset = 0; offset < productIds.length; offset += 10) {
+    const batch = productIds.slice(offset, offset + 10);
+    const results = await Promise.all(
+      batch.map((productId) => {
+        const capacityRecovery = productCapacityIds.has(productId);
+        const subscriptionRecovery = subscriptionRecoveryIds.has(productId);
+        const recoveryKind = capacityRecovery
+          ? "capacity-reindex"
+          : subscriptionRecovery
+            ? "subscription-reindex"
+            : "reindex";
+        return enqueueProductSyncJob({
+          shop,
+          webhookId: `${recoveryKind}:${shop}:${productId}:policy:${policyVersion}`,
+          topic: capacityRecovery
+            ? "REINDEX_PRODUCT_CAPACITY"
+            : subscriptionRecovery
+              ? "REINDEX_PRODUCT_SUBSCRIPTION"
+            : "REINDEX_PRODUCT",
+          productId,
+          policyVersion,
+        });
+      }),
+    );
+    queued += results.filter((result) => result.created).length;
   }
 
   return queued;
 }
 
-export async function recoverBlockedProducts(shop: string) {
+export async function recoverBlockedProducts(
+  shop: string,
+  options?: { productCapacityExpanded?: boolean },
+) {
   return withDistributedLease({
     shop,
     resource: "product-policy:reconcile",
@@ -43,21 +71,50 @@ export async function recoverBlockedProducts(shop: string) {
         shop,
         policyActive: entitlement.active,
         productLimit: entitlement.limits.productLimit,
+        recoverMissingAsProductCapacity:
+          options?.productCapacityExpanded === true,
       });
       const vectorBudget = remaining(
         entitlement.limits.vectorUpdateLimit,
         entitlement.usage.vectorUpdateCount,
       );
-      const batchLimit = Math.min(vectorBudget ?? 50, 50);
-      const toQueue = entitlement.active ? plan.requiresReindex.slice(0, batchLimit) : [];
+      const productCapacityIds = new Set([
+        ...plan.productCapacityReindex,
+        ...(options?.productCapacityExpanded ? plan.missingVectorReindex : []),
+      ]);
+      const subscriptionRecoveryIds = new Set(
+        plan.subscriptionRecoveryReindex,
+      );
+      const quotaControlledReindex = plan.requiresReindex.filter(
+        (productId) =>
+          !productCapacityIds.has(productId) &&
+          !subscriptionRecoveryIds.has(productId),
+      );
+      const billableBatchLimit = Math.min(vectorBudget ?? 50, 50);
+      const toQueue = entitlement.active
+        ? [...new Set([
+            ...productCapacityIds,
+            ...subscriptionRecoveryIds,
+            ...quotaControlledReindex.slice(0, billableBatchLimit),
+          ])]
+        : [];
       console.log("[PRODUCT POLICY RECONCILE PLAN]", {
         shop, policyVersion: plan.policyVersion,
         keepActive: plan.activeAfter - plan.reactivateReady.length,
         deactivate: plan.deactivate.length,
         reactivateReady: plan.reactivateReady.length,
         requiresReindex: plan.requiresReindex.length,
+        productCapacityReindex: productCapacityIds.size,
+        subscriptionRecoveryReindex: subscriptionRecoveryIds.size,
+        quotaControlledReindex: quotaControlledReindex.length,
       });
-      const queued = await queueReindexRows(shop, plan.policyVersion, toQueue);
+      const queued = await queueReindexRows(
+        shop,
+        plan.policyVersion,
+        toQueue,
+        productCapacityIds,
+        subscriptionRecoveryIds,
+      );
       if (queued > 0) kickProductSyncQueue();
       console.log("[PRODUCT POLICY RECONCILE DONE]", {
         shop, policyVersion: plan.policyVersion,

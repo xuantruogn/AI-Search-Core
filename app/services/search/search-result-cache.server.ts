@@ -1,6 +1,10 @@
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 
 import db from "../../db.server";
+import {
+  QUERY_PARSER_VERSION,
+  QUERY_ROUTER_VERSION,
+} from "./query-plan.server";
 
 export interface CachedRankedProduct {
   productId: string;
@@ -28,8 +32,53 @@ export interface CachedSearchResultPage {
   products: CachedRankedProduct[];
 }
 
-const DEFAULT_TTL_MS = 30 * 60 * 1000;
+const DEFAULT_RECEIPT_TTL_MS = 2 * 60 * 60 * 1000;
 const MIN_TTL_MS = 60 * 1000;
+const DEFAULT_QUERY_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+const MAX_RECEIPT_TTL_MS = 24 * 60 * 60 * 1000;
+const FULL_SEARCH_CACHE_PIPELINE_VERSION =
+  "full-search-cache-v42-soft-facets-2026-10-01";
+
+export type CachedSearchSortIntent =
+  | "RELEVANCE"
+  | "PRICE_ASC"
+  | "PRICE_DESC"
+  | "PREMIUM"
+  | "BUDGET";
+
+export interface SearchQueryCacheMetadata {
+  query: string;
+  sortIntent: CachedSearchSortIntent;
+  priceConstraint: unknown | null;
+  cacheKeyHash: string;
+  tenantId: string;
+  shopDomain: string;
+  shopifyShopId: string | null;
+  searchLanguage: string | null;
+  productPolicyVersion: number;
+  productCount: number;
+  searchableCount: number;
+  catalogUpdatedAt: string | null;
+  settingsUpdatedAt: string | null;
+  requestVariant: string;
+  pipelineVersion: string;
+  proofBasedEmpty?: boolean;
+  analyzedQuery?: string | null;
+  llmExpandedQuery?: string | null;
+  analysisSummary?: Record<string, unknown> | null;
+  selectedContextSummary?: unknown[];
+  diagnosticSummary?: Record<string, unknown> | null;
+}
+
+export interface SearchQueryCacheIdentity {
+  receiptId: string;
+  metadata: SearchQueryCacheMetadata;
+}
+
+export interface CachedSearchQueryResult {
+  result: CachedSearchResult;
+  metadata: SearchQueryCacheMetadata;
+}
 
 function normalizeShop(shop: string) {
   return shop.trim().toLowerCase();
@@ -54,6 +103,266 @@ function normalizeRankedProducts(products: CachedRankedProduct[]) {
     });
   }
   return result;
+}
+
+function asIso(value: Date | null | undefined) {
+  if (!value) return null;
+  return Number.isNaN(value.getTime()) ? null : value.toISOString();
+}
+
+function normalizeSearchQuery(query: string) {
+  return query.replace(/\s+/g, " ").trim().toLocaleLowerCase("en-US");
+}
+
+function readQueryCacheTtlMs() {
+  const parsed = Number.parseInt(
+    process.env.AI_SEARCH_FULL_RESULT_CACHE_TTL_MS || "",
+    10,
+  );
+  if (!Number.isSafeInteger(parsed) || parsed < MIN_TTL_MS) {
+    return DEFAULT_QUERY_CACHE_TTL_MS;
+  }
+  return Math.min(parsed, 7 * 24 * 60 * 60 * 1000);
+}
+
+function readReceiptTtlMs() {
+  const parsed = Number.parseInt(
+    process.env.AI_SEARCH_RECEIPT_TTL_MS || "",
+    10,
+  );
+  if (!Number.isSafeInteger(parsed) || parsed < MIN_TTL_MS) {
+    return DEFAULT_RECEIPT_TTL_MS;
+  }
+  return Math.min(parsed, MAX_RECEIPT_TTL_MS);
+}
+
+function currentSearchPipelineSignature() {
+  return [
+    FULL_SEARCH_CACHE_PIPELINE_VERSION,
+    process.env.GEMINI_QUERY_REWRITE_MODEL?.trim() || "gemini-3.5-flash-lite",
+    process.env.OPENAI_EMBEDDING_MODEL?.trim() || "text-embedding-3-small",
+    process.env.AI_SEARCH_QUERY_ROUTER_ENABLED?.trim() || "default",
+    QUERY_PARSER_VERSION,
+    QUERY_ROUTER_VERSION,
+    process.env.AI_SEARCH_CANDIDATE_LIMIT?.trim() || "500",
+    process.env.AI_SEARCH_QDRANT_HEADROOM_RATIO?.trim() || "1.5",
+    process.env.AI_SEARCH_VECTOR_SCORE_THRESHOLD?.trim() || "0.35",
+    process.env.AI_SEARCH_VECTOR_RELATIVE_SCORE_RATIO?.trim() || "default",
+    process.env.AI_SEARCH_DISCOVERY_VECTOR_RELATIVE_SCORE_RATIO?.trim() || "0.88",
+    process.env.AI_SEARCH_DISCOVERY_MIN_RECALL_RESULTS?.trim() || "8",
+    process.env.AI_SEARCH_NO_EVIDENCE_MIN_TOP_SCORE?.trim() || "0.45",
+  ].join("|");
+}
+
+export async function buildSearchQueryCacheIdentity(args: {
+  shop: string;
+  query: string;
+  requestVariant?: string | null;
+  searchLanguage?: string | null;
+}): Promise<SearchQueryCacheIdentity> {
+  const shopDomain = normalizeShop(args.shop);
+  const [shopRecord, settings, productAggregate, searchableCount] =
+    await Promise.all([
+      db.aiSearchShop.findUnique({
+        where: { shop: shopDomain },
+        select: { shopifyShopId: true },
+      }),
+      db.aiSearchShopSettings.findUnique({
+        where: { shop: shopDomain },
+        select: {
+          searchLanguage: true,
+          productPolicyVersion: true,
+          updatedAt: true,
+        },
+      }),
+      db.aiSearchIndexedProduct.aggregate({
+        where: { shop: shopDomain },
+        _count: { _all: true },
+        _max: { updatedAt: true },
+      }),
+      db.aiSearchIndexedProduct.count({
+        where: {
+          shop: shopDomain,
+          searchable: true,
+          hasVector: true,
+        },
+      }),
+    ]);
+
+  const shopifyShopId = shopRecord?.shopifyShopId?.trim() || null;
+  const tenantId = shopifyShopId
+    ? "shopify:" + shopifyShopId
+    : "domain:" + shopDomain;
+  const searchLanguage =
+    args.searchLanguage?.trim() || settings?.searchLanguage?.trim() || null;
+  const productPolicyVersion = settings?.productPolicyVersion ?? 0;
+  const productCount = productAggregate._count._all;
+  const catalogUpdatedAt = asIso(productAggregate._max.updatedAt);
+  const settingsUpdatedAt = asIso(settings?.updatedAt);
+  const requestVariant = args.requestVariant?.trim() || "";
+  const pipelineVersion = currentSearchPipelineSignature();
+  const normalizedQuery = normalizeSearchQuery(args.query);
+
+  const keyPayload = JSON.stringify({
+    tenantId,
+    shopDomain,
+    normalizedQuery,
+    searchLanguage,
+    productPolicyVersion,
+    productCount,
+    searchableCount,
+    catalogUpdatedAt,
+    settingsUpdatedAt,
+    requestVariant,
+    pipelineVersion,
+  });
+  const cacheKeyHash = createHash("sha256")
+    .update(keyPayload)
+    .digest("base64url");
+
+  return {
+    receiptId: "qcache_" + cacheKeyHash,
+    metadata: {
+      query: args.query,
+      sortIntent: "RELEVANCE",
+      priceConstraint: null,
+      cacheKeyHash,
+      tenantId,
+      shopDomain,
+      shopifyShopId,
+      searchLanguage,
+      productPolicyVersion,
+      productCount,
+      searchableCount,
+      catalogUpdatedAt,
+      settingsUpdatedAt,
+      requestVariant,
+      pipelineVersion,
+    },
+  };
+}
+
+function parseSearchQueryCacheMetadata(
+  value: string,
+): SearchQueryCacheMetadata | null {
+  try {
+    const parsed = JSON.parse(value) as Partial<SearchQueryCacheMetadata>;
+    if (
+      !parsed ||
+      typeof parsed !== "object" ||
+      typeof parsed.query !== "string" ||
+      typeof parsed.cacheKeyHash !== "string" ||
+      typeof parsed.tenantId !== "string" ||
+      typeof parsed.shopDomain !== "string" ||
+      typeof parsed.requestVariant !== "string" ||
+      typeof parsed.pipelineVersion !== "string"
+    ) {
+      return null;
+    }
+
+    const sortIntent = parsed.sortIntent;
+    if (
+      sortIntent !== "RELEVANCE" &&
+      sortIntent !== "PRICE_ASC" &&
+      sortIntent !== "PRICE_DESC" &&
+      sortIntent !== "PREMIUM" &&
+      sortIntent !== "BUDGET"
+    ) {
+      return null;
+    }
+
+    return parsed as SearchQueryCacheMetadata;
+  } catch {
+    return null;
+  }
+}
+
+export async function getSearchQueryCache(
+  shop: string,
+  identity: SearchQueryCacheIdentity,
+): Promise<CachedSearchQueryResult | null> {
+  const result = await getSearchResult(shop, identity.receiptId);
+  if (!result) return null;
+
+  const metadata = parseSearchQueryCacheMetadata(result.query);
+  if (!metadata || metadata.cacheKeyHash !== identity.metadata.cacheKeyHash) {
+    return null;
+  }
+
+  // Empty vector/provider results are never reusable. The only reusable empty
+  // result is one backed by a closed-world catalog proof.
+  if (result.total === 0 && metadata.proofBasedEmpty !== true) return null;
+
+  return { result, metadata };
+}
+
+export async function saveSearchQueryCache(args: {
+  shop: string;
+  identity: SearchQueryCacheIdentity;
+  originalQuery: string;
+  sortIntent: CachedSearchSortIntent;
+  priceConstraint?: unknown | null;
+  rankedProducts: CachedRankedProduct[];
+  proofBasedEmpty?: boolean;
+  analyzedQuery?: string | null;
+  llmExpandedQuery?: string | null;
+  analysisSummary?: Record<string, unknown> | null;
+  selectedContextSummary?: unknown[];
+  diagnosticSummary?: Record<string, unknown> | null;
+}): Promise<CachedSearchQueryResult> {
+  const shop = normalizeShop(args.shop);
+  const rankedProducts = normalizeRankedProducts(args.rankedProducts);
+  const createdAt = new Date();
+  const expiresAt = new Date(createdAt.getTime() + readQueryCacheTtlMs());
+  const metadata: SearchQueryCacheMetadata = {
+    ...args.identity.metadata,
+    query: args.originalQuery,
+    sortIntent: args.sortIntent,
+    priceConstraint: args.priceConstraint ?? null,
+    proofBasedEmpty: args.proofBasedEmpty === true ? true : undefined,
+    analyzedQuery: args.analyzedQuery?.trim() || null,
+    llmExpandedQuery: args.llmExpandedQuery?.trim() || null,
+    analysisSummary: args.analysisSummary ?? null,
+    selectedContextSummary: args.selectedContextSummary ?? [],
+    diagnosticSummary: args.diagnosticSummary ?? null,
+  };
+
+  await db.aiSearchResultReceipt.upsert({
+    where: { receiptId: args.identity.receiptId },
+    create: {
+      receiptId: args.identity.receiptId,
+      shop,
+      query: JSON.stringify(metadata),
+      searchLogId: null,
+      rankedProductsJson: JSON.stringify(rankedProducts),
+      total: rankedProducts.length,
+      createdAt,
+      expiresAt,
+    },
+    update: {
+      shop,
+      query: JSON.stringify(metadata),
+      searchLogId: null,
+      rankedProductsJson: JSON.stringify(rankedProducts),
+      total: rankedProducts.length,
+      createdAt,
+      expiresAt,
+    },
+  });
+
+  return {
+    result: {
+      receiptId: args.identity.receiptId,
+      shop,
+      query: JSON.stringify(metadata),
+      searchLogId: null,
+      rankedProducts,
+      total: rankedProducts.length,
+      createdAt: createdAt.getTime(),
+      expiresAt: expiresAt.getTime(),
+    },
+    metadata,
+  };
 }
 
 function parseProducts(value: string): CachedRankedProduct[] | null {
@@ -92,7 +401,11 @@ export async function saveSearchResult(args: {
   const receiptId = args.receiptId ?? createReceiptId();
   const createdAt = new Date();
   const expiresAt = new Date(
-    createdAt.getTime() + Math.max(MIN_TTL_MS, args.ttlMs ?? DEFAULT_TTL_MS),
+    createdAt.getTime() +
+      Math.min(
+        MAX_RECEIPT_TTL_MS,
+        Math.max(MIN_TTL_MS, args.ttlMs ?? readReceiptTtlMs()),
+      ),
   );
   const rankedProducts = normalizeRankedProducts(args.rankedProducts);
   const shop = normalizeShop(args.shop);

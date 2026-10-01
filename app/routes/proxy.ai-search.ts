@@ -5,13 +5,18 @@ import {
   semanticSearch,
   type SemanticSearchDiagnostics,
 } from "../services/search/semantic-search.server";
-import { recordSearchQueryLog } from "../services/search/search-analytics.server";
+import {
+  recordSearchQueryLog,
+  type SearchAnalyticsDiagnostics,
+} from "../services/search/search-analytics.server";
 import { parsePriceConstraint } from "../services/search/query-constraints.server";
-import { prepareQueryRewrite } from "../services/search/conditional-query-llm.server";
+import { prepareParallelQueryPipeline } from "../services/search/parallel-query-pipeline.server";
+import type { AbsenceProof } from "../services/search/absence-proof.server";
 import { retrieveStructuredCandidates } from "../services/search/structured-candidate-retrieval.server";
 import {
   applyShopContextToQuery,
   filterResultsByExplicitGender,
+  warmShopContext,
   type ExplicitGenderFilterDiagnostics,
 } from "../services/search/shop-context-index.server";
 import {
@@ -19,10 +24,14 @@ import {
   type SearchPriceFilterDiagnostics,
 } from "../services/search/search-price-filter.server";
 import { classifySearchRequest } from "../services/search/search-request-router.server";
-import { buildQueryPlan } from "../services/search/query-planner.server";
+import type { QueryPlan } from "../services/search/query-plan.server";
 import {
+  buildSearchQueryCacheIdentity,
+  getSearchQueryCache,
   getSearchResultPage,
+  saveSearchQueryCache,
   saveSearchResult,
+  type CachedSearchSortIntent,
 } from "../services/search/search-result-cache.server";
 import {
   buildThemeResultLiquid,
@@ -38,6 +47,7 @@ import {
   resolveUniqueThemeSearchTransportKeys,
 } from "../services/theme/theme-search-transport-key.server";
 import { loadStoredThemeMapV4 } from "../services/theme/theme-map-v4-store.server";
+import { rebuildThemeMapV4ForTheme } from "../services/theme/theme-map-v4-lifecycle.server";
 import { getShopEntitlement } from "../services/commerce/entitlement.server";
 import { reconcileShopCommercialState } from "../services/commerce/reconciliation.server";
 import { refreshShopifyAppPricingIfStale } from "../services/billing/shopify-app-pricing.server";
@@ -52,21 +62,57 @@ import {
 } from "../services/commerce/usage.server";
 
 import { getShopSettings } from "../services/commerce/shop-registry.server";
-import { getEmbeddingModel } from "../services/search/embeddings.server";
+import {
+  getEmbeddingModel,
+  warmOpenAiConnection,
+} from "../services/search/embeddings.server";
+import { ensureProductCollection } from "../services/search/qdrant.server";
+import { warmGeminiConnection } from "../services/search/gemini-query-rewriter.server";
+import { getShopSearchDictionary } from "../services/search/shop-search-dictionary.server";
 import {
   fetchProductsByGids as fetchAppSelfRenderProductsByGids,
   renderAppSelfSearchPage,
 } from "../services/renderer/app-self-render-v3.server";
 
 const NATIVE_BYPASS_PARAM = "_ai_search_bypass";
-const SEARCH_LIMIT = 1000;
+const SEARCH_LIMIT = Math.min(
+  1000,
+  readPositiveInteger("AI_SEARCH_CANDIDATE_LIMIT", 500),
+);
 
 const queryEmbeddingCache = new Map<
   string,
   { embedding: number[]; timestamp: number }
 >();
 const EMBEDDING_CACHE_TTL = 24 * 60 * 60 * 1000;
-const EMBEDDING_QUERY_PIPELINE_VERSION = "semantic-expansion-v6-general-commerce";
+const EMBEDDING_QUERY_PIPELINE_VERSION = "semantic-expansion-v7-facet-branches";
+
+const SEARCH_CACHE_IGNORED_PARAMS = new Set([
+  "q",
+  "page",
+  "receipt",
+  "format",
+  "mode",
+  "theme_id",
+  "map_fingerprint",
+  "native_search_url",
+  "native_search_path",
+  "section_id",
+  "ids",
+  NATIVE_BYPASS_PARAM,
+]);
+
+function buildSearchCacheRequestVariant(url: URL) {
+  return [...url.searchParams.entries()]
+    .filter(([key]) => !SEARCH_CACHE_IGNORED_PARAMS.has(key))
+    .sort(([leftKey, leftValue], [rightKey, rightValue]) =>
+      leftKey === rightKey
+        ? leftValue.localeCompare(rightValue)
+        : leftKey.localeCompare(rightKey),
+    )
+    .map(([key, value]) => encodeURIComponent(key) + "=" + encodeURIComponent(value))
+    .join("&");
+}
 
 function buildEmbeddingCacheKey(shop: string, query: string) {
   return [
@@ -101,6 +147,38 @@ function setCachedQueryEmbedding(
     if (oldestKey) queryEmbeddingCache.delete(oldestKey);
   }
   queryEmbeddingCache.set(key, { embedding, timestamp: Date.now() });
+}
+
+function warmSearchRuntime(shop: string) {
+  void Promise.allSettled([
+    warmOpenAiConnection(),
+    warmGeminiConnection(),
+    ensureProductCollection(),
+    getShopSearchDictionary(shop),
+    warmShopContext(shop),
+  ]).then((results) => {
+    const failures = results
+      .map((result, index) => ({ result, index }))
+      .filter(
+        (entry): entry is {
+          result: PromiseRejectedResult;
+          index: number;
+        } => entry.result.status === "rejected",
+      );
+
+    if (failures.length > 0) {
+      console.warn("[AI Search][PERF] Search runtime warmup partially failed", {
+        shop,
+        failures: failures.map(({ index, result }) => ({
+          stage: ["openai", "gemini", "qdrant", "dictionary", "shop-context"][index],
+          error:
+            result.reason instanceof Error
+              ? result.reason.message
+              : String(result.reason),
+        })),
+      });
+    }
+  });
 }
 
 // ==========================================
@@ -532,9 +610,10 @@ export const loader = async ({
     Date.now() -
     normalizeStartedAt;
 
-const resultCacheMs = 0;
+let resultCacheMs = 0;
 
-const resultCacheStatus = "MISS" as const;
+let resultCacheStatus: "HIT" | "MISS" = "MISS";
+
 
   let authMs = 0;
   let requestRoutingCodeMs = 0;
@@ -617,11 +696,17 @@ const resultCacheStatus = "MISS" as const;
       );
     }
 
-    if (
+    const requestMode =
       requestUrl.searchParams.get(
         "mode",
-      ) === "runtime-config"
-    ) {
+      );
+
+    if (requestMode === "runtime-config") {
+      // Runtime bootstrap happens before a shopper submits a query. Warm once
+      // here, not on receipt rendering/pagination or alongside an actual cold
+      // search where duplicate provider requests compete for the same socket.
+      warmSearchRuntime(session.shop);
+
       const shopSettings =
         await getShopSettings(
           session.shop,
@@ -642,12 +727,58 @@ const resultCacheStatus = "MISS" as const;
         | null = null;
 
       if (!isCustomDataMode) {
-        const syncedMap =
+        const requestedThemeId =
+          requestUrl.searchParams.get("theme_id");
+
+        let syncedMap =
           await loadSyncedThemeMapForStorefront({
             shop: session.shop,
-            themeId:
-              requestUrl.searchParams.get("theme_id"),
+            themeId: requestedThemeId,
           });
+
+        if (
+          syncedMap.ok === false &&
+          syncedMap.reason === "THEME_SYNC_REQUIRED" &&
+          process.env.NODE_ENV !== "production" &&
+          requestedThemeId
+        ) {
+          try {
+            const devMap =
+              await rebuildThemeMapV4ForTheme({
+                admin,
+                shop: session.shop,
+                themeId: requestedThemeId,
+              });
+
+            console.info(
+              "[AI Search][Theme Map V4] development preview theme compiled:",
+              {
+                shop: session.shop,
+                themeId: requestedThemeId,
+                status: devMap.status,
+                fingerprint: devMap.fingerprint,
+              },
+            );
+
+            syncedMap =
+              await loadSyncedThemeMapForStorefront({
+                shop: session.shop,
+                themeId: requestedThemeId,
+              });
+          } catch (error) {
+            console.warn(
+              "[AI Search][Theme Map V4] development preview theme compile failed:",
+              {
+                shop: session.shop,
+                themeId: requestedThemeId,
+                error:
+                  error instanceof Error
+                    ? error.message
+                    : String(error),
+              },
+            );
+          }
+        }
 
         if (syncedMap.ok) {
           const bootstrapCandidate =
@@ -2105,6 +2236,11 @@ const resultCacheStatus = "MISS" as const;
     const startedAt =
       Date.now();
 
+    let allProducts: CandidateProduct[] = [];
+    let searchLogId: string | null = null;
+    let sortIntent: CachedSearchSortIntent = "RELEVANCE";
+    let priceConstraint: ReturnType<typeof parsePriceConstraint> = null;
+
     let executionPhase:
       | "rewrite"
       | "semanticSearch"
@@ -2117,9 +2253,106 @@ const resultCacheStatus = "MISS" as const;
       "rewrite";
 
     try {
-      console.time(
-        "[PERF-PROXY] 2. Semantic Search (OpenAI/Vector Cache + Qdrant)",
-      );
+      searchPipeline: {
+        const fullCacheStartedAt = Date.now();
+        const searchCacheIdentity = await buildSearchQueryCacheIdentity({
+          shop: session.shop,
+          query,
+          searchLanguage: shopSettings.searchLanguage,
+          requestVariant: buildSearchCacheRequestVariant(requestUrl),
+        });
+        const cachedQueryResult = await getSearchQueryCache(
+          session.shop,
+          searchCacheIdentity,
+        );
+        resultCacheMs = Date.now() - fullCacheStartedAt;
+        resultCacheStatus = cachedQueryResult ? "HIT" : "MISS";
+
+        if (cachedQueryResult) {
+          sortIntent = cachedQueryResult.metadata.sortIntent;
+          priceConstraint =
+            cachedQueryResult.metadata.priceConstraint as ReturnType<
+              typeof parsePriceConstraint
+            >;
+
+          allProducts = cachedQueryResult.result.rankedProducts.map(
+            (product, index) => ({
+              id:
+                product.productId.match(
+                  /^(?:gid:\/\/shopify\/Product\/)?(\d+)$/,
+                )?.[1] || product.productId,
+              handle: product.handle,
+              rank: index + 1,
+              score: product.score,
+            }),
+          );
+
+          const cacheAnalyticsStartedAt = Date.now();
+          if (requestedPage === 1) {
+            try {
+              searchLogId = await recordSearchQueryLog({
+                shop: session.shop,
+                query,
+                analyzedQuery:
+                  cachedQueryResult.metadata.analyzedQuery || query,
+                llmExpandedQuery:
+                  cachedQueryResult.metadata.llmExpandedQuery || null,
+                llmAnalysis: {
+                  source: "FULL_SEARCH_RESULT_CACHE",
+                  cacheKeyHash: cachedQueryResult.metadata.cacheKeyHash,
+                  pipelineVersion: cachedQueryResult.metadata.pipelineVersion,
+                  ...(cachedQueryResult.metadata.analysisSummary ?? {}),
+                  diagnostics: cachedQueryResult.metadata.diagnosticSummary ?? null,
+                },
+                selectedContext: cachedQueryResult.metadata.selectedContextSummary ?? [],
+                rankedProducts: allProducts.map((product) => ({
+                  productId: product.id,
+                  handle: product.handle,
+                  rank: product.rank,
+                  score: product.score,
+                })),
+                diagnostics: {
+                  candidateCount: Number(cachedQueryResult.metadata.diagnosticSummary?.candidateCount) || allProducts.length,
+                  topCandidateScore: typeof cachedQueryResult.metadata.diagnosticSummary?.topCandidateScore === "number"
+                    ? cachedQueryResult.metadata.diagnosticSummary.topCandidateScore : null,
+                  vectorThreshold: typeof cachedQueryResult.metadata.diagnosticSummary?.vectorThreshold === "number"
+                    ? cachedQueryResult.metadata.diagnosticSummary.vectorThreshold : 0,
+                  embeddingCacheHit: true,
+                  llmStatus: "CACHE_HIT",
+                  llmFallbackReason: "FULL_SEARCH_RESULT_CACHE",
+                },
+                totalDurationMs: Date.now() - startedAt,
+              });
+            } catch (analyticsError) {
+              console.error("[AI Search] Cached search analytics log failed", {
+                shop: session.shop,
+                error:
+                  analyticsError instanceof Error
+                    ? analyticsError.message
+                    : String(analyticsError),
+              });
+            }
+          }
+
+          console.log("[AI Search][FULL RESULT CACHE HIT]", {
+            shop: session.shop,
+            shopifyShopId: cachedQueryResult.metadata.shopifyShopId,
+            cacheKeyHash: cachedQueryResult.metadata.cacheKeyHash,
+            query,
+            resultCount: allProducts.length,
+            cacheLookupMs: resultCacheMs,
+            analyticsMs: Date.now() - cacheAnalyticsStartedAt,
+            expiresAt: new Date(
+              cachedQueryResult.result.expiresAt,
+            ).toISOString(),
+          });
+
+          break searchPipeline;
+        }
+
+        console.time(
+          "[PERF-PROXY] 2. Semantic Search (OpenAI/Vector Cache + Qdrant)",
+        );
 
       const rewriteStartedAt =
         Date.now();
@@ -2128,18 +2361,118 @@ const resultCacheStatus = "MISS" as const;
         process.env.AI_SEARCH_QUERY_ROUTER_ENABLED?.trim().toLowerCase() ?? "",
       );
       const queryPlanStartedAt = Date.now();
-      const queryPlan = queryRouterEnabled
-        ? await buildQueryPlan(session.shop, query)
-        : null;
+
+      let queryPlan: QueryPlan | null = null;
+      let finalAbsenceProofPromise: Promise<AbsenceProof> | null = null;
+      let interpretedQuery;
 
       executionPhase =
         "rewrite";
 
-      const interpretedQuery = queryPlan
-        ? await prepareQueryRewrite({ shop: session.shop, query, plan: queryPlan })
-        : await import("../services/search/query-rewriter.server").then(({ rewriteSearchQuery }) =>
-            rewriteSearchQuery({ shop: session.shop, query }),
+      if (queryRouterEnabled) {
+        const pipeline = await prepareParallelQueryPipeline({
+          shop: session.shop,
+          query,
+          searchLanguage: shopSettings.searchLanguage,
+        });
+
+        queryPlan = pipeline.profile?.finalPlan ?? pipeline.rawPlan;
+        finalAbsenceProofPromise = pipeline.finalProof;
+
+        console.log("[AI Search][PARALLEL QUERY PIPELINE]", {
+          shop: session.shop,
+          query,
+          route: queryPlan.route,
+          rawProof: pipeline.rawProof,
+          earlyNoResult: pipeline.earlyNoResult,
+          timing: pipeline.timing,
+          rawResolvedSegments: pipeline.rawPlan.resolvedSegments,
+          expandedResolvedSegments:
+            pipeline.profile?.expandedPlan.resolvedSegments ?? [],
+        });
+
+        if (pipeline.earlyNoResult) {
+          allProducts = [];
+
+          if (requestedPage === 1) {
+            searchLogId = await recordSearchQueryLog({
+              shop: session.shop,
+              query,
+              analyzedQuery: pipeline.rawPlan.semanticQuery,
+              llmAnalysis: {
+                source: "ABSENCE_PROOF_RAW",
+                productTypes: pipeline.rawPlan.identities.map((item) => item.value),
+                proof: pipeline.rawProof,
+              },
+              selectedContext: [],
+              rankedProducts: [],
+              diagnostics: {
+                candidateCount: 0,
+                topCandidateScore: null,
+                vectorThreshold: Number.parseFloat(
+                  process.env.AI_SEARCH_VECTOR_SCORE_THRESHOLD || "0.25",
+                ),
+                embeddingCacheHit: false,
+                llmStatus: "NO_RESULT_PROOF",
+                llmFallbackReason: null,
+              },
+              totalDurationMs: Date.now() - startedAt,
+            });
+          }
+
+          await saveSearchQueryCache({
+            shop: session.shop,
+            identity: searchCacheIdentity,
+            originalQuery: query,
+            sortIntent: "RELEVANCE",
+            priceConstraint: null,
+            rankedProducts: [],
+            proofBasedEmpty: true,
+            analyzedQuery: pipeline.rawPlan.semanticQuery,
+            llmExpandedQuery: null,
+          });
+
+          console.log("[AI Search][CERTAIN NO RESULT]", {
+            shop: session.shop,
+            phase: "RAW",
+            query,
+            proof: pipeline.rawProof,
+          });
+          console.timeEnd(
+            "[PERF-PROXY] 2. Semantic Search (OpenAI/Vector Cache + Qdrant)",
           );
+          break searchPipeline;
+        }
+
+        interpretedQuery = pipeline.profile?.rewrite ??
+          await import("../services/search/query-rewriter.server").then(
+            ({ rewriteSearchQuery }) =>
+              rewriteSearchQuery({
+                shop: session.shop,
+                query,
+                searchLanguage: shopSettings.searchLanguage,
+              }),
+          );
+      } else {
+        interpretedQuery =
+          await import("../services/search/query-rewriter.server").then(
+            ({ rewriteSearchQuery }) =>
+              rewriteSearchQuery({
+                shop: session.shop,
+                query,
+                searchLanguage: shopSettings.searchLanguage,
+              }),
+          );
+      }
+
+      const structuredPrefetchStartedAt = Date.now();
+      const structuredPromise = queryPlan
+        ? retrieveStructuredCandidates({
+            shop: session.shop,
+            plan: queryPlan,
+            limit: SEARCH_LIMIT,
+          })
+        : Promise.resolve([]);
 
       if (queryPlan) {
         console.log("[AI Search][QUERY PLAN]", {
@@ -2178,7 +2511,7 @@ const resultCacheStatus = "MISS" as const;
         Date.now() -
         rewriteStartedAt;
 
-      const sortIntent =
+      sortIntent =
         preparedRewrite.analysis
           .sortIntent;
 
@@ -2210,35 +2543,8 @@ const resultCacheStatus = "MISS" as const;
       executionPhase =
         "semanticSearch";
 
-      let rawSearchResults;
-      if (queryPlan?.route === "STRUCTURED_ONLY") {
-        const structuredStartedAt = Date.now();
-        rawSearchResults = await retrieveStructuredCandidates({
-          shop: session.shop,
-          plan: queryPlan,
-          limit: SEARCH_LIMIT,
-        });
-        console.log("[AI Search][STRUCTURED RETRIEVAL]", {
-          shop: session.shop,
-          route: queryPlan.route,
-          resultCount: rawSearchResults.length,
-          durationMs: Date.now() - structuredStartedAt,
-          llmCalled: false,
-          embeddingCalled: false,
-          qdrantCalled: false,
-        });
-      }
-
-      if (!rawSearchResults || rawSearchResults.length === 0) {
-        if (queryPlan?.route === "STRUCTURED_ONLY") {
-          console.log("[AI Search][ROUTE FALLBACK]", {
-            shop: session.shop,
-            from: "STRUCTURED_ONLY",
-            to: "VECTOR_SEMANTIC",
-            reason: "NO_STRUCTURED_CANDIDATES",
-          });
-        }
-        rawSearchResults = await semanticSearch({
+      const runSemanticSearch = () =>
+        semanticSearch({
           preparedRewrite,
 
           shop:
@@ -2292,7 +2598,108 @@ const resultCacheStatus = "MISS" as const;
                 diagnostics;
             },
         });
+
+      const semanticPromise =
+        queryPlan?.route === "STRUCTURED_ONLY"
+          ? null
+          : runSemanticSearch();
+
+      const finalProof = finalAbsenceProofPromise
+        ? await finalAbsenceProofPromise
+        : null;
+      const proofBasedNoResult =
+        finalProof?.status === "CERTAIN_NO_RESULT";
+
+      let rawSearchResults: Awaited<ReturnType<typeof semanticSearch>>;
+
+      if (proofBasedNoResult) {
+        void structuredPromise.catch(() => undefined);
+        void semanticPromise?.catch(() => undefined);
+        rawSearchResults = [];
+
+        console.log("[AI Search][CERTAIN NO RESULT]", {
+          shop: session.shop,
+          phase: "FINAL",
+          query,
+          proof: finalProof,
+          responseWonRace: true,
+        });
+      } else if (queryPlan?.route === "STRUCTURED_ONLY") {
+        const structured = await structuredPromise;
+        if (structured.length > 0) {
+          rawSearchResults = structured;
+        } else {
+          console.log("[AI Search][ROUTE FALLBACK]", {
+            shop: session.shop,
+            from: "STRUCTURED_ONLY",
+            to: "VECTOR_SEMANTIC",
+            reason: "NO_STRUCTURED_CANDIDATES",
+          });
+          rawSearchResults = await runSemanticSearch();
+        }
+      } else {
+        const [structured, semantic] = await Promise.all([
+          structuredPromise,
+          semanticPromise ?? Promise.resolve([]),
+        ]);
+
+        // On semantic routes, vector relevance is the primary ranking signal.
+        // Structured retrieval is used as exact-fact recall/support, not as a
+        // competing score scale. Using max(structured, vector) made generic
+        // identity matches such as "jacket" (0.92) erase the semantic
+        // distinction in "waterprof jacket", and weak measurement matches such
+        // as "small" could dominate a broad gift query.
+        const merged = new Map<string, (typeof semantic)[number]>();
+
+        for (const result of semantic) {
+          merged.set(result.productId, result);
+        }
+
+        const semanticDiagnostics =
+          searchDiagnostics as SemanticSearchDiagnostics | null;
+        const semanticFloor = Math.max(
+          0,
+          Math.min(
+            0.99,
+            (semanticDiagnostics?.vectorThreshold ??
+              Number.parseFloat(
+                process.env.AI_SEARCH_VECTOR_SCORE_THRESHOLD || "0.35",
+              )) - 0.001,
+          ),
+        );
+
+        for (const result of structured) {
+          const current = merged.get(result.productId);
+
+          if (current) {
+            // Semantic similarity already captures the unresolved part of the
+            // query. Structured overlap only confirms recall here; adding it
+            // again would double-count generic identity terms such as
+            // "jacket" and bury the more relevant "waterproof jacket".
+            continue;
+          }
+
+          merged.set(result.productId, {
+            ...result,
+            score: Math.min(
+              result.score,
+              semanticFloor,
+            ),
+          });
+        }
+
+        rawSearchResults = [...merged.values()]
+          .sort((left, right) => right.score - left.score)
+          .slice(0, SEARCH_LIMIT);
       }
+
+      console.log("[AI Search][PARALLEL RETRIEVAL]", {
+        shop: session.shop,
+        route: queryPlan?.route ?? "LEGACY",
+        structuredMs: Date.now() - structuredPrefetchStartedAt,
+        finalProof: finalProof?.status ?? "DISABLED",
+        resultCount: rawSearchResults.length,
+      });
 
       console.timeEnd(
         "[PERF-PROXY] 2. Semantic Search (OpenAI/Vector Cache + Qdrant)",
@@ -2332,7 +2739,7 @@ const resultCacheStatus = "MISS" as const;
       const priceConstraintStartedAt =
         Date.now();
 
-      const priceConstraint =
+      priceConstraint =
         parsePriceConstraint(
           query,
         );
@@ -2422,8 +2829,7 @@ const resultCacheStatus = "MISS" as const;
       const seen =
         new Set<string>();
 
-      const allProducts:
-        CandidateProduct[] =
+      allProducts =
         searchResults.flatMap(
           (result) => {
             const id =
@@ -2465,10 +2871,7 @@ const resultCacheStatus = "MISS" as const;
         Date.now() -
         resultMappingStartedAt;
 
-      let searchLogId:
-        | string
-        | null =
-        null;
+      searchLogId = null;
 
       const searchLogStartedAt =
         Date.now();
@@ -2482,9 +2885,65 @@ const resultCacheStatus = "MISS" as const;
       executionPhase =
         "analytics";
 
+      const llmExpansionTerms =
+        !preparedRewrite.fallbackReason &&
+        (
+          !queryPlan ||
+          queryPlan.route === "LIGHT_LLM" ||
+          queryPlan.route === "FULL_LLM"
+        )
+          ? preparedRewrite.analysis.semanticExpansions
+              .map((value) => value.replace(/\s+/g, " ").trim())
+              .filter(Boolean)
+              .filter(
+                (value) =>
+                  value.toLocaleLowerCase("vi-VN") !==
+                  preparedRewrite.analysis.intent
+                    .replace(/\s+/g, " ")
+                    .trim()
+                    .toLocaleLowerCase("vi-VN"),
+              )
+          : [];
+
+      const llmExpandedQuery =
+        llmExpansionTerms.length > 0
+          ? llmExpansionTerms.join(" | ")
+          : null;
+
+      const proofAnalyticsDiagnostics: SearchAnalyticsDiagnostics | null =
+        proofBasedNoResult
+          ? {
+              candidateCount: 0,
+              topCandidateScore: null,
+              vectorThreshold: Number.parseFloat(
+                process.env.AI_SEARCH_VECTOR_SCORE_THRESHOLD || "0.25",
+              ),
+              embeddingCacheHit: false,
+              llmStatus: "NO_RESULT_PROOF",
+              llmFallbackReason: null,
+            }
+          : null;
+      const structuredAnalyticsDiagnostics: SearchAnalyticsDiagnostics | null =
+        !proofBasedNoResult &&
+        queryPlan?.route === "STRUCTURED_ONLY" &&
+        !searchDiagnostics
+          ? {
+              candidateCount: rawSearchResults.length,
+              topCandidateScore: rawSearchResults[0]?.score ?? null,
+              vectorThreshold: 0,
+              embeddingCacheHit: false,
+              llmStatus: "CODE_ONLY",
+              llmFallbackReason: null,
+            }
+          : null;
+      const analyticsDiagnostics: SearchAnalyticsDiagnostics | null =
+        searchDiagnostics ??
+        proofAnalyticsDiagnostics ??
+        structuredAnalyticsDiagnostics;
+
       if (
         requestedPage === 1 &&
-        searchDiagnostics
+        analyticsDiagnostics
       ) {
         try {
           searchLogId =
@@ -2498,8 +2957,24 @@ const resultCacheStatus = "MISS" as const;
                 analyzedQuery:
                   preparedRewrite.query,
 
+                llmExpandedQuery,
+
                 llmAnalysis:
-                  preparedRewrite.analysis,
+                  proofBasedNoResult
+                    ? {
+                        ...preparedRewrite.analysis,
+                        absenceProof: finalProof,
+                        searchDiagnostics: analyticsDiagnostics,
+                        filterDiagnostics: genderDiagnostics,
+                      }
+                    : {
+                        ...preparedRewrite.analysis,
+                        route: queryPlan?.route ?? null,
+                        semanticResolution: interpretedQuery.planning?.semanticResolution ?? null,
+                        searchDiagnostics: analyticsDiagnostics,
+                        filterDiagnostics: genderDiagnostics,
+                        absenceProof: finalProof,
+                      },
 
                 selectedContext:
                   preparedRewrite
@@ -2530,7 +3005,7 @@ const resultCacheStatus = "MISS" as const;
                   ),
 
                 diagnostics:
-                  searchDiagnostics,
+                  analyticsDiagnostics,
 
                 totalDurationMs:
                   Date.now() -
@@ -2572,6 +3047,76 @@ const resultCacheStatus = "MISS" as const;
       const searchLogMs =
         Date.now() -
         searchLogStartedAt;
+
+      const cacheableFinalResult =
+        !preparedRewrite.fallbackReason;
+
+      if (
+        cacheableFinalResult &&
+        (allProducts.length > 0 || proofBasedNoResult)
+      ) {
+        const cacheSearchDiagnostics = searchDiagnostics as SemanticSearchDiagnostics | null;
+        const cacheFilterDiagnostics = genderDiagnostics as ExplicitGenderFilterDiagnostics | null;
+        try {
+          await saveSearchQueryCache({
+            shop: session.shop,
+            identity: searchCacheIdentity,
+            originalQuery: query,
+            sortIntent,
+            priceConstraint,
+            rankedProducts: allProducts.map((product) => ({
+              productId: `gid://shopify/Product/${product.id}`,
+              handle: product.handle,
+              score: product.score,
+            })),
+            proofBasedEmpty: proofBasedNoResult,
+            analyzedQuery: preparedRewrite.query,
+            llmExpandedQuery,
+            analysisSummary: {
+              retrievalMode: queryPlan?.retrievalMode ?? null,
+              route: queryPlan?.route ?? null,
+              semanticResolution: interpretedQuery.planning?.semanticResolution ?? null,
+              intent: preparedRewrite.analysis.intent,
+              productType: preparedRewrite.analysis.productType,
+              semanticMustTerms: preparedRewrite.analysis.semanticMustTerms,
+            },
+            selectedContextSummary: preparedRewrite.context.selectedTerms.slice(0, 8),
+            diagnosticSummary: {
+              candidateCount: analyticsDiagnostics?.candidateCount ?? 0,
+              topCandidateScore: analyticsDiagnostics?.topCandidateScore ?? null,
+              vectorThreshold: analyticsDiagnostics?.vectorThreshold ?? 0,
+              noEvidenceGuardTriggered: cacheSearchDiagnostics?.noEvidenceGuardTriggered ?? null,
+              noEvidenceThreshold: cacheSearchDiagnostics?.noEvidenceThreshold ?? null,
+              topVectorScore: cacheSearchDiagnostics?.topVectorScore ?? null,
+              hasStrongCatalogEvidence: cacheSearchDiagnostics?.hasStrongCatalogEvidence ?? null,
+              finalProofStatus: finalProof?.status ?? null,
+              finalProofReason: finalProof?.reason ?? null,
+              identityFilteredCount: cacheFilterDiagnostics?.identityFilteredCount ?? 0,
+              colorFilteredCount: cacheFilterDiagnostics?.colorFilteredCount ?? 0,
+              negativeFilteredCount: cacheFilterDiagnostics?.negativeFilteredCount ?? 0,
+              exactConstraintFilteredCount: cacheFilterDiagnostics?.exactConstraintFilteredCount ?? 0,
+              genderFilteredCount: cacheFilterDiagnostics?.genderFilteredCount ?? 0,
+            },
+          });
+        } catch (cacheWriteError) {
+          console.error("[AI Search] Full search result cache write failed", {
+            shop: session.shop,
+            query,
+            error:
+              cacheWriteError instanceof Error
+                ? cacheWriteError.message
+                : String(cacheWriteError),
+          });
+        }
+      } else {
+        console.info("[AI Search][FULL RESULT CACHE SKIP]", {
+          shop: session.shop,
+          query,
+          reason: preparedRewrite.fallbackReason
+            ? `DEGRADED_QUERY_REWRITE:${preparedRewrite.fallbackReason}`
+            : "EMPTY_RESULT_SET_WITHOUT_ABSENCE_PROOF",
+        });
+      }
 
       const semanticTiming =
         searchDiagnostics as
@@ -3082,6 +3627,8 @@ const resultCacheStatus = "MISS" as const;
         },
       );
 
+      }
+
       if (isCustomDataMode) {
         const allIds =
           allProducts.map(
@@ -3166,6 +3713,9 @@ const resultCacheStatus = "MISS" as const;
       executionPhase =
         "saveSearchResult";
 
+      // Full-result cache receipts use the internal qcache_ prefix and
+      // must never be exposed to the V4 renderer. Each storefront request gets
+      // a fresh srch_ render receipt backed by the already-cached ranked IDs.
       const cachedSearch =
         await saveSearchResult({
           shop:
@@ -3548,6 +4098,9 @@ const resultCacheStatus = "MISS" as const;
           responseBuildCodeMs,
 
           usageCommitDbMs,
+
+          resultCacheStatus,
+          resultCacheMs,
 
           aiBackendMs:
             Date.now() -

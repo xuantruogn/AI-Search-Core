@@ -19,6 +19,8 @@ type RecordOpenAiUsageInput = {
   headers?: Headers | null;
 };
 
+type RecordGeminiUsageInput = Omit<RecordOpenAiUsageInput, "headers">;
+
 function envPrice(name: string, fallback: number) {
   const value = Number.parseFloat(process.env[name] ?? "");
   return Number.isFinite(value) && value >= 0 ? value : fallback;
@@ -56,6 +58,37 @@ export function estimateOpenAiCostMicros({
   const cachedInputPerMillion = envPrice("OPENAI_LLM_CACHED_INPUT_USD_PER_1M", 0.10);
   const outputPerMillion = envPrice("OPENAI_LLM_OUTPUT_USD_PER_1M", 1.60);
 
+  const cached = Math.min(inputTokens, cachedInputTokens);
+  const uncached = Math.max(0, inputTokens - cached);
+  const usd =
+    (uncached / 1_000_000) * normalInputPerMillion +
+    (cached / 1_000_000) * cachedInputPerMillion +
+    (outputTokens / 1_000_000) * outputPerMillion;
+
+  return Math.max(0, Math.round(usd * 1_000_000));
+}
+
+export function estimateGeminiCostMicros({
+  inputTokens,
+  cachedInputTokens,
+  outputTokens,
+}: {
+  inputTokens: number;
+  cachedInputTokens: number;
+  outputTokens: number;
+}) {
+  const normalInputPerMillion = envPrice(
+    "GEMINI_QUERY_INPUT_USD_PER_1M",
+    0.30,
+  );
+  const cachedInputPerMillion = envPrice(
+    "GEMINI_QUERY_CACHED_INPUT_USD_PER_1M",
+    0.075,
+  );
+  const outputPerMillion = envPrice(
+    "GEMINI_QUERY_OUTPUT_USD_PER_1M",
+    2.50,
+  );
   const cached = Math.min(inputTokens, cachedInputTokens);
   const uncached = Math.max(0, inputTokens - cached);
   const usd =
@@ -115,6 +148,49 @@ export async function recordOpenAiUsage(input: RecordOpenAiUsageInput) {
 export function recordOpenAiUsageSafe(input: RecordOpenAiUsageInput) {
   void recordOpenAiUsage(input).catch((error) => {
     console.error("[AI Search] OpenAI usage telemetry write failed", {
+      shop: input.shop ?? null,
+      operation: input.operation,
+      model: input.model,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  });
+}
+
+export async function recordGeminiUsage(input: RecordGeminiUsageInput) {
+  const inputTokens = safeTokenCount(input.inputTokens);
+  const cachedInputTokens = safeTokenCount(input.cachedInputTokens);
+  const outputTokens = safeTokenCount(input.outputTokens);
+  const totalTokens = safeTokenCount(
+    input.totalTokens ?? inputTokens + outputTokens,
+  );
+
+  await db.aiSearchApiUsageEvent.create({
+    data: {
+      shop: input.shop?.trim() || null,
+      provider: "GOOGLE_GEMINI",
+      operation: input.operation,
+      model: input.model,
+      requestId: input.requestId ?? null,
+      inputTokens,
+      cachedInputTokens,
+      outputTokens,
+      totalTokens,
+      estimatedCostMicros: estimateGeminiCostMicros({
+        inputTokens,
+        cachedInputTokens,
+        outputTokens,
+      }),
+      remainingRequests: null,
+      remainingTokens: null,
+      resetRequests: null,
+      resetTokens: null,
+    },
+  });
+}
+
+export function recordGeminiUsageSafe(input: RecordGeminiUsageInput) {
+  void recordGeminiUsage(input).catch((error) => {
+    console.error("[AI Search] Gemini usage telemetry write failed", {
       shop: input.shop ?? null,
       operation: input.operation,
       model: input.model,

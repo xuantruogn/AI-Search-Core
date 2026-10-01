@@ -97,7 +97,9 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 export const action = async ({ request }: ActionFunctionArgs) => {
   const { session } = await authenticate.admin(request);
   const form = await request.formData();
-  const intent = String(form.get("intent") || "sync_auto");
+  // Never treat an unrelated/empty POST as a full catalog refresh. A refresh
+  // must be an explicit user/system action carrying intent=sync_auto.
+  const intent = String(form.get("intent") || "");
 
   if (intent === "retry_all_failed") {
     const productResult = await retryFailedProductSyncJobs(session.shop, 100);

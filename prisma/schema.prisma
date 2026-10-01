@@ -161,52 +161,55 @@ enum DevRole {
 }
 
 model Plan {
-  id                      String          @id @default(cuid()) @db.VarChar(191)
-  handle                  String          @unique @db.VarChar(191)
-  name                    String          @db.VarChar(191)
-  visibility              PlanVisibility  @default(PUBLIC)
-  billingMode             BillingMode     @default(SHOPIFY_APP_PRICING)
-  interval                BillingInterval @default(EVERY_30_DAYS)
-  price                   Decimal         @db.Decimal(10, 2)
-  currencyCode            String          @default("USD") @db.VarChar(10)
-  trialDays               Int             @default(0)
+  id           String          @id @default(cuid()) @db.VarChar(191)
+  handle       String          @unique @db.VarChar(191)
+  name         String          @db.VarChar(191)
+  visibility   PlanVisibility  @default(PUBLIC)
+  billingMode  BillingMode     @default(SHOPIFY_APP_PRICING)
+  interval     BillingInterval @default(EVERY_30_DAYS)
+  price        Decimal         @db.Decimal(10, 2)
+  currencyCode String          @default("USD") @db.VarChar(10)
+  trialDays    Int             @default(0)
 
   maxIndexedProducts      Int?
   maxMonthlySearches      Int?
   maxMonthlyVectorUpdates Int?
 
-  usageBillingEnabled     Boolean         @default(false)
-  featureFlags            Json?
-  shopifyPlanHandle       String?         @db.VarChar(191)
+  usageBillingEnabled Boolean @default(false)
+  featureFlags        Json?
+  shopifyPlanHandle   String? @db.VarChar(191)
 
-  version                 Int             @default(1)
-  isActive                Boolean         @default(true)
-  sortOrder               Int             @default(0)
+  version   Int     @default(1)
+  isActive  Boolean @default(true)
+  sortOrder Int     @default(0)
 
-  createdAt               DateTime        @default(now())
-  updatedAt               DateTime        @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  subscriptions           BillingSubscription[]
-  assignments             PlanAssignment[]
+  subscriptions BillingSubscription[]
+  assignments   PlanAssignment[]
 
   @@map("plans")
 }
 
 model PlanAssignment {
-  id                  String       @id @default(cuid()) @db.VarChar(191)
-  shop                String       @db.VarChar(191)
-  planId              String       @db.VarChar(191)
+  id     String @id @default(cuid()) @db.VarChar(191)
+  shop   String @db.VarChar(191)
+  planId String @db.VarChar(191)
 
-  shopRecord          AiSearchShop @relation(fields: [shop], references: [shop], onDelete: Cascade)
-  plan                Plan         @relation(fields: [planId], references: [id], onDelete: Cascade)
+  shopRecord AiSearchShop @relation(fields: [shop], references: [shop], onDelete: Cascade)
+  plan       Plan         @relation(fields: [planId], references: [id], onDelete: Cascade)
 
-  customPriceOverride Decimal?     @db.Decimal(10, 2)
-  notes               String?      @db.Text
+  customPriceOverride           Decimal? @db.Decimal(10, 2)
+  customMaxIndexedProducts      Int?
+  customMaxMonthlySearches      Int?
+  customMaxMonthlyVectorUpdates Int?
+  notes                         String?  @db.Text
 
-  startsAt            DateTime? // NULL until an assignment actually starts
-  endsAt              DateTime?
-  isActive            Boolean?  // NULL means not yet established/imported
-  createdAt           DateTime     @default(now())
+  startsAt  DateTime? // NULL until an assignment actually starts
+  endsAt    DateTime?
+  isActive  Boolean? // NULL means not yet established/imported
+  createdAt DateTime  @default(now())
 
   @@unique([shop, planId])
   @@index([shop, isActive])
@@ -214,56 +217,56 @@ model PlanAssignment {
 }
 
 model BillingSubscription {
-  id                     String                     @id @default(cuid()) @db.VarChar(191)
-  shop                   String                     @db.VarChar(191)
-  planId                 String?                    @db.VarChar(191)
+  id     String  @id @default(cuid()) @db.VarChar(191)
+  shop   String  @db.VarChar(191)
+  planId String? @db.VarChar(191)
 
-  shopRecord             AiSearchShop               @relation(fields: [shop], references: [shop], onDelete: Cascade)
-  plan                   Plan?                      @relation(fields: [planId], references: [id])
+  shopRecord AiSearchShop @relation(fields: [shop], references: [shop], onDelete: Cascade)
+  plan       Plan?        @relation(fields: [planId], references: [id])
 
   // Nullable so legacy/partial data is never filled with invented values.
   shopifySubscriptionGid String?                    @unique @db.VarChar(191)
   shopifyPlanHandle      String?                    @db.VarChar(191)
   status                 BillingSubscriptionStatus?
 
-  planNameSnapshot       String?                    @db.VarChar(191)
-  priceSnapshot          Decimal?                   @db.Decimal(10, 2)
-  currencySnapshot       String?                    @db.VarChar(10)
-  intervalSnapshot       BillingInterval?
+  planNameSnapshot String?          @db.VarChar(191)
+  priceSnapshot    Decimal?         @db.Decimal(10, 2)
+  currencySnapshot String?          @db.VarChar(10)
+  intervalSnapshot BillingInterval?
 
-  shopifyCreatedAt       DateTime?
-  shopifyUpdatedAt       DateTime?
-  trialStatus            BillingTrialStatus @default(NONE)
-  cancellationStatus     BillingCancellationStatus @default(NONE)
-  planChangeStatus       BillingPlanChangeStatus @default(NONE)
-  chargeStatus           BillingChargeStatus @default(NONE)
-  paymentStatus          BillingPaymentStatus @default(NONE)
-  refundStatus           BillingRefundStatus @default(NONE)
-  accessStatus           BillingAccessStatus @default(NONE)
-  reconciliationStatus   BillingReconciliationStatus @default(SYNCED)
+  shopifyCreatedAt        DateTime?
+  shopifyUpdatedAt        DateTime?
+  trialStatus             BillingTrialStatus          @default(NONE)
+  cancellationStatus      BillingCancellationStatus   @default(NONE)
+  planChangeStatus        BillingPlanChangeStatus     @default(NONE)
+  chargeStatus            BillingChargeStatus         @default(NONE)
+  paymentStatus           BillingPaymentStatus        @default(NONE)
+  refundStatus            BillingRefundStatus         @default(NONE)
+  accessStatus            BillingAccessStatus         @default(NONE)
+  reconciliationStatus    BillingReconciliationStatus @default(SYNCED)
   reconciliationCheckedAt DateTime?
-  reconciliationReason   String? @db.VarChar(255)
-  repairRequiredAt       DateTime?
+  reconciliationReason    String?                     @db.VarChar(255)
+  repairRequiredAt        DateTime?
 
-  trialStartsAt          DateTime?
-  trialEndsAt            DateTime?
-  currentPeriodStartsAt  DateTime?
-  currentPeriodEndsAt    DateTime?
+  trialStartsAt         DateTime?
+  trialEndsAt           DateTime?
+  currentPeriodStartsAt DateTime?
+  currentPeriodEndsAt   DateTime?
 
-  activatedAt            DateTime?
-  cancelledAt            DateTime?
-  frozenAt               DateTime?
-  frozenReason           String?                    @db.VarChar(255)
+  activatedAt  DateTime?
+  cancelledAt  DateTime?
+  frozenAt     DateTime?
+  frozenReason String?   @db.VarChar(255)
 
-  replacementBehavior    ReplacementBehavior?
-  isPendingSchedule      Boolean?
-  testMode               Boolean?
-  rawResponse            Json?
+  replacementBehavior ReplacementBehavior?
+  isPendingSchedule   Boolean?
+  testMode            Boolean?
+  rawResponse         Json?
 
-  charges                BillingCharge[]
-  
-  createdAt              DateTime                   @default(now())
-  updatedAt              DateTime                   @updatedAt
+  charges BillingCharge[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([shop, status])
   @@index([shop, createdAt])
@@ -271,52 +274,52 @@ model BillingSubscription {
 }
 
 model BillingCharge {
-  id                    String              @id @default(cuid()) @db.VarChar(191)
-  shop                  String              @db.VarChar(191)
-  shopRecord             AiSearchShop        @relation(fields: [shop], references: [shop], onDelete: Cascade)
-  subscriptionGid       String?             @db.VarChar(191)
-  subscription           BillingSubscription? @relation(fields: [subscriptionGid], references: [shopifySubscriptionGid], onDelete: SetNull)
-  shopifyChargeId       String?             @unique @db.VarChar(191)
-  status                BillingChargeStatus @default(NONE)
-  amount                Decimal?            @db.Decimal(10, 2)
-  currency              String?             @db.VarChar(10)
-  billingPeriodStart   DateTime?
-  billingPeriodEnd     DateTime?
-  acceptedAt            DateTime?
-  activatedAt          DateTime?
-  paidAt               DateTime?
-  failedAt             DateTime?
-  cancelledAt          DateTime?
-  expiredAt            DateTime?
-  frozenAt             DateTime?
-  unfrozenAt           DateTime?
-  testMode             Boolean?
-  rawResponse          Json?
-  createdAt             DateTime            @default(now())
-  updatedAt             DateTime            @updatedAt
+  id                 String               @id @default(cuid()) @db.VarChar(191)
+  shop               String               @db.VarChar(191)
+  shopRecord         AiSearchShop         @relation(fields: [shop], references: [shop], onDelete: Cascade)
+  subscriptionGid    String?              @db.VarChar(191)
+  subscription       BillingSubscription? @relation(fields: [subscriptionGid], references: [shopifySubscriptionGid], onDelete: SetNull)
+  shopifyChargeId    String?              @unique @db.VarChar(191)
+  status             BillingChargeStatus  @default(NONE)
+  amount             Decimal?             @db.Decimal(10, 2)
+  currency           String?              @db.VarChar(10)
+  billingPeriodStart DateTime?
+  billingPeriodEnd   DateTime?
+  acceptedAt         DateTime?
+  activatedAt        DateTime?
+  paidAt             DateTime?
+  failedAt           DateTime?
+  cancelledAt        DateTime?
+  expiredAt          DateTime?
+  frozenAt           DateTime?
+  unfrozenAt         DateTime?
+  testMode           Boolean?
+  rawResponse        Json?
+  createdAt          DateTime             @default(now())
+  updatedAt          DateTime             @updatedAt
 
-  refunds              BillingRefund[]
+  refunds BillingRefund[]
 
-  @@index([shop, status, createdAt])
   @@unique([subscriptionGid, billingPeriodStart], map: "billing_charges_subscription_period_key")
+  @@index([shop, status, createdAt])
   @@index([subscriptionGid])
   @@map("billing_charges")
 }
 
 model BillingRefund {
-  id                 String            @id @default(cuid()) @db.VarChar(191)
-  shop               String            @db.VarChar(191)
-  shopRecord          AiSearchShop      @relation(fields: [shop], references: [shop], onDelete: Cascade)
-  chargeId            String
-  charge              BillingCharge    @relation(fields: [chargeId], references: [id], onDelete: Cascade)
-  status              BillingRefundStatus @default(NONE)
-  amount              Decimal?         @db.Decimal(10, 2)
-  currency            String?          @db.VarChar(10)
-  requestedAt         DateTime?
-  refundedAt          DateTime?
-  rawResponse         Json?
-  createdAt           DateTime          @default(now())
-  updatedAt           DateTime          @updatedAt
+  id          String              @id @default(cuid()) @db.VarChar(191)
+  shop        String              @db.VarChar(191)
+  shopRecord  AiSearchShop        @relation(fields: [shop], references: [shop], onDelete: Cascade)
+  chargeId    String
+  charge      BillingCharge       @relation(fields: [chargeId], references: [id], onDelete: Cascade)
+  status      BillingRefundStatus @default(NONE)
+  amount      Decimal?            @db.Decimal(10, 2)
+  currency    String?             @db.VarChar(10)
+  requestedAt DateTime?
+  refundedAt  DateTime?
+  rawResponse Json?
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @updatedAt
 
   @@index([shop, status, createdAt])
   @@index([chargeId])
@@ -324,9 +327,9 @@ model BillingRefund {
 }
 
 model BillingEvent {
-  id              String             @id @default(cuid()) @db.VarChar(191)
-  shop            String             @db.VarChar(191)
-  shopRecord      AiSearchShop       @relation(fields: [shop], references: [shop], onDelete: Cascade)
+  id         String       @id @default(cuid()) @db.VarChar(191)
+  shop       String       @db.VarChar(191)
+  shopRecord AiSearchShop @relation(fields: [shop], references: [shop], onDelete: Cascade)
 
   subscriptionGid String?            @db.VarChar(191)
   type            BillingEventType
@@ -334,8 +337,8 @@ model BillingEvent {
   idempotencyKey  String?            @unique @db.VarChar(191)
   payload         Json?
 
-  occurredAt      DateTime
-  createdAt       DateTime           @default(now())
+  occurredAt DateTime
+  createdAt  DateTime @default(now())
 
   @@index([shop, occurredAt])
   @@index([subscriptionGid])
@@ -345,45 +348,44 @@ model BillingEvent {
 // Aggregate/cache for billing/dev dashboard only.
 // AiSearchUsagePeriod + AiSearchUsageEvent remain the runtime usage source.
 model UsageCounter {
-  id                   String       @id @default(cuid()) @db.VarChar(191)
-  shop                 String       @db.VarChar(191)
-  shopRecord           AiSearchShop @relation(fields: [shop], references: [shop], onDelete: Cascade)
+  id         String       @id @default(cuid()) @db.VarChar(191)
+  shop       String       @db.VarChar(191)
+  shopRecord AiSearchShop @relation(fields: [shop], references: [shop], onDelete: Cascade)
 
-  periodStart          DateTime
-  periodEnd            DateTime
+  periodStart DateTime
+  periodEnd   DateTime
 
-  searches             Int          @default(0)
-  vectorUpdates        Int          @default(0)
-  llmCalls             Int          @default(0)
-  embeddingCalls       Int          @default(0)
+  searches       Int @default(0)
+  vectorUpdates  Int @default(0)
+  llmCalls       Int @default(0)
+  embeddingCalls Int @default(0)
 
-  llmInputTokens       BigInt       @default(0)
-  llmOutputTokens      BigInt       @default(0)
-  embeddingInputTokens BigInt       @default(0)
+  llmInputTokens       BigInt @default(0)
+  llmOutputTokens      BigInt @default(0)
+  embeddingInputTokens BigInt @default(0)
 
-  estimatedCostUsd     Decimal      @default(0) @db.Decimal(14, 6)
-  updatedAt            DateTime     @updatedAt
+  estimatedCostUsd Decimal  @default(0) @db.Decimal(14, 6)
+  updatedAt        DateTime @updatedAt
 
   @@unique([shop, periodStart])
   @@map("usage_counters")
 }
 
 model CatalogState {
-  shop                   String       @id @db.VarChar(191)
-  shopRecord             AiSearchShop @relation(fields: [shop], references: [shop], onDelete: Cascade)
+  shop       String       @id @db.VarChar(191)
+  shopRecord AiSearchShop @relation(fields: [shop], references: [shop], onDelete: Cascade)
 
-  shopifyProductCount    Int          @default(0)
-  eligibleProductCount   Int          @default(0)
-  indexedProductCount    Int          @default(0)
-  searchableProductCount Int          @default(0)
+  shopifyProductCount    Int @default(0)
+  eligibleProductCount   Int @default(0)
+  indexedProductCount    Int @default(0)
+  searchableProductCount Int @default(0)
 
-  lastFullSyncAt         DateTime?
-  lastDeltaSyncAt        DateTime?
-  updatedAt              DateTime     @updatedAt
+  lastFullSyncAt  DateTime?
+  lastDeltaSyncAt DateTime?
+  updatedAt       DateTime  @updatedAt
 
   @@map("catalog_states")
 }
-
 
 model Session {
   id                  String    @id @db.VarChar(191)
@@ -406,18 +408,18 @@ model Session {
 }
 
 model AiSearchSyncJob {
-  id          Int       @id @default(autoincrement())
-  shop        String    @db.VarChar(191)
-  webhookId   String    @unique @db.VarChar(191)
-  topic       String    @db.VarChar(191)
-  productId   String    @db.VarChar(64)
-  status      String    @default("PENDING") @db.VarChar(64)
-  attempts    Int       @default(0)
-  lastError   String?   @db.Text
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
-  startedAt   DateTime?
-  processedAt DateTime?
+  id            Int       @id @default(autoincrement())
+  shop          String    @db.VarChar(191)
+  webhookId     String    @unique @db.VarChar(191)
+  topic         String    @db.VarChar(191)
+  productId     String    @db.VarChar(64)
+  status        String    @default("PENDING") @db.VarChar(64)
+  attempts      Int       @default(0)
+  lastError     String?   @db.Text
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  startedAt     DateTime?
+  processedAt   DateTime?
   policyVersion Int?
 
   @@index([status, createdAt])
@@ -454,7 +456,7 @@ model AiSearchShop {
   // existing shops remain NULL until Shopify/app logic provides real values.
   frozenAt               DateTime?
   reinstalledAt          DateTime?
-  installCount           Int      @default(1)
+  installCount           Int       @default(1)
   currentPlanHandle      String?   @db.VarChar(191)
   currentSubscriptionGid String?   @db.VarChar(191)
   pendingPlanHandle      String?   @db.VarChar(191)
@@ -574,6 +576,7 @@ model AiSearchQueryLog {
   queryHash           String   @db.VarChar(64)
   queryVectorJson     String?  @db.LongText
   analyzedQuery       String?  @db.Text
+  llmExpandedQuery    String?  @db.Text
   llmAnalysisJson     String?  @db.LongText
   selectedContextJson String?  @db.LongText
   rankedProductsJson  String   @db.LongText
@@ -665,14 +668,14 @@ model AiSearchIndexedProduct {
 
   // Billing V2 compatibility/cache fields. Runtime search eligibility remains
   // governed by searchable/vectorStatus above.
-  isIndexed                Boolean   @default(false)
-  isSearchable             Boolean   @default(false)
-  excludedReason           String?   @db.VarChar(64)
-  embeddingModel           String?   @db.VarChar(64)
-  embeddingVersion         Int       @default(1)
-  contentHash              String?   @db.VarChar(64)
-  lastEmbeddedAt           DateTime?
-  lastSyncedAt             DateTime?
+  isIndexed        Boolean   @default(false)
+  isSearchable     Boolean   @default(false)
+  excludedReason   String?   @db.VarChar(64)
+  embeddingModel   String?   @db.VarChar(64)
+  embeddingVersion Int       @default(1)
+  contentHash      String?   @db.VarChar(64)
+  lastEmbeddedAt   DateTime?
+  lastSyncedAt     DateTime?
 
   shopRecord   AiSearchShop              @relation(fields: [shop], references: [shop], onDelete: Cascade)
   contextTerms AiSearchShopContextTerm[]
@@ -920,25 +923,25 @@ model DevUser {
   updatedAt           DateTime  @updatedAt
   lastLoginAt         DateTime?
 
-  sessions       DevSession[]
+  sessions        DevSession[]
   loginChallenges DevLoginChallenge[]
-  auditLogs      DevAuditLog[]
+  auditLogs       DevAuditLog[]
 
   @@index([role, isActive])
 }
 
 model DevSession {
-  id               String    @id @default(cuid()) @db.VarChar(191)
-  tokenHash        String    @unique @db.Char(64)
-  userId           String    @db.VarChar(191)
-  createdAt        DateTime  @default(now())
-  lastSeenAt       DateTime  @default(now())
-  expiresAt        DateTime
+  id                String    @id @default(cuid()) @db.VarChar(191)
+  tokenHash         String    @unique @db.Char(64)
+  userId            String    @db.VarChar(191)
+  createdAt         DateTime  @default(now())
+  lastSeenAt        DateTime  @default(now())
+  expiresAt         DateTime
   absoluteExpiresAt DateTime
-  lastStrongAuthAt DateTime  @default(now())
-  revokedAt        DateTime?
-  ipHash           String?   @db.Char(64)
-  userAgent        String?   @db.VarChar(512)
+  lastStrongAuthAt  DateTime  @default(now())
+  revokedAt         DateTime?
+  ipHash            String?   @db.Char(64)
+  userAgent         String?   @db.VarChar(512)
 
   user DevUser @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -962,12 +965,12 @@ model DevLoginChallenge {
 }
 
 model DevAuthThrottle {
-  bucketKey    String   @id @db.Char(64)
-  kind         String   @db.VarChar(32)
-  attemptCount Int      @default(0)
-  windowStart  DateTime @default(now())
+  bucketKey    String    @id @db.Char(64)
+  kind         String    @db.VarChar(32)
+  attemptCount Int       @default(0)
+  windowStart  DateTime  @default(now())
   blockedUntil DateTime?
-  updatedAt    DateTime @updatedAt
+  updatedAt    DateTime  @updatedAt
 
   @@index([kind, blockedUntil])
 }

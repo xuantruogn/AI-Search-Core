@@ -35,9 +35,14 @@ if (host === "localhost") {
   };
 }
 
+const allowedHosts =
+  process.env.NODE_ENV === "production"
+    ? [host]
+    : [host, ".trycloudflare.com"];
+
 export default defineConfig({
   server: {
-    allowedHosts: [host],
+    allowedHosts,
     cors: {
       preflightContinue: true,
     },

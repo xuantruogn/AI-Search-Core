@@ -25,12 +25,17 @@ import { recordUsageEvent } from "../commerce/usage.server";
 import { getShopEntitlement } from "../commerce/entitlement.server";
 import { withDistributedLease } from "../commerce/lease-lock.server";
 import { recoverBlockedProducts } from "../products/quota-recovery.server";
+import {
+  backgroundJobsEnabledInThisProcess,
+  jitterInterval,
+} from "../maintenance/background-runtime.server";
 
 import {
   checkpointCatalogSyncJob,
   claimNextCatalogSyncJob,
   getCatalogSyncJob,
   heartbeatCatalogSyncJob,
+  updateCatalogSyncProgress,
   markCatalogSyncDone,
   markCatalogSyncFailed,
 } from "./catalog-sync-job.server";
@@ -516,6 +521,8 @@ async function processOne() {
             // FULL CATALOG SCAN
             // ==================================================
 
+            let lastLiveProgressCheckpointAt = 0;
+
             const progress =
               await syncEntireCatalog({
                 admin,
@@ -533,6 +540,10 @@ async function processOne() {
                   job.reason ===
                   "INITIAL"
                     ? "INITIAL_SYNC"
+                    : job.reason === "PLAN_RECONCILE"
+                      ? "POLICY_RECOVERY"
+                      : job.reason === "SLOT_REFILL"
+                        ? "PRODUCT_LIMIT_RECOVERY"
                     : "MANUAL_REINDEX",
 
                 // Initial bootstrap and Basic-plan slot refill
@@ -600,6 +611,40 @@ async function processOne() {
                       heartbeatLost =
                         true;
 
+                      throw new Error(
+                        "CATALOG_ATTEMPT_SUPERSEDED",
+                      );
+                    }
+                  },
+
+                // ==============================================
+                // LIVE PROGRESS CHECKPOINT
+                // ==============================================
+
+                onProgress:
+                  async (currentProgress) => {
+                    const now = Date.now();
+                    if (now - lastLiveProgressCheckpointAt < 1_000) {
+                      return;
+                    }
+
+                    lastLiveProgressCheckpointAt = now;
+
+                    if (heartbeatLost) {
+                      throw new Error(
+                        "CATALOG_ATTEMPT_SUPERSEDED",
+                      );
+                    }
+
+                    const persisted =
+                      await updateCatalogSyncProgress(
+                        job.id,
+                        job.attempts,
+                        currentProgress,
+                      );
+
+                    if (!persisted) {
+                      heartbeatLost = true;
                       throw new Error(
                         "CATALOG_ATTEMPT_SUPERSEDED",
                       );
@@ -918,6 +963,8 @@ export async function drainCatalogSyncQueue() {
 // ============================================================
 
 export function kickCatalogSyncQueue() {
+  if (!backgroundJobsEnabledInThisProcess()) return;
+
   if (
     state.running
   ) {
@@ -962,6 +1009,8 @@ export function kickCatalogSyncQueue() {
 // ============================================================
 
 export function startCatalogSyncQueueWorker() {
+  if (!backgroundJobsEnabledInThisProcess()) return;
+
   if (
     state.timerStarted
   ) {
@@ -984,10 +1033,28 @@ export function startCatalogSyncQueueWorker() {
   const timer =
     setInterval(
       kickCatalogSyncQueue,
-      pollMs,
+      jitterInterval(pollMs),
     );
 
   timer.unref?.();
 
-  kickCatalogSyncQueue();
+  const startDelayMs =
+    Math.max(
+      0,
+      Math.min(
+        readPositiveInteger(
+          "AI_SEARCH_CATALOG_QUEUE_START_DELAY_MS",
+          5_000,
+        ),
+        60_000,
+      ),
+    );
+
+  const startupTimer =
+    setTimeout(
+      kickCatalogSyncQueue,
+      startDelayMs,
+    );
+
+  startupTimer.unref?.();
 }

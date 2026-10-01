@@ -7,6 +7,10 @@ import {
 import { enqueueCatalogRefresh } from "../catalog/catalog-sync-job.server";
 import { kickCatalogSyncQueue } from "../catalog/catalog-sync-queue.server";
 import { clearExpiredSearchResults } from "../search/search-result-cache.server";
+import {
+  backgroundJobsEnabledInThisProcess,
+  jitterInterval,
+} from "./background-runtime.server";
 
 function readPositiveInteger(name: string, fallback: number) {
   const value = Number.parseInt(process.env[name] || "", 10);
@@ -213,6 +217,8 @@ const housekeepingGlobal = globalThis as typeof globalThis & {
 };
 
 export function startAiSearchHousekeepingWorker() {
+  if (!backgroundJobsEnabledInThisProcess()) return;
+
   if (housekeepingGlobal.aiSearchHousekeepingStarted) return;
   housekeepingGlobal.aiSearchHousekeepingStarted = true;
 
@@ -229,10 +235,18 @@ export function startAiSearchHousekeepingWorker() {
     });
   };
 
-  const timer = setInterval(run, Math.max(60 * 60_000, intervalMs));
+  const timer = setInterval(
+    run,
+    jitterInterval(Math.max(60 * 60_000, intervalMs), 0.1),
+  );
   timer.unref?.();
 
-  // Delay the first pass a little so migrations/startup can finish first.
-  const firstRun = setTimeout(run, 30_000);
+  // Queue recovery is more urgent than retention work. Give startup, migration
+  // and cache warmup a quiet window before the first maintenance pass.
+  const firstRunDelayMs = Math.max(
+    30_000,
+    readPositiveInteger("AI_SEARCH_HOUSEKEEPING_INITIAL_DELAY_MS", 120_000),
+  );
+  const firstRun = setTimeout(run, firstRunDelayMs);
   firstRun.unref?.();
 }
