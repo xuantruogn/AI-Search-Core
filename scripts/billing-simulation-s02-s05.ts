@@ -246,7 +246,7 @@ async function runScenario(scenario: (typeof SCENARIOS)[number]): Promise<Scenar
       });
 
       await ensureBillingV2State(scenario.shop);
-    } else {
+    } else if (scenario.id === "S04") {
       console.log("[PROCESS]");
       console.log("step: Shopify ACTIVE -> real billing reconciliation");
 
@@ -278,17 +278,70 @@ async function runScenario(scenario: (typeof SCENARIOS)[number]): Promise<Scenar
       });
 
       console.log("[PROCESS]");
-      console.log(
-        `step: Shopify ${scenario.secondStatus} -> real billing reconciliation`,
-      );
+      console.log("step: Shopify FROZEN -> real billing reconciliation");
 
       await reconcileShopifySubscriptionFromAdmin({
         shop: scenario.shop,
-        admin: simulatedAdmin(scenario, scenario.secondStatus, futureEnd),
+        admin: simulatedAdmin(scenario, "FROZEN", futureEnd),
         expectedSubscriptionGid: scenario.gid,
         preferredPlanHandle: "basic",
         source: "RECONCILIATION",
-        observedShopifyStatus: scenario.secondStatus,
+        observedShopifyStatus: "FROZEN",
+      });
+
+      await ensureBillingV2State(scenario.shop);
+    } else {
+      console.log("[PROCESS]");
+      console.log("step: setup ACTIVE -> real billing reconciliation");
+
+      await reconcileShopifySubscriptionFromAdmin({
+        shop: scenario.shop,
+        admin: simulatedAdmin(scenario, "ACTIVE", futureEnd),
+        expectedSubscriptionGid: scenario.gid,
+        preferredPlanHandle: "basic",
+        source: "RECONCILIATION",
+        observedShopifyStatus: "ACTIVE",
+      });
+
+      console.log("[PROCESS]");
+      console.log("step: setup FROZEN -> real billing reconciliation");
+
+      await reconcileShopifySubscriptionFromAdmin({
+        shop: scenario.shop,
+        admin: simulatedAdmin(scenario, "FROZEN", futureEnd),
+        expectedSubscriptionGid: scenario.gid,
+        preferredPlanHandle: "basic",
+        source: "RECONCILIATION",
+        observedShopifyStatus: "FROZEN",
+      });
+
+      const frozenSnapshot = await getBillingSubscriptionSnapshot(scenario.shop);
+      const frozenEntitlement = await getShopEntitlement(scenario.shop);
+
+      assert.equal(frozenSnapshot.status, "FROZEN");
+      assert.equal(frozenSnapshot.accessStatus, "SUSPENDED");
+      assert.equal(frozenSnapshot.commercialStatus, "FROZEN");
+      assert.equal(frozenEntitlement.active, false);
+      assert.equal(frozenEntitlement.searchAllowed, false);
+
+      logBlock("[AFTER FROZEN SETUP]", {
+        currentPlan: frozenSnapshot.plan,
+        currentGid: frozenSnapshot.shopifySubscriptionId,
+        status: frozenSnapshot.status,
+        accessStatus: frozenSnapshot.accessStatus,
+        commercialStatus: frozenSnapshot.commercialStatus,
+      });
+
+      console.log("[PROCESS]");
+      console.log("step: Shopify ACTIVE recovery -> real billing reconciliation");
+
+      await reconcileShopifySubscriptionFromAdmin({
+        shop: scenario.shop,
+        admin: simulatedAdmin(scenario, "ACTIVE", futureEnd),
+        expectedSubscriptionGid: scenario.gid,
+        preferredPlanHandle: "basic",
+        source: "RECONCILIATION",
+        observedShopifyStatus: "ACTIVE",
       });
 
       await ensureBillingV2State(scenario.shop);
@@ -341,7 +394,7 @@ async function runScenario(scenario: (typeof SCENARIOS)[number]): Promise<Scenar
           finalRow?.status === scenario.secondStatus,
         finalPlanChangeStatus:
           isTerminalNoAccess
-            ? finalRow?.planChangeStatus ===
+            ? finalSnapshot.planChangeStatus ===
               (scenario.id === "S02" ? "DECLINED" : "EXPIRED")
             : true,
       },
@@ -384,7 +437,7 @@ async function runScenario(scenario: (typeof SCENARIOS)[number]): Promise<Scenar
                 : eventTypes.has("SUBSCRIPTION_UNFROZEN"),
         paymentEvent:
           scenario.id === "S02" || scenario.id === "S03"
-            ? true
+            ? !eventTypes.has("PAYMENT_FAILED")
             : scenario.id === "S04"
               ? eventTypes.has("PAYMENT_FAILED")
               : eventTypes.has("PAYMENT_RECOVERED"),
