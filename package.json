@@ -27,7 +27,8 @@
     "test:dev-dashboard": "tsx scripts/dev-dashboard-commercial-selftest.ts",
     "backfill:product-policy": "tsx --env-file=.env scripts/product-policy-backfill.ts",
     "dev-admin:create": "tsx --env-file=.env scripts/dev-admin-create.ts",
-    "dev-admin:rotate-mfa": "tsx --env-file=.env scripts/dev-admin-rotate-mfa.ts"
+    "dev-admin:rotate-mfa": "tsx --env-file=.env scripts/dev-admin-rotate-mfa.ts",
+    "test:billing-simulation:s01": "tsx --env-file=.env scripts/billing-simulation-s01.ts"
   },
   "type": "module",
   "engines": {
