@@ -80,10 +80,15 @@ function jsonResponse(body: unknown) {
   });
 }
 
-function simulatedAdmin(scenario: Scenario, status: ShopifyStatus, includeSubscription: boolean) {
+function simulatedAdmin(
+  scenario: Scenario,
+  status: ShopifyStatus,
+  includeSubscription: boolean,
+  subscriptionGid = scenario.currentGid,
+) {
   const now = new Date();
   const subscription = {
-    id: scenario.currentGid,
+    id: subscriptionGid,
     name: `Simulation ${scenario.id} current`,
     status,
     createdAt: new Date(now.getTime() - 60_000).toISOString(),
@@ -163,7 +168,7 @@ async function establishInitialState(scenario: Scenario) {
   if (scenario.id === "S25") {
     await reconcileShopifySubscriptionFromAdmin({
       shop: scenario.shop,
-      admin: simulatedAdmin(scenario, "PENDING", true),
+      admin: simulatedAdmin(scenario, "PENDING", true, scenario.pendingGid),
       expectedSubscriptionGid: scenario.pendingGid,
       preferredPlanHandle: "basic",
       source: "RECONCILIATION",
