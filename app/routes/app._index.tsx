@@ -1425,172 +1425,8 @@ const dashboardCss = `
     border-radius: 14px;
   }
 
-  .vip-product-hero {
-    display: grid;
-    grid-template-columns: minmax(0, 1.45fr) minmax(290px, .55fr);
-    gap: 32px;
-    align-items: center;
-    overflow: hidden;
-    border: 1px solid #d9e3df;
-    border-radius: 18px;
-    padding: clamp(26px, 4vw, 46px);
-    background: linear-gradient(120deg, #f4faf7 0%, #ffffff 64%);
-    box-shadow: 0 8px 28px rgba(31, 57, 48, .06);
-  }
-
-  .vip-product-hero__eyebrow {
-    margin-bottom: 12px;
-    color: #087f5b;
-    font-size: 12px;
-    font-weight: 800;
-    letter-spacing: .09em;
-    text-transform: uppercase;
-  }
-
-  .vip-product-hero h1 {
-    max-width: 850px;
-    margin: 0;
-    color: #17231f;
-    font-size: clamp(30px, 3.8vw, 48px);
-    font-weight: 760;
-    letter-spacing: -.04em;
-    line-height: 1.08;
-  }
-
-  .vip-product-hero__lead {
-    max-width: 800px;
-    margin: 17px 0 0;
-    color: #46534f;
-    font-size: 15px;
-    line-height: 1.65;
-  }
-
-  .vip-product-hero__actions {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 10px;
-    margin-top: 24px;
-  }
-
-  .vip-product-action {
-    display: inline-flex;
-    align-items: center;
-    min-height: 42px;
-    border: 1px solid #c9cecb;
-    border-radius: 9px;
-    padding: 0 16px;
-    background: #fff;
-    color: #202223;
-    font-size: 13px;
-    font-weight: 700;
-    text-decoration: none;
-    transition: background .15s ease, border-color .15s ease, box-shadow .15s ease;
-  }
-
-  .vip-product-action:hover { border-color: #8c9490; background: #fafafa; }
-  .vip-product-action--primary { border-color: #006e52; background: #008060; color: #fff; }
-  .vip-product-action--primary:hover { border-color: #004c3f; background: #006e52; }
-
-  .vip-product-hero__status {
-    border: 1px solid #dfe4e1;
-    border-radius: 14px;
-    padding: 22px;
-    background: #fff;
-  }
-
-  .vip-product-hero__status-label {
-    color: #61656f;
-    font-size: 12px;
-    font-weight: 750;
-    text-transform: uppercase;
-    letter-spacing: .06em;
-  }
-
-  .vip-product-hero__status strong {
-    display: block;
-    margin-top: 8px;
-    color: #202223;
-    font-size: 30px;
-    letter-spacing: -.03em;
-  }
-
-  .vip-product-hero__status p {
-    margin: 7px 0 16px;
-    color: var(--vip-muted);
-    font-size: 13px;
-    line-height: 1.5;
-  }
-
-  .vip-product-hero__status-bar {
-    height: 7px;
-    overflow: hidden;
-    border-radius: 999px;
-    background: #e8ecea;
-  }
-
-  .vip-product-hero__status-bar span {
-    display: block;
-    height: 100%;
-    border-radius: inherit;
-    background: #008060;
-  }
-
-  .vip-readiness-mini {
-    display: grid;
-    gap: 9px;
-    margin-top: 18px;
-    padding-top: 16px;
-    border-top: 1px solid #edf0ee;
-  }
-
-  .vip-readiness-mini__item {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    color: #454a47;
-    font-size: 12px;
-    font-weight: 650;
-  }
-
-  .vip-readiness-mini__item span:last-child { color: #6d7175; font-weight: 600; }
-  .vip-readiness-mini__item--ready span:last-child { color: #087f5b; }
-
-  .vip-explainer-grid {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 16px;
-  }
-
-  .vip-explainer {
-    border: 1px solid var(--vip-border);
-    border-radius: 16px;
-    padding: 22px;
-    background: #fff;
-  }
-
-  .vip-explainer__label {
-    color: #087f5b;
-    font-size: 11px;
-    font-weight: 800;
-    letter-spacing: .08em;
-    text-transform: uppercase;
-  }
-
-  .vip-explainer h2 { margin: 8px 0 7px; font-size: 18px; letter-spacing: -.02em; }
-  .vip-explainer p { margin: 0; color: var(--vip-muted); font-size: 13px; line-height: 1.6; }
-
-  .vip-how-panel { padding: 24px; }
-  .vip-how-panel__head h2 { margin: 0; font-size: 19px; letter-spacing: -.02em; }
-  .vip-how-panel__head p { margin: 6px 0 0; color: var(--vip-muted); font-size: 13px; }
-  .vip-how-steps { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 20px; margin-top: 22px; }
-  .vip-how-step { position: relative; padding-left: 46px; }
-  .vip-how-step__number { position: absolute; top: 0; left: 0; display: grid; width: 32px; height: 32px; place-items: center; border-radius: 9px; background: #e4f3ed; color: #006e52; font-size: 13px; font-weight: 800; }
-  .vip-how-step strong { display: block; font-size: 14px; }
-  .vip-how-step p { margin: 6px 0 0; color: var(--vip-muted); font-size: 12px; line-height: 1.55; }
-
   @media (max-width: 980px) {
-    .vip-hero__content, .vip-product-hero, .vip-grid, .vip-analytics-grid { grid-template-columns: 1fr; }
+    .vip-hero__content, .vip-grid, .vip-analytics-grid { grid-template-columns: 1fr; }
     .vip-metrics { grid-template-columns: repeat(2, minmax(0,1fr)); }
     .vip-impact-kpis { grid-template-columns: repeat(2, minmax(0,1fr)); }
     .vip-quick-grid { grid-template-columns: 1fr; }
@@ -1606,8 +1442,6 @@ const dashboardCss = `
     .vip-metrics, .vip-impact-kpis { grid-template-columns: 1fr; }
     .vip-check-row { grid-template-columns: 36px minmax(0,1fr); }
     .vip-check-action { grid-column: 2; }
-    .vip-product-hero { padding: 24px 20px; }
-    .vip-explainer-grid, .vip-how-steps { grid-template-columns: 1fr; }
   }
 `;
 
@@ -1732,15 +1566,6 @@ export default function Dashboard() {
     entitlementNeedsAttention,
   ].filter(Boolean).length;
   const showOperationsAttention = attentionCount > 0;
-  const readinessChecks = [
-    subscriptionReady,
-    catalogReady && !catalogBusy && !catalogFailed && !queueHasFailures,
-    searchSettingReady,
-    embedReady,
-    rendererReady && !themeSyncing && !themeSyncFailed,
-  ];
-  const readyCount = readinessChecks.filter(Boolean).length;
-  const readinessPercent = Math.round((readyCount / readinessChecks.length) * 100);
 
   // Grants/overrides may already be stored while billing is inactive.
   // Keep them persisted, but do not present them as usable merchant quota until
@@ -1796,98 +1621,20 @@ export default function Dashboard() {
       <style>{dashboardCss}</style>
 
       <div className="vip-shell">
-        <header className="vip-product-hero">
+        <header className="vip-overview-head">
           <div>
-            <div className="vip-product-hero__eyebrow">Semantic AI search for Shopify</div>
-            <h1>Help shoppers find products, even when their words do not match your catalog.</h1>
-            <p className="vip-product-hero__lead">
-              Shopify keyword search can miss relevant products when shoppers use natural
-              language, synonyms, contextual requests, vague intent, or another language.
-              AI-Buyense understands semantic meaning, matches that intent to your catalog,
-              and keeps results inside your store&apos;s existing theme and search experience.
-            </p>
-            <div className="vip-product-hero__actions" aria-label="Dashboard actions">
-              <Link className="vip-product-action vip-product-action--primary" to="/app/catalog-sync">
-                Sync catalog
-              </Link>
-              <Link className="vip-product-action" to="/app/settings">Configure search</Link>
-              <Link className="vip-product-action" to="/app/search-analytics">View analytics</Link>
-              <a className="vip-product-action" href="/demo" target="_top">Test storefront</a>
-            </div>
-          </div>
-          <aside className="vip-product-hero__status" aria-label="Store readiness summary">
-            <div className="vip-product-hero__status-label">Store readiness</div>
-            <strong>{readyCount} of {readinessChecks.length} ready</strong>
+            <div className="vip-overview-head__eyebrow">Store intelligence</div>
+            <h2>Search performance overview</h2>
             <p>
-              {readyCount === readinessChecks.length
-                ? "AI-Buyense is configured and ready for storefront search."
-                : `${readinessChecks.length - readyCount} setup ${readinessChecks.length - readyCount === 1 ? "item needs" : "items need"} attention.`}
+              Monitor product discovery, shopper engagement, and issues that need action.
             </p>
-            <div className="vip-product-hero__status-bar" aria-label={`${readinessPercent}% ready`}>
-              <span style={{ width: `${readinessPercent}%` }} />
-            </div>
-            <div className="vip-readiness-mini" aria-label="Setup readiness checklist">
-              <div className={`vip-readiness-mini__item${subscriptionReady ? " vip-readiness-mini__item--ready" : ""}`}>
-                <span>Subscription</span><span>{subscriptionReady ? "Ready" : "Action needed"}</span>
-              </div>
-              <div className={`vip-readiness-mini__item${catalogReady && !catalogBusy && !catalogFailed && !queueHasFailures ? " vip-readiness-mini__item--ready" : ""}`}>
-                <span>Catalog index</span><span>{catalogBusy ? "Syncing" : catalogReady && !catalogFailed && !queueHasFailures ? "Ready" : "Action needed"}</span>
-              </div>
-              <div className={`vip-readiness-mini__item${searchSettingReady ? " vip-readiness-mini__item--ready" : ""}`}>
-                <span>AI Search</span><span>{searchSettingReady ? "Enabled" : "Disabled"}</span>
-              </div>
-              <div className={`vip-readiness-mini__item${embedReady ? " vip-readiness-mini__item--ready" : ""}`}>
-                <span>Theme App Embed</span><span>{embedReady ? "Ready" : "Action needed"}</span>
-              </div>
-              <div className={`vip-readiness-mini__item${rendererReady && !themeSyncing && !themeSyncFailed ? " vip-readiness-mini__item--ready" : ""}`}>
-                <span>Theme rendering</span><span>{themeSyncing ? "Syncing" : rendererReady && !themeSyncFailed ? "Ready" : "Action needed"}</span>
-              </div>
-            </div>
-          </aside>
+          </div>
+          <div className="vip-overview-head__meta" aria-label="Dashboard context">
+            <span className="vip-overview-chip">Last 7 days</span>
+            <span className="vip-overview-chip">{entitlement.planLabel}</span>
+            <span className="vip-overview-chip">{data.shop}</span>
+          </div>
         </header>
-
-        <section className="vip-explainer-grid" aria-label="What AI-Buyense solves">
-          <article className="vip-explainer">
-            <div className="vip-explainer__label">The merchant problem</div>
-            <h2>Exact keywords leave discovery gaps</h2>
-            <p>
-              A shopper may describe a use case, choose a synonym, misspell a term, or search
-              in another language. Valid products can exist in the catalog but remain hard to find.
-            </p>
-          </article>
-          <article className="vip-explainer">
-            <div className="vip-explainer__label">The AI-Buyense approach</div>
-            <h2>Match intent, then preserve the storefront</h2>
-            <p>
-              Semantic retrieval is designed to surface more relevant catalog matches and reduce
-              zero-result searches while your existing Shopify theme continues to render the results.
-            </p>
-          </article>
-        </section>
-
-        <section className="vip-panel vip-how-panel" aria-labelledby="how-it-works-title">
-          <div className="vip-how-panel__head">
-            <h2 id="how-it-works-title">How it works</h2>
-            <p>AI-Buyense adds semantic understanding without replacing your storefront.</p>
-          </div>
-          <div className="vip-how-steps">
-            <div className="vip-how-step">
-              <span className="vip-how-step__number">1</span>
-              <strong>Understand the query</strong>
-              <p>Interpret wording, intent, context, synonyms, and language—not only exact terms.</p>
-            </div>
-            <div className="vip-how-step">
-              <span className="vip-how-step__number">2</span>
-              <strong>Match the catalog semantically</strong>
-              <p>Retrieve products whose meaning and attributes best fit the shopper&apos;s request.</p>
-            </div>
-            <div className="vip-how-step">
-              <span className="vip-how-step__number">3</span>
-              <strong>Render through your storefront</strong>
-              <p>Return results through the existing Shopify theme and familiar search experience.</p>
-            </div>
-          </div>
-        </section>
 
         {showOperationsAttention ? (
           <section className="vip-panel vip-attention-panel">
