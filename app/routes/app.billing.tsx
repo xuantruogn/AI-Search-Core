@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useEffect, useState } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { useFetcher, useLoaderData } from "react-router";
 import db from "../db.server";
@@ -9,24 +9,81 @@ import {
   refreshShopifyAppPricingSubscription,
   reconcileShopifySubscriptionFromAdmin,
 } from "../services/billing/shopify-app-pricing.server";
-
-import { PLAN_DEFINITIONS } from "../services/commerce/plans.server";
 import { getShopEntitlement } from "../services/commerce/entitlement.server";
 import { getSubscriptionSnapshot } from "../services/commerce/shop-registry.server";
 import { reconcileShopCommercialState } from "../services/commerce/reconciliation.server";
 import { setBillingPlanChangeState } from "../services/commerce/billing-state.server";
 
+function planPresentation(featureFlags: unknown) {
+  const flags =
+    featureFlags && typeof featureFlags === "object"
+      ? (featureFlags as {
+          description?: string;
+          highlights?: string[];
+          capabilities?: Record<string, boolean>;
+        })
+      : {};
+
+  const highlights = Array.isArray(flags.highlights)
+    ? flags.highlights.filter((value): value is string => typeof value === "string")
+    : [];
+
+  const capabilities = flags.capabilities ?? {};
+  const capabilityLabels = Object.entries(capabilities)
+    .filter(([, enabled]) => enabled === true)
+    .map(([key]) => key);
+
+  return {
+    description:
+      typeof flags.description === "string" ? flags.description : "",
+    highlights,
+    capabilityLabels,
+  };
+}
+
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const debugId = crypto.randomUUID().slice(0, 8);
-  console.log("[BILLING TRACE] loader:start", { debugId, method: request.method, url: request.url, referer: request.headers.get("referer"), remixRequest: request.headers.get("x-remix-request"), secFetchMode: request.headers.get("sec-fetch-mode") });
+  console.log("[BILLING TRACE] loader:start", {
+    debugId,
+    method: request.method,
+    url: request.url,
+    referer: request.headers.get("referer"),
+    remixRequest: request.headers.get("x-remix-request"),
+    secFetchMode: request.headers.get("sec-fetch-mode"),
+  });
+
   const { session } = await authenticate.admin(request);
-  console.log("[BILLING DEBUG] loader:authenticated", { debugId, shop: session.shop });
+  console.log("[BILLING DEBUG] loader:authenticated", {
+    debugId,
+    shop: session.shop,
+  });
 
   const entitlement = await getShopEntitlement(session.shop);
-  const subscription = await getSubscriptionSnapshot(session.shop, { ensure: false });
+  const subscription = await getSubscriptionSnapshot(session.shop, {
+    ensure: false,
+  });
+
   const billingPlans = await db.plan.findMany({
-    where: { handle: { in: ["basic", "pro"] } },
-    select: { handle: true, trialDays: true },
+    where: {
+      isActive: true,
+      visibility: "PUBLIC",
+      billingMode: "MANUAL_BILLING",
+      handle: { not: "custom" },
+    },
+    orderBy: [{ sortOrder: "asc" }, { name: "asc" }],
+    select: {
+      id: true,
+      handle: true,
+      name: true,
+      price: true,
+      currencyCode: true,
+      interval: true,
+      trialDays: true,
+      maxIndexedProducts: true,
+      maxMonthlySearches: true,
+      maxMonthlyVectorUpdates: true,
+      featureFlags: true,
+    },
   });
 
   const hasEverApprovedSubscription = Boolean(
@@ -39,6 +96,47 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     }),
   );
 
+  const customAssignment = await db.planAssignment.findFirst({
+    where: {
+      shop: session.shop,
+      isActive: true,
+      OR: [{ startsAt: null }, { startsAt: { lte: new Date() } }],
+      plan: {
+        handle: "custom",
+      },
+    },
+    include: { plan: true },
+    orderBy: { createdAt: "desc" },
+  });
+
+  const customTerms = customAssignment?.plan
+    ? {
+        planId: customAssignment.plan.id,
+        handle: customAssignment.plan.handle,
+        name: customAssignment.plan.name,
+        price:
+          customAssignment.customPriceOverride ??
+          customAssignment.plan.price,
+        currencyCode: customAssignment.plan.currencyCode,
+        interval: customAssignment.plan.interval,
+        trialDays: customAssignment.plan.trialDays,
+        features: planPresentation(customAssignment.plan.featureFlags),
+        limits: {
+          productLimit:
+            customAssignment.customMaxIndexedProducts ??
+            customAssignment.plan.maxIndexedProducts,
+          searchLimit:
+            customAssignment.customMaxMonthlySearches ??
+            customAssignment.plan.maxMonthlySearches,
+          vectorUpdateLimit:
+            customAssignment.customMaxMonthlyVectorUpdates ??
+            customAssignment.plan.maxMonthlyVectorUpdates,
+        },
+        usageBillingEnabled:
+          customAssignment.plan.usageBillingEnabled,
+      }
+    : null;
+
   let daysRemaining: number | null = null;
   let formattedPeriodEnd: string | null = null;
 
@@ -46,7 +144,10 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     const endDate = new Date(subscription.billingPeriodEnd);
     const now = new Date();
     const diffTime = endDate.getTime() - now.getTime();
-    daysRemaining = Math.max(0, Math.ceil(diffTime / (1000 * 60 * 60 * 24)));
+    daysRemaining = Math.max(
+      0,
+      Math.ceil(diffTime / (1000 * 60 * 60 * 24)),
+    );
     formattedPeriodEnd = endDate.toLocaleDateString("en-US", {
       year: "numeric",
       month: "short",
@@ -59,48 +160,88 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     entitlement,
     subscription: {
       ...subscription,
-      billingPeriodStart: subscription.billingPeriodStart?.toISOString() ?? null,
-      billingPeriodEnd: subscription.billingPeriodEnd?.toISOString() ?? null,
+      billingPeriodStart:
+        subscription.billingPeriodStart?.toISOString() ?? null,
+      billingPeriodEnd:
+        subscription.billingPeriodEnd?.toISOString() ?? null,
       lastSyncedAt: subscription.lastSyncedAt?.toISOString() ?? null,
       daysRemaining,
       formattedPeriodEnd,
     },
     pricingUrl: getShopifyPricingPlansUrl(session.shop),
     partnerApiConfigured: isShopifyAppPricingConfigured(),
-    plans: [PLAN_DEFINITIONS.BASIC, PLAN_DEFINITIONS.PRO].map((plan) => {
-      const configuredTrialDays =
-        billingPlans.find(
-          (billingPlan) => billingPlan.handle === plan.key.toLowerCase(),
-        )?.trialDays ?? 0;
-
-      const isBasic = plan.key === "BASIC";
+    plans: billingPlans.map((plan) => {
+      const presentation = planPresentation(plan.featureFlags);
+      const isBasic = plan.handle.toLowerCase() === "basic";
       const isActiveBasicTrial =
         isBasic &&
         subscription.plan === "BASIC" &&
         subscription.trialStatus === "ACTIVE";
 
       return {
-        ...plan,
-        // Only BASIC can advertise a trial. A shop that has already
-        // approved any subscription cannot start another trial.
-        // The current BASIC trial remains visible while it is active.
+        id: plan.id,
+        key: plan.handle.toUpperCase(),
+        handle: plan.handle,
+        label: plan.name,
+        name: plan.name,
+        price: Number(plan.price),
+        currencyCode: plan.currencyCode,
+        interval: plan.interval,
         trialDays:
           isBasic &&
           (isActiveBasicTrial || !hasEverApprovedSubscription)
-            ? configuredTrialDays
+            ? plan.trialDays
             : 0,
+        description: presentation.description,
+        highlights: presentation.highlights,
+        capabilityLabels: presentation.capabilityLabels,
+        limits: {
+          productLimit: plan.maxIndexedProducts,
+          searchLimit: plan.maxMonthlySearches,
+          vectorUpdateLimit: plan.maxMonthlyVectorUpdates,
+        },
+        featureFlags: plan.featureFlags,
       };
     }),
+    customPlan:
+      customTerms && customTerms.price !== null
+        ? {
+            id: customTerms.planId,
+            handle: customTerms.handle,
+            key: customTerms.handle.toUpperCase(),
+            label: customTerms.name,
+            name: customTerms.name,
+            price: Number(customTerms.price),
+            currencyCode: customTerms.currencyCode,
+            interval: customTerms.interval,
+            trialDays: 0,
+            description: customTerms.features.description,
+            highlights: customTerms.features.highlights,
+            capabilityLabels: customTerms.features.capabilityLabels,
+            limits: customTerms.limits,
+            usageBillingEnabled: customTerms.usageBillingEnabled,
+          }
+        : null,
   };
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
   const debugId = crypto.randomUUID().slice(0, 8);
-  console.log("[BILLING DEBUG] action:start", { debugId, method: request.method, url: request.url });
+  console.log("[BILLING DEBUG] action:start", {
+    debugId,
+    method: request.method,
+    url: request.url,
+  });
+
   const { admin, session } = await authenticate.admin(request);
   const form = await request.formData();
   const intent = String(form.get("intent") || "");
-  console.log("[BILLING DEBUG] action:authenticated", { debugId, shop: session.shop, intent });
+
+  console.log("[BILLING DEBUG] action:authenticated", {
+    debugId,
+    shop: session.shop,
+    intent,
+  });
 
   if (intent === "refresh") {
     try {
@@ -130,15 +271,15 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
   if (intent === "cancelRenewal") {
     try {
-      console.log("[BILLING DEBUG] cancel:start", { debugId, shop: session.shop });
-      const snapshot = await getSubscriptionSnapshot(session.shop, { ensure: false });
-      console.log("[BILLING DEBUG] cancel:snapshot", {
-        debugId, shop: session.shop, plan: snapshot.plan, planHandle: snapshot.planHandle,
-        status: snapshot.status, cancellationStatus: snapshot.cancellationStatus,
-        accessStatus: snapshot.accessStatus, commercialStatus: snapshot.commercialStatus,
-        subscriptionGid: snapshot.shopifySubscriptionId,
-        billingPeriodEnd: snapshot.billingPeriodEnd?.toISOString() ?? null,
+      console.log("[BILLING DEBUG] cancel:start", {
+        debugId,
+        shop: session.shop,
       });
+
+      const snapshot = await getSubscriptionSnapshot(session.shop, {
+        ensure: false,
+      });
+
       const subscriptionGid = snapshot.shopifySubscriptionId;
 
       if (!subscriptionGid) {
@@ -151,7 +292,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       if (snapshot.cancellationStatus === "NON_RENEWING") {
         return {
           success: true,
-          message: "This subscription is already set not to renew for the next cycle.",
+          message:
+            "This subscription is already set not to renew for the next cycle.",
         };
       }
 
@@ -162,9 +304,6 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         };
       }
 
-      // Shopify Admin Billing API: prorate=false stops the next billing cycle
-      // while preserving the merchant's already-paid current period.
-      console.log("[BILLING DEBUG] cancel:shopify:start", { debugId, shop: session.shop, subscriptionGid });
       const response = await admin.graphql(
         `#graphql
         mutation CancelAppSubscription($id: ID!, $prorate: Boolean) {
@@ -208,16 +347,13 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
         return {
           success: false,
-          message: message || "Shopify could not stop the next subscription renewal.",
+          message:
+            message ||
+            "Shopify could not stop the next subscription renewal.",
         };
       }
 
       const cancelled = payload.data?.appSubscriptionCancel?.appSubscription;
-      console.log("[BILLING DEBUG] cancel:shopify:response", {
-        debugId, shop: session.shop, subscriptionGid,
-        cancelledId: cancelled?.id ?? null, cancelledStatus: cancelled?.status ?? null,
-        graphqlErrors: graphQLErrors.length, userErrors: userErrors.length,
-      });
 
       if (!cancelled?.id) {
         return {
@@ -226,9 +362,6 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         };
       }
 
-      console.log("[BILLING DEBUG] cancel:reconcile:start", {
-        debugId, shop: session.shop, expectedSubscriptionGid: cancelled.id,
-      });
       const reconciliation = await reconcileShopifySubscriptionFromAdmin({
         shop: session.shop,
         admin,
@@ -238,9 +371,12 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         source: "API",
         observedShopifyStatus: "CANCELLED",
       });
+
       console.log("[BILLING DEBUG] cancel:reconcile:done", {
-        debugId, shop: session.shop,
-        plan: reconciliation.subscription.plan, status: reconciliation.subscription.status,
+        debugId,
+        shop: session.shop,
+        plan: reconciliation.subscription.plan,
+        status: reconciliation.subscription.status,
         cancellationStatus: reconciliation.subscription.cancellationStatus,
         accessStatus: reconciliation.subscription.accessStatus,
         commercialStatus: reconciliation.subscription.commercialStatus,
@@ -261,11 +397,14 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   }
 
   if (intent === "subscribe") {
-    const planKey = String(form.get("planKey") || "");
-    const cycle = String(form.get("cycle") || "monthly");
+    const planHandle = String(form.get("planHandle") || "")
+      .trim()
+      .toLowerCase();
 
-    const requestedReplacementBehavior =
-      String(form.get("replacementBehavior") || "APPLY_IMMEDIATELY");
+    const requestedReplacementBehavior = String(
+      form.get("replacementBehavior") || "APPLY_IMMEDIATELY",
+    );
+
     const replacementBehavior =
       requestedReplacementBehavior === "APPLY_ON_NEXT_BILLING_CYCLE"
         ? "APPLY_ON_NEXT_BILLING_CYCLE"
@@ -273,24 +412,42 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           ? "STANDARD"
           : "APPLY_IMMEDIATELY";
 
-    const baseMonthlyPrice = planKey === "PRO" ? 29.9 : 9.9;
-    const billingPlan = await db.plan.findUnique({
-      where: { handle: planKey.toLowerCase() },
-      select: { trialDays: true },
-    });
+    const customAssignment =
+      planHandle === "custom"
+        ? await db.planAssignment.findFirst({
+            where: {
+              shop: session.shop,
+              isActive: true,
+              OR: [{ startsAt: null }, { startsAt: { lte: new Date() } }],
+              plan: { handle: "custom" },
+            },
+            include: { plan: true },
+            orderBy: { createdAt: "desc" },
+          })
+        : null;
 
-    // Trial policy:
-    // - Trial is for a NEW SHOP only: once ANY subscription is approved,
-    //   the shop permanently loses trial eligibility.
-    // - PENDING subscriptions do NOT consume trial eligibility because the
-    //   merchant has not approved any subscription yet.
-    // - BASIC is the only plan that can receive trial days.
-    // - PRO must always be created with zero trial days.
-    //
-    // BillingSubscription rows are created for PENDING subscriptions, so
-    // their existence is NOT evidence that the shop has used billing/trial.
-    // BillingEvent SUBSCRIPTION_APPROVED is the durable local evidence that
-    // Shopify actually approved a subscription.
+    const billingPlan =
+      planHandle === "custom"
+        ? customAssignment?.plan ?? null
+        : await db.plan.findFirst({
+            where: {
+              handle: planHandle,
+              isActive: true,
+              visibility: "PUBLIC",
+              billingMode: "MANUAL_BILLING",
+            },
+          });
+
+    if (
+      !billingPlan ||
+      (planHandle === "custom" && !customAssignment)
+    ) {
+      return {
+        success: false,
+        message: "This plan is not available for purchase.",
+      };
+    }
+
     const hasEverApprovedSubscription = Boolean(
       await db.billingEvent.findFirst({
         where: {
@@ -301,27 +458,24 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       }),
     );
 
-    const isBasicPlan = planKey.toUpperCase() === "BASIC";
+    const isBasicPlan = billingPlan.handle.toLowerCase() === "basic";
     const trialDays =
       isBasicPlan && !hasEverApprovedSubscription
-        ? Math.max(0, billingPlan?.trialDays ?? 0)
+        ? Math.max(0, billingPlan.trialDays ?? 0)
         : 0;
 
-    // Billing test mode is controlled explicitly by deployment ENV.
-    // This allows the app server to run in production while internal/dev
-    // stores use Shopify test charges. Set BILLING_TEST_MODE=false for real
-    // merchant billing.
     const billingTestMode =
-      String(process.env.BILLING_TEST_MODE ?? "").trim().toLowerCase() === "true";
+      String(process.env.BILLING_TEST_MODE ?? "")
+        .trim()
+        .toLowerCase() === "true";
 
-    let finalPrice = baseMonthlyPrice;
-    let billingInterval = "EVERY_30_DAYS";
-    let planName = `AI Search ${planKey} Plan (${cycle})`;
+    const finalPrice =
+      customAssignment?.customPriceOverride ??
+      Number(billingPlan.price);
 
-    if (cycle === "yearly") {
-      finalPrice = baseMonthlyPrice * 0.8 * 12;
-      billingInterval = "ANNUAL";
-    }
+    const billingInterval = billingPlan.interval;
+    const currencyCode = billingPlan.currencyCode;
+    const planName = `AI Search ${billingPlan.name} Plan`;
 
     try {
       const shopHandle = session.shop.replace(/\.myshopify\.com$/i, "");
@@ -334,19 +488,24 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       }
 
       const returnUrl = new URL(
-        `https://admin.shopify.com/store/${encodeURIComponent(shopHandle)}/apps/${encodeURIComponent(appIdentifier)}/app/billing`,
+        `https://admin.shopify.com/store/${encodeURIComponent(
+          shopHandle,
+        )}/apps/${encodeURIComponent(
+          appIdentifier,
+        )}/app/billing`,
       );
       returnUrl.searchParams.set("billing_callback", "1");
 
       const response = await admin.graphql(
         `#graphql
         mutation createPaymentLink(
-          $name: String!, 
-          $price: Decimal!, 
-          $returnUrl: URL!, 
+          $name: String!,
+          $price: Decimal!,
+          $returnUrl: URL!,
           $test: Boolean,
           $trialDays: Int,
           $interval: AppPricingInterval!,
+          $currencyCode: CurrencyCode!,
           $replacementBehavior: AppSubscriptionReplacementBehavior
         ) {
           appSubscriptionCreate(
@@ -358,7 +517,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
             lineItems: [{
               plan: {
                 appRecurringPricingDetails: {
-                  price: { amount: $price, currencyCode: USD }
+                  price: { amount: $price, currencyCode: $currencyCode }
                   interval: $interval
                 }
               }
@@ -366,7 +525,6 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           ) {
             userErrors { field message }
             confirmationUrl
-
             appSubscription {
               id
               status
@@ -382,35 +540,56 @@ export const action = async ({ request }: ActionFunctionArgs) => {
             test: billingTestMode,
             trialDays: trialDays > 0 ? trialDays : null,
             interval: billingInterval,
+            currencyCode,
             replacementBehavior,
           },
-        }
+        },
       );
 
-      const responseJson = await response.json();
+      const responseJson = (await response.json()) as {
+        data?: {
+          appSubscriptionCreate?: {
+            userErrors?: Array<{ field?: string[]; message?: string }>;
+            confirmationUrl?: string | null;
+            appSubscription?: {
+              id?: string;
+              status?: string;
+              createdAt?: string;
+            } | null;
+          };
+        };
+        errors?: Array<{ message?: string }>;
+      };
+
       const subscriptionData = responseJson.data?.appSubscriptionCreate;
 
-      if (subscriptionData?.userErrors && subscriptionData.userErrors.length > 0) {
-        const errorMsg = subscriptionData.userErrors.map((e: any) => e.message).join(", ");
-        if (errorMsg.includes("public distribution")) {
-          return {
-            success: true,
-            devFallback: true,
-            message: "App currently in Dev/Custom mode. Billing API simulated successfully!",
-          };
-        }
-        return { success: false, message: `Shopify Error: ${errorMsg}` };
+      if (subscriptionData?.userErrors?.length) {
+        const errorMsg = subscriptionData.userErrors
+          .map((error) => error.message)
+          .filter(Boolean)
+          .join(", ");
+
+        return {
+          success: false,
+          message: errorMsg
+            ? `Shopify Error: ${errorMsg}`
+            : "Shopify could not create the subscription.",
+        };
       }
 
       const createdSubscription = subscriptionData?.appSubscription;
+
       if (!createdSubscription?.id) {
-        return { success: false, message: "Shopify did not return subscription ID." };
+        return {
+          success: false,
+          message: "Shopify did not return subscription ID.",
+        };
       }
 
       await db.aiSearchShop.update({
         where: { shop: session.shop },
         data: {
-          pendingPlanHandle: planKey.toLowerCase(),
+          pendingPlanHandle: billingPlan.handle,
           pendingSubscriptionGid: createdSubscription.id,
         },
       });
@@ -419,8 +598,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         shop: session.shop,
         admin,
         expectedSubscriptionGid: createdSubscription.id,
-        preferredPlanHandle: planKey.toLowerCase(),
-        authoritativePlanHandle: planKey.toLowerCase(),
+        preferredPlanHandle: billingPlan.handle,
+        authoritativePlanHandle: billingPlan.handle,
         source: "CALLBACK",
       });
 
@@ -430,22 +609,36 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           subscriptionGid: createdSubscription.id,
           status: "DEFERRED",
           source: "CALLBACK",
-          reason: "APP_SUBSCRIPTION_REPLACEMENT_BEHAVIOR_APPLY_ON_NEXT_BILLING_CYCLE",
+          reason:
+            "APP_SUBSCRIPTION_REPLACEMENT_BEHAVIOR_APPLY_ON_NEXT_BILLING_CYCLE",
         });
       }
 
       const confirmationUrl = subscriptionData?.confirmationUrl;
+
       if (confirmationUrl) {
-        return { success: true, confirmationUrl };
+        return {
+          success: true,
+          confirmationUrl,
+        };
       }
 
-      return { success: false, message: "Failed to create payment link." };
+      return {
+        success: false,
+        message: "Failed to create payment link.",
+      };
     } catch (error) {
-      return { success: false, message: error instanceof Error ? error.message : String(error) };
+      return {
+        success: false,
+        message: error instanceof Error ? error.message : String(error),
+      };
     }
   }
 
-  return { success: false, message: "Invalid action intent" };
+  return {
+    success: false,
+    message: "Invalid action intent",
+  };
 };
 
 function limitText(value: number | null, suffix: string) {
@@ -478,12 +671,12 @@ export default function BillingPage() {
 
   useEffect(() => {
     if (subscribeFetcher.data?.confirmationUrl) {
-      console.log(`[BILLING CLIENT REDIRECT] Redirecting top location to confirmationUrl`);
+      console.log(
+        "[BILLING CLIENT REDIRECT] Redirecting top location to confirmationUrl",
+      );
       window.top!.location.href = subscribeFetcher.data.confirmationUrl;
     }
   }, [subscribeFetcher.data]);
-
-
 
   const cycleDiscount = {
     monthly: 0,
@@ -495,64 +688,16 @@ export default function BillingPage() {
     yearly: "/month (billed annually)",
   };
 
-  const currentPlanKey = data.entitlement.planLabel?.toUpperCase() || "NONE";
-  const isNonRenewing = data.entitlement.cancellationStatus === "NON_RENEWING";
+  const currentPlanKey =
+    data.entitlement.planLabel?.toUpperCase() || "NONE";
+  const isNonRenewing =
+    data.entitlement.cancellationStatus === "NON_RENEWING";
   const isActive =
     data.entitlement.subscriptionStatus === "ACTIVE" || isNonRenewing;
 
-  const planConfigs = {
-    BASIC: {
-      badge: "Popular",
-      badgeBg: "#008060",
-      priceBase: 9.9,
-      originalPrice: "$14.99/month",
-      isPopular: false,
-      btnBg: "#008060",
-      features: [
-        limitText(
-          data.plans[0]?.limits.productLimit ?? 500,
-          "AI indexed products",
-        ),
-        limitText(
-          data.plans[0]?.limits.searchLimit ?? 3000,
-          "AI searches / period",
-        ),
-        limitText(
-          data.plans[0]?.limits.vectorUpdateLimit ?? 500,
-          "vector updates / period",
-        ),
-        "Auto-fallback to Shopify Search when quota exceeded",
-        "24/7 Email & Ticket Support",
-      ],
-      buildWith: ["AI Search Engine", "AI Keyword Suggestions"],
-    },
-    PRO: {
-      badge: "Save 40%",
-      badgeBg: "#e51c00",
-      priceBase: 29.9,
-      originalPrice: "$49.99/month",
-      isPopular: true,
-      btnBg: "#e51c00",
-      features: [
-        limitText(
-          data.plans[1]?.limits.productLimit ?? null,
-          "AI indexed products",
-        ),
-        limitText(
-          data.plans[1]?.limits.searchLimit ?? null,
-          "AI searches / period",
-        ),
-        limitText(
-          data.plans[1]?.limits.vectorUpdateLimit ?? null,
-          "vector updates / period",
-        ),
-        "Priority Vector Search bandwidth processing",
-        "Auto-optimized Synonyms & Search Intent",
-        "1-on-1 Dedicated Technical Support",
-      ],
-      buildWith: ["AI Vector Analytics", "Full Synonyms Map"],
-    },
-  };
+  const availablePlans = data.customPlan
+    ? [...data.plans, data.customPlan]
+    : data.plans;
 
   return (
     <div
@@ -564,7 +709,6 @@ export default function BillingPage() {
           "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
       }}
     >
-      {/* SECTION 1: ACCOUNT OVERVIEW & SUBSCRIPTION STATUS */}
       <div
         style={{
           background: "#fff",
@@ -584,7 +728,12 @@ export default function BillingPage() {
           }}
         >
           <h2
-            style={{ margin: 0, fontSize: 17, fontWeight: 700, color: "#1a1a1a" }}
+            style={{
+              margin: 0,
+              fontSize: 17,
+              fontWeight: 700,
+              color: "#1a1a1a",
+            }}
           >
             Current Subscription Status
           </h2>
@@ -661,9 +810,7 @@ export default function BillingPage() {
                 cursor: "pointer",
               }}
             >
-              {fetcher.state !== "idle"
-                ? "Syncing..."
-                : "Sync Billing Status"}
+              {fetcher.state !== "idle" ? "Syncing..." : "Sync Billing Status"}
             </button>
           </fetcher.Form>
 
@@ -682,6 +829,7 @@ export default function BillingPage() {
             </a>
           )}
         </div>
+
         {isActive ? (
           <div
             style={{
@@ -689,7 +837,9 @@ export default function BillingPage() {
               padding: 14,
               borderRadius: 10,
               background: isNonRenewing ? "#fff8e6" : "#f3faf7",
-              border: `1px solid ${isNonRenewing ? "#f0d98a" : "#cfe9df"}`,
+              border: `1px solid ${
+                isNonRenewing ? "#f0d98a" : "#cfe9df"
+              }`,
             }}
           >
             <div style={{ fontWeight: 700, fontSize: 13, color: "#1a1a1a" }}>
@@ -720,7 +870,6 @@ export default function BillingPage() {
                     gap: 8,
                     fontSize: 12,
                     color: "#1a1a1a",
-                    cursor: cancelFetcher.state === "idle" && !isNonRenewing ? "pointer" : "default",
                   }}
                 >
                   <input
@@ -732,7 +881,13 @@ export default function BillingPage() {
                   />
                   <span>
                     <strong>Automatic renewal</strong>
-                    <span style={{ display: "block", color: "#6b6b6b", marginTop: 2 }}>
+                    <span
+                      style={{
+                        display: "block",
+                        color: "#6b6b6b",
+                        marginTop: 2,
+                      }}
+                    >
                       Continue this subscription into the next billing cycle.
                     </span>
                   </span>
@@ -745,7 +900,6 @@ export default function BillingPage() {
                     gap: 8,
                     fontSize: 12,
                     color: isNonRenewing ? "#8a1c1c" : "#1a1a1a",
-                    cursor: cancelFetcher.state === "idle" && !isNonRenewing ? "pointer" : "default",
                   }}
                 >
                   <input
@@ -755,7 +909,12 @@ export default function BillingPage() {
                     checked={isNonRenewing}
                     disabled={isNonRenewing}
                     onChange={(event) => {
-                      if (!event.target.checked || cancelFetcher.state !== "idle") return;
+                      if (
+                        !event.target.checked ||
+                        cancelFetcher.state !== "idle"
+                      ) {
+                        return;
+                      }
 
                       const confirmed = window.confirm(
                         `Are you sure you want to turn off automatic renewal? Your current ${data.entitlement.planLabel} plan will remain active until ${data.subscription.formattedPeriodEnd ?? "the end of the current billing period"}, then it will end and will not renew automatically.`,
@@ -770,8 +929,15 @@ export default function BillingPage() {
                   />
                   <span>
                     <strong>Do not renew next period</strong>
-                    <span style={{ display: "block", color: "#6b6b6b", marginTop: 2 }}>
-                      Keep the current plan active until the end of this billing period.
+                    <span
+                      style={{
+                        display: "block",
+                        color: "#6b6b6b",
+                        marginTop: 2,
+                      }}
+                    >
+                      Keep the current plan active until the end of this
+                      billing period.
                     </span>
                   </span>
                 </label>
@@ -793,13 +959,18 @@ export default function BillingPage() {
         ) : null}
 
         {fetcher.data?.message ? (
-          <p style={{ margin: "10px 0 0 0", fontSize: 12, color: "#008060" }}>
+          <p
+            style={{
+              margin: "10px 0 0 0",
+              fontSize: 12,
+              color: fetcher.data.success ? "#008060" : "#d32f2f",
+            }}
+          >
             {fetcher.data.message}
           </p>
         ) : null}
       </div>
 
-      {/* SECTION 2: CURRENT USAGE & QUOTA METRICS */}
       <div
         style={{
           background: "#fff",
@@ -810,37 +981,106 @@ export default function BillingPage() {
           boxShadow: "0 1px 3px rgba(0,0,0,0.04)",
         }}
       >
-        <h3 style={{ margin: "0 0 14px 0", fontSize: 15, fontWeight: 700, color: "#1a1a1a" }}>
+        <h3
+          style={{
+            margin: "0 0 14px 0",
+            fontSize: 15,
+            fontWeight: 700,
+            color: "#1a1a1a",
+          }}
+        >
           📊 Usage & Capacity this Period
         </h3>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 16 }}>
-          {/* AI Searches */}
-          <div style={{ border: "1px solid #f1f2f3", borderRadius: 8, padding: 14, background: "#fafafa" }}>
-            <div style={{ fontSize: 12, color: "#616161", marginBottom: 4 }}>AI Searches</div>
-            <div style={{ fontSize: 18, fontWeight: 700, color: "#1a1a1a" }}>
-              {data.entitlement.usage.searchCount.toLocaleString("en-US")} / {limitText(data.entitlement.limits.searchLimit, "")}
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+            gap: 16,
+          }}
+        >
+          <div
+            style={{
+              border: "1px solid #f1f2f3",
+              borderRadius: 8,
+              padding: 14,
+              background: "#fafafa",
+            }}
+          >
+            <div
+              style={{ fontSize: 12, color: "#616161", marginBottom: 4 }}
+            >
+              AI Searches
+            </div>
+            <div
+              style={{
+                fontSize: 18,
+                fontWeight: 700,
+                color: "#1a1a1a",
+              }}
+            >
+              {data.entitlement.usage.searchCount.toLocaleString("en-US")} /{" "}
+              {limitText(data.entitlement.limits.searchLimit, "")}
             </div>
             <div style={{ fontSize: 11, color: "#008060", marginTop: 4 }}>
               Auto-fallbacks to Shopify Search when limit reached
             </div>
           </div>
 
-          {/* AI Indexed Products */}
-          <div style={{ border: "1px solid #f1f2f3", borderRadius: 8, padding: 14, background: "#fafafa" }}>
-            <div style={{ fontSize: 12, color: "#616161", marginBottom: 4 }}>AI Indexed Products</div>
-            <div style={{ fontSize: 18, fontWeight: 700, color: "#1a1a1a" }}>
-              {data.entitlement.indexedProducts.toLocaleString("en-US")} / {limitText(data.entitlement.limits.productLimit, "")}
+          <div
+            style={{
+              border: "1px solid #f1f2f3",
+              borderRadius: 8,
+              padding: 14,
+              background: "#fafafa",
+            }}
+          >
+            <div
+              style={{ fontSize: 12, color: "#616161", marginBottom: 4 }}
+            >
+              AI Indexed Products
+            </div>
+            <div
+              style={{
+                fontSize: 18,
+                fontWeight: 700,
+                color: "#1a1a1a",
+              }}
+            >
+              {data.entitlement.indexedProducts.toLocaleString("en-US")} /{" "}
+              {limitText(data.entitlement.limits.productLimit, "")}
             </div>
             <div style={{ fontSize: 11, color: "#616161", marginTop: 4 }}>
               Products ready for AI ranking
             </div>
           </div>
 
-          {/* Vector Updates */}
-          <div style={{ border: "1px solid #f1f2f3", borderRadius: 8, padding: 14, background: "#fafafa" }}>
-            <div style={{ fontSize: 12, color: "#616161", marginBottom: 4 }}>Vector Updates</div>
-            <div style={{ fontSize: 18, fontWeight: 700, color: "#1a1a1a" }}>
-              {data.entitlement.usage.vectorUpdateCount.toLocaleString("en-US")} / {limitText(data.entitlement.limits.vectorUpdateLimit, "")}
+          <div
+            style={{
+              border: "1px solid #f1f2f3",
+              borderRadius: 8,
+              padding: 14,
+              background: "#fafafa",
+            }}
+          >
+            <div
+              style={{ fontSize: 12, color: "#616161", marginBottom: 4 }}
+            >
+              Vector Updates
+            </div>
+            <div
+              style={{
+                fontSize: 18,
+                fontWeight: 700,
+                color: "#1a1a1a",
+              }}
+            >
+              {data.entitlement.usage.vectorUpdateCount.toLocaleString(
+                "en-US",
+              )} /{" "}
+              {limitText(
+                data.entitlement.limits.vectorUpdateLimit,
+                "",
+              )}
             </div>
             <div style={{ fontSize: 11, color: "#616161", marginTop: 4 }}>
               Vector data update executions
@@ -849,7 +1089,6 @@ export default function BillingPage() {
         </div>
       </div>
 
-      {/* SECTION 3: PLAN SELECTION HEADER & CYCLE TOGGLE */}
       <div style={{ textAlign: "center", marginBottom: 32 }}>
         <h1
           style={{
@@ -861,8 +1100,15 @@ export default function BillingPage() {
         >
           Choose the Right Plan for Your Store
         </h1>
-        <p style={{ color: "#616161", fontSize: 14, margin: "0 0 20px 0" }}>
-          Optimize AI search experiences and boost sales conversion rates today.
+        <p
+          style={{
+            color: "#616161",
+            fontSize: 14,
+            margin: "0 0 20px 0",
+          }}
+        >
+          Optimize AI search experiences and boost sales conversion rates
+          today.
         </p>
 
         <div
@@ -887,7 +1133,9 @@ export default function BillingPage() {
               color: cycle === "monthly" ? "#1a1a1a" : "#616161",
               cursor: "pointer",
               boxShadow:
-                cycle === "monthly" ? "0 1px 3px rgba(0,0,0,0.1)" : "none",
+                cycle === "monthly"
+                  ? "0 1px 3px rgba(0,0,0,0.1)"
+                  : "none",
             }}
           >
             Monthly
@@ -905,7 +1153,9 @@ export default function BillingPage() {
               color: cycle === "yearly" ? "#1a1a1a" : "#616161",
               cursor: "pointer",
               boxShadow:
-                cycle === "yearly" ? "0 1px 3px rgba(0,0,0,0.1)" : "none",
+                cycle === "yearly"
+                  ? "0 1px 3px rgba(0,0,0,0.1)"
+                  : "none",
             }}
           >
             Yearly <span style={{ color: "#008060", fontSize: 11 }}>(Save 20%)</span>
@@ -913,7 +1163,6 @@ export default function BillingPage() {
         </div>
       </div>
 
-      {/* SECTION 4: PRICING CARDS */}
       <div
         style={{
           display: "flex",
@@ -924,275 +1173,190 @@ export default function BillingPage() {
           margin: "0 auto",
         }}
       >
-        {data.plans.map((plan) => {
-          const isPro = plan.key === "PRO";
-          const config = isPro ? planConfigs.PRO : planConfigs.BASIC;
-          const discountedPrice = (
-            config.priceBase *
-            (1 - cycleDiscount[cycle])
-          ).toFixed(2);
-          const billedAmount =
-            cycle === "yearly"
-              ? (config.priceBase * 0.8 * 12).toFixed(2)
-              : config.priceBase.toFixed(2);
-
-          const isCurrentPlan = isActive && currentPlanKey.includes(plan.key);
-
-          return (
+        {availablePlans.map((plan) => (
+          <div
+            key={plan.id}
+            style={{
+              background: "#fff",
+              borderRadius: 16,
+              border: "1px solid #e1e3e5",
+              padding: 28,
+              width: "100%",
+              maxWidth: 420,
+              boxSizing: "border-box",
+              boxShadow: "0 2px 8px rgba(0,0,0,0.04)",
+            }}
+          >
             <div
-              key={plan.key}
               style={{
-                background: "#fff",
-                borderRadius: 16,
-                border: config.isPopular
-                  ? "2px solid #008060"
-                  : "1px solid #e1e3e5",
-                padding: 28,
-                width: "100%",
-                maxWidth: 420,
-                boxSizing: "border-box",
-                boxShadow: config.isPopular
-                  ? "0 10px 30px rgba(0,128,96,0.12)"
-                  : "0 2px 8px rgba(0,0,0,0.04)",
-                position: "relative",
-                display: "flex",
-                flexDirection: "column",
-                justifyContent: "space-between",
+                fontSize: 11,
+                fontWeight: 700,
+                color: "#616161",
+                marginBottom: 10,
+                textTransform: "uppercase",
               }}
             >
-              <div>
-                <div
-                  style={{
-                    display: "flex",
-                    gap: 8,
-                    marginBottom: 16,
-                    alignItems: "center",
-                  }}
-                >
-                  <span
-                    style={{
-                      background: config.badgeBg,
-                      color: "#fff",
-                      fontSize: 11,
-                      fontWeight: 700,
-                      padding: "3px 8px",
-                      borderRadius: 4,
-                    }}
-                  >
-                    {config.badge}
-                  </span>
-                  {config.isPopular && (
-                    <span
-                      style={{
-                        background: "#e4f8f0",
-                        color: "#008060",
-                        fontSize: 11,
-                        fontWeight: 700,
-                        padding: "3px 8px",
-                        borderRadius: 4,
-                      }}
-                    >
-                      Most Popular
-                    </span>
-                  )}
-                </div>
+              {plan.handle}
+            </div>
 
-                <h2
+            <h2
+              style={{
+                margin: "0 0 8px 0",
+                fontSize: 22,
+                fontWeight: 800,
+                color: "#1a1a1a",
+              }}
+            >
+              {plan.name}
+            </h2>
+
+            <p
+              style={{
+                margin: "0 0 20px 0",
+                fontSize: 13,
+                color: "#616161",
+                minHeight: 36,
+              }}
+            >
+              {plan.description}
+            </p>
+
+            <div style={{ marginBottom: 20 }}>
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "baseline",
+                  gap: 6,
+                }}
+              >
+                <span
                   style={{
-                    margin: "0 0 8px 0",
-                    fontSize: 22,
+                    fontSize: 36,
                     fontWeight: 800,
                     color: "#1a1a1a",
                   }}
                 >
-                  {plan.label}
-                </h2>
-                <p
-                  style={{
-                    margin: "0 0 20px 0",
-                    fontSize: 13,
-                    color: "#616161",
-                    minHeight: 36,
-                  }}
-                >
-                  {plan.description}
-                </p>
+                  {plan.currencyCode === "USD"
+                    ? "$"
+                    : plan.currencyCode}{" "}
+                  {plan.price.toFixed(2)}
+                </span>
+                <span style={{ fontSize: 13, color: "#616161" }}>
+                  {plan.interval === "ANNUAL"
+                    ? "/year"
+                    : "/30 days"}
+                </span>
+              </div>
 
-                <div style={{ marginBottom: 20 }}>
-                  <div
-                    style={{
-                      display: "flex",
-                      alignItems: "baseline",
-                      gap: 6,
-                    }}
-                  >
-                    <span
-                      style={{ fontSize: 36, fontWeight: 800, color: "#1a1a1a" }}
-                    >
-                      ${discountedPrice}
-                    </span>
-                    <span style={{ fontSize: 13, color: "#616161" }}>
-                      {cycleText[cycle]}
-                    </span>
-                  </div>
-                  <div
-                    style={{
-                      fontSize: 12,
-                      color: "#8c9196",
-                      textDecoration: "line-through",
-                      marginTop: 4,
-                    }}
-                  >
-                    Regular: {config.originalPrice}
-                  </div>
-                  {plan.trialDays > 0 && (
-                    <div
-                      style={{
-                        fontSize: 12,
-                        color: "#008060",
-                        fontWeight: 700,
-                        marginTop: 6,
-                      }}
-                    >
-                      {plan.trialDays}-day free trial
-                    </div>
-                  )}
-                  <div
-                    style={{
-                      fontSize: 12,
-                      color: "#616161",
-                      marginTop: 6,
-                    }}
-                  >
-                    {cycle === "yearly"
-                      ? "Billed $" + billedAmount + " annually"
-                      : "Billed $" + billedAmount + " monthly"}
-                  </div>
-                </div>
-
-                {/* Subscription Form */}
-                <subscribeFetcher.Form method="post" style={{ marginBottom: 24 }}>
-                  <input type="hidden" name="intent" value="subscribe" />
-                  <input type="hidden" name="planKey" value={plan.key} />
-                  <input type="hidden" name="cycle" value={cycle} />
-
-                  <button
-                    type="submit"
-                    disabled={isCurrentPlan || subscribeFetcher.state !== "idle"}
-                    style={{
-                      width: "100%",
-                      textAlign: "center",
-                      background: isCurrentPlan ? "#8c9196" : config.btnBg,
-                      color: "#fff",
-                      padding: "12px 20px",
-                      borderRadius: 10,
-                      fontWeight: 700,
-                      fontSize: 14,
-                      border: "none",
-                      cursor: isCurrentPlan ? "not-allowed" : "pointer",
-                      boxShadow: "0 2px 4px rgba(0,0,0,0.1)",
-                    }}
-                  >
-                    {isCurrentPlan
-                      ? "Your Current Plan"
-                      : subscribeFetcher.state !== "idle"
-                      ? "Redirecting..."
-                      : `Choose ${plan.label}`}
-                  </button>
-                </subscribeFetcher.Form>
-
+              {plan.trialDays > 0 && (
                 <div
                   style={{
-                    borderTop: "1px solid #f1f2f3",
-                    paddingTop: 20,
-                    fontSize: 13,
+                    fontSize: 12,
+                    color: "#008060",
+                    fontWeight: 700,
+                    marginTop: 6,
                   }}
                 >
-                  <div
-                    style={{
-                      fontWeight: 700,
-                      color: "#1a1a1a",
-                      marginBottom: 12,
-                    }}
-                  >
-                    Features Included:
-                  </div>
-                  <ul
-                    style={{
-                      listStyle: "none",
-                      padding: 0,
-                      margin: 0,
-                      display: "flex",
-                      flexDirection: "column",
-                      gap: 10,
-                    }}
-                  >
-                    {config.features.map((feat, idx) => (
-                      <li
-                        key={idx}
-                        style={{
-                          display: "flex",
-                          alignItems: "flex-start",
-                          gap: 8,
-                          color: "#4a4a4a",
-                        }}
-                      >
-                        <span style={{ color: "#008060", fontWeight: "bold" }}>
-                          ✓
-                        </span>
-                        <span>{feat}</span>
-                      </li>
-                    ))}
-                  </ul>
-
-                  {config.buildWith && (
-                    <div style={{ marginTop: 16 }}>
-                      <div
-                        style={{
-                          fontSize: 11,
-                          fontWeight: 700,
-                          color: "#8c9196",
-                          textTransform: "uppercase",
-                          marginBottom: 8,
-                        }}
-                      >
-                        Integrated Tech:
-                      </div>
-                      <ul
-                        style={{
-                          listStyle: "none",
-                          padding: 0,
-                          margin: 0,
-                          display: "flex",
-                          flexDirection: "column",
-                          gap: 8,
-                        }}
-                      >
-                        {config.buildWith.map((item, idx) => (
-                          <li
-                            key={idx}
-                            style={{
-                              display: "flex",
-                              alignItems: "center",
-                              gap: 8,
-                              color: "#303030",
-                            }}
-                          >
-                            <span style={{ color: "#5c6ac4" }}>⚡</span>
-                            <span>{item}</span>
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
+                  {plan.trialDays}-day free trial
                 </div>
-              </div>
+              )}
+
+              {plan.highlights.length > 0 && (
+                <div style={{ marginTop: 10, fontSize: 12, color: "#616161" }}>
+                  {plan.highlights.join(" • ")}
+                </div>
+              )}
             </div>
-          );
-        })}
+
+            <subscribeFetcher.Form
+              method="post"
+              style={{ marginBottom: 24 }}
+            >
+              <input type="hidden" name="intent" value="subscribe" />
+              <input type="hidden" name="planHandle" value={plan.handle} />
+
+              <button
+                type="submit"
+                disabled={
+                  plan.handle.toUpperCase() === currentPlanKey ||
+                  subscribeFetcher.state !== "idle"
+                }
+                style={{
+                  width: "100%",
+                  textAlign: "center",
+                  background:
+                    plan.handle.toUpperCase() === currentPlanKey
+                      ? "#8c9196"
+                      : "#008060",
+                  color: "#fff",
+                  padding: "12px 20px",
+                  borderRadius: 10,
+                  fontWeight: 700,
+                  fontSize: 14,
+                  border: "none",
+                  cursor:
+                    plan.handle.toUpperCase() === currentPlanKey
+                      ? "not-allowed"
+                      : "pointer",
+                }}
+              >
+                {plan.handle.toUpperCase() === currentPlanKey
+                  ? "Your Current Plan"
+                  : subscribeFetcher.state !== "idle"
+                    ? "Redirecting..."
+                    : `Choose ${plan.name}`}
+              </button>
+            </subscribeFetcher.Form>
+
+            <div
+              style={{
+                borderTop: "1px solid #f1f2f3",
+                paddingTop: 20,
+                fontSize: 13,
+              }}
+            >
+              <div
+                style={{
+                  fontWeight: 700,
+                  color: "#1a1a1a",
+                  marginBottom: 12,
+                }}
+              >
+                Features Included:
+              </div>
+
+              <ul
+                style={{
+                  listStyle: "none",
+                  padding: 0,
+                  margin: 0,
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 10,
+                }}
+              >
+                {plan.capabilityLabels.map((feature) => (
+                  <li
+                    key={feature}
+                    style={{
+                      display: "flex",
+                      alignItems: "flex-start",
+                      gap: 8,
+                      color: "#4a4a4a",
+                    }}
+                  >
+                    <span style={{ color: "#008060", fontWeight: "bold" }}>
+                      ✓
+                    </span>
+                    <span>{feature}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </div>
+        ))}
       </div>
 
-      {/* SECTION 5: CUSTOM PLAN — NEGOTIATED / SALES-ASSISTED */}
       <div
         style={{
           maxWidth: 960,
@@ -1281,11 +1445,18 @@ export default function BillingPage() {
                 <div
                   style={{
                     display: "grid",
-                    gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+                    gridTemplateColumns:
+                      "repeat(auto-fit, minmax(220px, 1fr))",
                     gap: 14,
                   }}
                 >
-                  <label style={{ fontSize: 12, fontWeight: 700, color: "#4a4a4a" }}>
+                  <label
+                    style={{
+                      fontSize: 12,
+                      fontWeight: 700,
+                      color: "#4a4a4a",
+                    }}
+                  >
                     Store
                     <input
                       value={data.shop}
@@ -1304,7 +1475,13 @@ export default function BillingPage() {
                     />
                   </label>
 
-                  <label style={{ fontSize: 12, fontWeight: 700, color: "#4a4a4a" }}>
+                  <label
+                    style={{
+                      fontSize: 12,
+                      fontWeight: 700,
+                      color: "#4a4a4a",
+                    }}
+                  >
                     Contact email
                     <input
                       name="email"
@@ -1327,11 +1504,18 @@ export default function BillingPage() {
                 <div
                   style={{
                     display: "grid",
-                    gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+                    gridTemplateColumns:
+                      "repeat(auto-fit, minmax(180px, 1fr))",
                     gap: 14,
                   }}
                 >
-                  <label style={{ fontSize: 12, fontWeight: 700, color: "#4a4a4a" }}>
+                  <label
+                    style={{
+                      fontSize: 12,
+                      fontWeight: 700,
+                      color: "#4a4a4a",
+                    }}
+                  >
                     Indexed products needed
                     <input
                       name="indexedProducts"
@@ -1350,7 +1534,13 @@ export default function BillingPage() {
                     />
                   </label>
 
-                  <label style={{ fontSize: 12, fontWeight: 700, color: "#4a4a4a" }}>
+                  <label
+                    style={{
+                      fontSize: 12,
+                      fontWeight: 700,
+                      color: "#4a4a4a",
+                    }}
+                  >
                     AI searches / month
                     <input
                       name="monthlySearches"
@@ -1369,7 +1559,13 @@ export default function BillingPage() {
                     />
                   </label>
 
-                  <label style={{ fontSize: 12, fontWeight: 700, color: "#4a4a4a" }}>
+                  <label
+                    style={{
+                      fontSize: 12,
+                      fontWeight: 700,
+                      color: "#4a4a4a",
+                    }}
+                  >
                     Vector updates / month
                     <input
                       name="vectorUpdates"
@@ -1389,7 +1585,13 @@ export default function BillingPage() {
                   </label>
                 </div>
 
-                <label style={{ fontSize: 12, fontWeight: 700, color: "#4a4a4a" }}>
+                <label
+                  style={{
+                    fontSize: 12,
+                    fontWeight: 700,
+                    color: "#4a4a4a",
+                  }}
+                >
                   Requirements / message
                   <textarea
                     name="message"
@@ -1489,12 +1691,26 @@ export default function BillingPage() {
               >
                 Waiting for offer
               </div>
-              <h3 style={{ margin: "0 0 8px 0", fontSize: 18, color: "#1a1a1a" }}>
+              <h3
+                style={{
+                  margin: "0 0 8px 0",
+                  fontSize: 18,
+                  color: "#1a1a1a",
+                }}
+              >
                 Your custom plan will appear here
               </h3>
-              <p style={{ margin: "0 0 16px 0", fontSize: 13, color: "#616161", lineHeight: 1.6 }}>
+              <p
+                style={{
+                  margin: "0 0 16px 0",
+                  fontSize: 13,
+                  color: "#616161",
+                  lineHeight: 1.6,
+                }}
+              >
                 After we agree on the requirements and price, the app can show
-                the agreed offer here together with a Shopify payment button.
+                the agreed offer here together with a Shopify payment
+                button.
               </p>
 
               <div
@@ -1516,7 +1732,6 @@ export default function BillingPage() {
         )}
       </div>
 
-      {/* SECTION 6: SHOPIFY BILLING DISCLAIMER */}
       <div
         style={{
           maxWidth: 960,
@@ -1530,10 +1745,14 @@ export default function BillingPage() {
           lineHeight: 1.6,
         }}
       >
-        <strong style={{ color: "#374151", display: "block", marginBottom: 6 }}>
+        <strong
+          style={{ color: "#374151", display: "block", marginBottom: 6 }}
+        >
           🔒 Secure Checkout via Shopify Billing API:
         </strong>
-        All app charges are billed directly through your monthly Shopify Invoice. You can upgrade, downgrade, or cancel your subscription at any time within Shopify Admin without hidden fees.
+        All app charges are billed directly through your monthly Shopify
+        Invoice. You can upgrade, downgrade, or cancel your subscription at
+        any time within Shopify Admin without hidden fees.
       </div>
     </div>
   );
