@@ -41,27 +41,6 @@ const shopify = shopifyApp({
       session,
     }) => {
       /*
-       * WEBHOOK DIAGNOSTIC:
-       * app/uninstalled is app-specific and is managed from shopify.app.toml.
-       * Admin API webhookSubscriptions does not expose config-managed
-       * app-specific subscriptions, so log the exact callback URL that this
-       * dev process expects Shopify to use. Diagnostic-only.
-       */
-      const configuredAppUrl = process.env.SHOPIFY_APP_URL || "";
-      const uninstallWebhookUrl = configuredAppUrl
-        ? new URL("/webhooks/app/uninstalled", configuredAppUrl).toString()
-        : null;
-
-      console.log("[WEBHOOK DIAGNOSTIC] app-specific subscription", {
-        shop: session.shop,
-        appUrl: configuredAppUrl || null,
-        uninstallWebhookUrl,
-        topic: "app/uninstalled",
-        configFile: "shopify.app.toml",
-        configManaged: true,
-      });
-
-      /*
        * Theme Map V4 initial bootstrap.
        *
        * Không chạy trong storefront search.
