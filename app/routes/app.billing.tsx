@@ -158,46 +158,6 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
 export const action = async ({ request }: ActionFunctionArgs) => {
   const debugId = crypto.randomUUID().slice(0, 8);
-  console.log("[BILLING DEBUG] action:start", { debugId, method: request.method, url: request.url });
-  const { admin, session } = await authenticate.admin(request);
-  const form = await request.formData();
-  const intent = String(form.get("intent") || "");
-  console.log("[BILLING DEBUG] action:authenticated", { debugId, shop: session.shop, intent });
-
-  if (intent === "refresh") {
-    try {
-      const result = await refreshShopifyAppPricingSubscription({
-        shop: session.shop,
-        admin,
-      });
-
-      const reconciliation = await reconcileShopCommercialState({
-        shop: session.shop,
-        forceCatalogRefresh: result.changed,
-      });
-
-      return {
-        success: true,
-        message: result.configured
-          ? `Billing synced: ${result.subscription.plan} / ${result.subscription.status}. Reconcile: pruned ${reconciliation.pruned}, recovered ${reconciliation.recovered}.`
-          : "Partner API not configured; using local/dev subscription state.",
-      };
-    } catch (error) {
-      return {
-        success: false,
-        message: error instanceof Error ? error.message : String(error),
-      };
-    }
-  }
-
-  if (intent === "cancelRenewal") {
-    try {
-      console.log("[BILLING DEBUG] cancel:start", { debugId, shop: session.shop });
-      const snapshot = await getSubscriptionSnapshot(session.shop, { ensure: false });
-      console.log("[BILLING DEBUG] cancel:snapshot", {
-        debugId, shop: session.shop, plan: snapshot.plan, planHandle: snapshot.planHandle,
-        status: snapshot.stexport const action = async ({ request }: ActionFunctionArgs) => {
-  const debugId = crypto.randomUUID().slice(0, 8);
   console.log("[BILLING DEBUG] action:start", {
     debugId,
     method: request.method,
