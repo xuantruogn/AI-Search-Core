@@ -45,9 +45,10 @@ export default function DevSearchHistoryRoute() {
           <Link to="/dev#overview"><span>01</span>Overview</Link>
           <Link to="/dev#shops"><span>02</span>Shops</Link>
           <Link className="is-active" to="/dev/search-history"><span>03</span>Search History</Link>
-          <Link to="/dev#plans"><span>04</span>Plans & Revenue</Link>
-          <Link to="/dev#usage"><span>05</span>Usage & Cost</Link>
-          <Link to="/dev#audit"><span>06</span>Audit</Link>
+          <Link to="/dev/plan-configuration"><span>04</span>Plan Configuration</Link>
+          <Link to="/dev#plans"><span>05</span>Revenue</Link>
+          <Link to="/dev#usage"><span>06</span>Usage & Cost</Link>
+          <Link to="/dev#audit"><span>07</span>Audit</Link>
         </nav>
 
         <div className="dc-sidebar-meta">

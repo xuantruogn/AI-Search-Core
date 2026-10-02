@@ -34,6 +34,8 @@ export async function getShopEntitlement(
       getIndexedProductStats(shop),
     ]);
 
+  const features = subscription.features;
+
   const {
     indexedProducts,
     productSlotsUsed,
@@ -105,6 +107,8 @@ export async function getShopEntitlement(
     disabledReason = "SUBSCRIPTION_INACTIVE";
   } else if (!settings.aiSearchEnabled) {
     disabledReason = "AI_SEARCH_DISABLED_BY_MERCHANT";
+  } else if (!features.capabilities.semanticSearch) {
+    disabledReason = "PLAN_SEMANTIC_SEARCH_DISABLED";
   } else if (productLimitExceeded) {
     disabledReason = "PRODUCT_LIMIT_RECONCILIATION_REQUIRED";
   } else if (
@@ -124,7 +128,10 @@ export async function getShopEntitlement(
     disabledReason = "SEARCH_QUOTA_EXCEEDED";
   }
 
-  const active = subscriptionActive && settings.aiSearchEnabled;
+  const active =
+    subscriptionActive &&
+    settings.aiSearchEnabled &&
+    features.capabilities.semanticSearch;
 
   return {
     shop,
@@ -135,6 +142,7 @@ export async function getShopEntitlement(
     active,
     aiSearchEnabled: settings.aiSearchEnabled,
     fallbackEnabled: settings.fallbackEnabled,
+    features,
     limits,
     usage,
     indexedProducts,

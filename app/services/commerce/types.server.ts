@@ -10,12 +10,14 @@ import type {
   BillingRefundStatus,
   BillingTrialStatus,
 } from "./billing-state.server";
+import type { PlanFeatureConfig } from "./plan-catalog.server";
 
 export type SubscriptionSnapshot = {
   shop: string;
   plan: AiSearchPlan;
   planId: string | null;
   planLabel: string;
+  features: PlanFeatureConfig;
   limits: PlanLimits;
   status: string;
   planHandle: string | null;
@@ -77,6 +79,7 @@ export type EntitlementSnapshot = {
   active: boolean;
   aiSearchEnabled: boolean;
   fallbackEnabled: boolean;
+  features: PlanFeatureConfig;
   limits: PlanLimits;
   usage: UsageSnapshot;
   indexedProducts: number;

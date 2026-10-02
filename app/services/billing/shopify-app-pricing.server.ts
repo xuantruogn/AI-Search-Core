@@ -154,12 +154,13 @@ function inferPlan({
   const preferred = preferredPlanHandle?.trim();
   if (preferred) {
     const preferredPlan = planFromHandle(preferred);
-    if (preferredPlan !== AI_SEARCH_PLAN.none) {
-      return {
-        plan: preferredPlan,
-        planHandle: preferred,
-      };
-    }
+    return {
+      plan:
+        preferredPlan === AI_SEARCH_PLAN.none
+          ? AI_SEARCH_PLAN.custom
+          : preferredPlan,
+      planHandle: preferred,
+    };
   }
 
   return {
@@ -167,7 +168,7 @@ function inferPlan({
       itemHandles.length > 0
         ? AI_SEARCH_PLAN.custom
         : AI_SEARCH_PLAN.none,
-    planHandle: itemHandles[0] ?? preferred ?? null,
+    planHandle: itemHandles[0] ?? null,
   };
 }
 
@@ -449,12 +450,12 @@ async function reconcileManualShopifySubscription({
           ? planFromHandle(authoritativeHandle)
           : AI_SEARCH_PLAN.none;
 
-        if (
-          authoritativeHandle &&
-          authoritativePlan !== AI_SEARCH_PLAN.none
-        ) {
+        if (authoritativeHandle) {
           inferred = {
-            plan: authoritativePlan,
+            plan:
+              authoritativePlan === AI_SEARCH_PLAN.none
+                ? AI_SEARCH_PLAN.custom
+                : authoritativePlan,
             planHandle: authoritativeHandle,
           };
         } else if (exactPointerPlanHandle) {
@@ -463,23 +464,19 @@ async function reconcileManualShopifySubscription({
           // This prevents a stale/wrong row from locking a new BASIC GID to
           // the previous PRO plan (or vice versa).
           const pointerPlan = planFromHandle(exactPointerPlanHandle);
-          if (pointerPlan !== AI_SEARCH_PLAN.none) {
-            inferred = {
-              plan: pointerPlan,
-              planHandle: exactPointerPlanHandle,
-            };
-          } else {
-            inferred = inferPlan({
-              preferredPlanHandle: planMappingHint,
-              itemHandles,
-            });
-          }
-        } else if (
-          persistedPlanHandle &&
-          persistedPlan !== AI_SEARCH_PLAN.none
-        ) {
           inferred = {
-            plan: persistedPlan,
+            plan:
+              pointerPlan === AI_SEARCH_PLAN.none
+                ? AI_SEARCH_PLAN.custom
+                : pointerPlan,
+            planHandle: exactPointerPlanHandle,
+          };
+        } else if (persistedPlanHandle) {
+          inferred = {
+            plan:
+              persistedPlan === AI_SEARCH_PLAN.none
+                ? AI_SEARCH_PLAN.custom
+                : persistedPlan,
             planHandle: persistedPlanHandle.toLowerCase(),
           };
         } else {

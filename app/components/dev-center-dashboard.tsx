@@ -17,7 +17,17 @@ function hasDevPermission(role: DevRole, permission: UiWritePermission) {
 type Feedback = { ok: boolean; message: string } | undefined;
 type Shop = DevDashboardData["shops"][number];
 type Grant = DevDashboardData["supportGrants"][number];
+type PlanCatalogItem = DevDashboardData["planCatalog"][number];
 type Tone = "success" | "warning" | "danger" | "neutral" | "primary";
+
+const PLAN_CAPABILITIES = [
+  ["semanticSearch", "Semantic search"],
+  ["multilingualSearch", "Multilingual query translation"],
+  ["searchAnalytics", "Search analytics"],
+  ["themeIntegration", "Theme Map integration"],
+  ["selfRendering", "Self-rendering storefront mode"],
+  ["customDataMode", "Custom data mode"],
+] as const;
 
 export function DevCenterDashboard({
   data,
@@ -65,9 +75,10 @@ export function DevCenterDashboard({
           <NavItem href="#overview" label="Overview" icon="01" />
           <NavItem href="#shops" label="Shops" icon="02" />
           <Link to="/dev/search-history"><span>03</span>Search History</Link>
-          <NavItem href="#plans" label="Plans & Revenue" icon="04" />
-          <NavItem href="#usage" label="Usage & Cost" icon="05" />
-          <NavItem href="#audit" label="Audit" icon="06" />
+          <Link to="/dev/plan-configuration"><span>04</span>Plan Configuration</Link>
+          <NavItem href="#plans" label="Revenue" icon="05" />
+          <NavItem href="#usage" label="Usage & Cost" icon="06" />
+          <NavItem href="#audit" label="Audit" icon="07" />
         </nav>
 
         <div className="dc-sidebar-meta">
@@ -199,11 +210,10 @@ export function DevCenterDashboard({
         </section>
 
 
-
         <section id="plans" className="dc-section">
           <SectionHeader
             eyebrow="Commercial"
-            title="Plans & revenue"
+            title="Revenue"
             note="Subscription MRR is run-rate from ACTIVE BillingSubscription.priceSnapshot values, not Shopify payout or cash received."
           />
           <div className="dc-two-column">
@@ -305,6 +315,176 @@ export function DevCenterDashboard({
   );
 }
 
+export function PlanCatalogEditor({ plans, csrfToken, canWrite, busy }: {
+  plans: PlanCatalogItem[];
+  csrfToken: string;
+  canWrite: boolean;
+  busy: boolean;
+}) {
+  return (
+    <div className="dc-panel" style={{ marginTop: 18 }}>
+      <div className="dc-panel-head">
+        <div>
+          <strong>Plan configuration</strong>
+          <small>Create plans and control price, capacity and included capabilities.</small>
+        </div>
+        <StatusBadge tone="neutral">{plans.length} plans</StatusBadge>
+      </div>
+      <div className="dc-info-note">
+        Quota and capability edits change entitlement for current subscribers immediately. Price changes are used for new purchases or plan changes; an already-active Shopify subscription keeps its recorded price snapshot until Shopify replaces it.
+      </div>
+
+      {canWrite ? (
+        <details className="dc-advanced" open>
+          <summary>Create new plan</summary>
+          <PlanEditorForm csrfToken={csrfToken} busy={busy} />
+        </details>
+      ) : <ReadOnly />}
+
+      <div style={{ display: "grid", gap: 12, marginTop: 14 }}>
+        {plans.map((plan) => (
+          <details className="dc-advanced" key={plan.id}>
+            <summary>
+              {plan.name} · {formatMoney(plan.price, plan.currencyCode)}
+              {plan.interval === "ANNUAL" ? " / year" : " / month"} · {plan.isActive ? "Active" : "Inactive"}
+            </summary>
+            <div className="dc-detail-grid" style={{ marginBottom: 12 }}>
+              <Stat label="Handle" value={plan.handle} />
+              <Stat label="Visibility" value={plan.visibility} />
+              <Stat label="Active subscriptions" value={number(plan.subscriptions.active)} />
+              <Stat label="Version" value={String(plan.version)} />
+            </div>
+            {canWrite ? (
+              <PlanEditorForm plan={plan} csrfToken={csrfToken} busy={busy} />
+            ) : (
+              <div className="dc-stat-list">
+                <Stat label="Products" value={planLimit(plan.limits.productLimit)} />
+                <Stat label="Searches / month" value={planLimit(plan.limits.searchLimit)} />
+                <Stat label="Vector updates / month" value={planLimit(plan.limits.vectorUpdateLimit)} />
+              </div>
+            )}
+          </details>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function PlanEditorForm({ plan, csrfToken, busy }: {
+  plan?: PlanCatalogItem;
+  csrfToken: string;
+  busy: boolean;
+}) {
+  const isNew = !plan;
+  return (
+    <Form method="post" className="dc-form-card" style={{ marginTop: 12 }}>
+      <input type="hidden" name="_csrf" value={csrfToken} />
+      <input type="hidden" name="intent" value={isNew ? "create_plan" : "update_plan"} />
+      {plan ? <input type="hidden" name="planId" value={plan.id} /> : null}
+
+      <div className="dc-form-grid-3">
+        <Field label="Plan name">
+          <input name="planName" required defaultValue={plan?.name ?? ""} placeholder="Growth" />
+        </Field>
+        <Field label="Handle">
+          <input name="planHandle" required readOnly={!isNew} defaultValue={plan?.handle ?? ""} placeholder="growth" />
+        </Field>
+        <Field label="Sort order">
+          <input name="planSortOrder" type="number" defaultValue={plan?.sortOrder ?? 30} />
+        </Field>
+      </div>
+
+      <Field label="Description">
+        <textarea name="planDescription" rows={2} defaultValue={plan?.features.description ?? ""} placeholder="Who this plan is for and its main value." />
+      </Field>
+
+      <div className="dc-form-grid-3">
+        <Field label="Price">
+          <input name="planPrice" type="number" min="0" step="0.01" required defaultValue={plan?.price ?? 0} />
+        </Field>
+        <Field label="Currency">
+          <input name="planCurrency" maxLength={3} required defaultValue={plan?.currencyCode ?? "USD"} />
+        </Field>
+        <Field label="Billing interval">
+          <select name="planInterval" defaultValue={plan?.interval ?? "EVERY_30_DAYS"}>
+            <option value="EVERY_30_DAYS">Every 30 days</option>
+            <option value="ANNUAL">Annual</option>
+          </select>
+        </Field>
+        <Field label="Trial days">
+          <input name="planTrialDays" type="number" min="0" max="365" defaultValue={plan?.trialDays ?? 0} />
+        </Field>
+        <Field label="Visibility">
+          <select name="planVisibility" defaultValue={plan?.visibility ?? "PUBLIC"}>
+            <option value="PUBLIC">Public</option>
+            <option value="PRIVATE">Private</option>
+            <option value="INTERNAL">Internal</option>
+          </select>
+        </Field>
+        <Field label="Billing mode">
+          <select name="planBillingMode" defaultValue={plan?.billingMode ?? "MANUAL_BILLING"}>
+            <option value="MANUAL_BILLING">Shopify Billing API</option>
+            <option value="SHOPIFY_APP_PRICING">Shopify managed pricing</option>
+          </select>
+        </Field>
+      </div>
+
+      <div className="dc-form-grid-3">
+        <Field label="Indexed products">
+          <input name="planProductLimit" type="number" min="0" defaultValue={plan?.limits.productLimit ?? ""} placeholder="Blank = unlimited" />
+        </Field>
+        <Field label="Searches / month">
+          <input name="planSearchLimit" type="number" min="0" defaultValue={plan?.limits.searchLimit ?? ""} placeholder="Blank = unlimited" />
+        </Field>
+        <Field label="Vector updates / month">
+          <input name="planVectorLimit" type="number" min="0" defaultValue={plan?.limits.vectorUpdateLimit ?? ""} placeholder="Blank = unlimited" />
+        </Field>
+      </div>
+
+      <div>
+        <strong style={{ display: "block", fontSize: 13, marginBottom: 8 }}>Included capabilities</strong>
+        <div className="dc-form-grid-3">
+          {PLAN_CAPABILITIES.map(([key, label]) => (
+            <label key={key} style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 13 }}>
+              <input
+                type="checkbox"
+                name="planCapability"
+                value={key}
+                defaultChecked={plan ? plan.features.capabilities[key] : key !== "customDataMode"}
+              />
+              {label}
+            </label>
+          ))}
+        </div>
+      </div>
+
+      <Field label="Merchant-facing highlights (one per line)">
+        <textarea name="planHighlights" rows={4} defaultValue={plan?.features.highlights.join("\n") ?? ""} placeholder={"Priority indexing\nAdvanced analytics\nEmail support"} />
+      </Field>
+
+      <div style={{ display: "flex", gap: 20, flexWrap: "wrap" }}>
+        <label style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 13 }}>
+          <input type="checkbox" name="planUsageBillingEnabled" defaultChecked={plan?.usageBillingEnabled ?? false} /> Usage billing enabled
+        </label>
+        <label style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 13 }}>
+          <input type="checkbox" name="planIsActive" defaultChecked={plan?.isActive ?? true} /> Active / purchasable
+        </label>
+      </div>
+
+      <Field label="Change reason">
+        <input name="reason" required placeholder={isNew ? "Why this plan is being created" : "Why these terms are changing"} />
+      </Field>
+      <button className="dc-button dc-button-primary" disabled={busy} type="submit">
+        {busy ? "Saving..." : isNew ? "Create plan" : "Save plan"}
+      </button>
+    </Form>
+  );
+}
+
+function planLimit(value: number | null) {
+  return value === null ? "Unlimited" : number(value);
+}
+
 function ShopDrawer({ shop, grants, csrfToken, query, canQuotaWrite, canPlanWrite, canSystemWrite, busy }: {
   shop: Shop;
   grants: Grant[];
@@ -342,7 +522,7 @@ function ShopDrawer({ shop, grants, csrfToken, query, canQuotaWrite, canPlanWrit
             </div>
             {shop.commercial.customTerms ? (
               <div className="dc-commercial-compare">
-                <div><small>Configured Custom terms</small><strong>{shop.commercial.customTerms.price === null ? "—" : `${formatMoney(shop.commercial.customTerms.price, shop.commercial.customTerms.currency)} / month`}</strong></div>
+                <div><small>Configured Custom terms</small><strong>{shop.commercial.customTerms.price === null ? "—" : `${formatMoney(shop.commercial.customTerms.price, shop.commercial.customTerms.currency)}${shop.commercial.customTerms.interval === "ANNUAL" ? " / year" : " / month"}`}</strong></div>
                 <div><small>Shopify subscription</small><strong>{shop.commercial.activePaid ? "Active" : "Not active"}</strong></div>
                 {shop.commercial.customTerms.pendingCommercialChange ? <StatusBadge tone="warning">Pending commercial change</StatusBadge> : null}
               </div>
@@ -379,18 +559,90 @@ function ShopDrawer({ shop, grants, csrfToken, query, canQuotaWrite, canPlanWrit
           </DrawerSection>
 
           <DrawerSection title="Custom plan">
-            <p className="dc-section-copy">Configure proposed terms. Saving does not activate billing or change MRR.</p>
+            <p className="dc-section-copy">
+              Shop-specific plan. Once saved, these terms remain attached to this shop and the Custom plan is shown only in this shop&apos;s Billing page.
+            </p>
             {canPlanWrite ? (
               <Form method="post" className="dc-form-card">
                 <MutationFields csrfToken={csrfToken} intent="set_custom_plan" shop={shop.shop} />
+
                 <div className="dc-form-grid-2">
-                  <Field label="Price (USD / month)"><input name="customPrice" type="number" min="0.01" step="0.01" defaultValue={shop.customConfig?.price ?? ""} required /></Field>
-                  <Field label="Product limit"><input name="customProductLimit" type="number" min="0" defaultValue={shop.customConfig?.productLimit ?? ""} required /></Field>
-                  <Field label="Monthly searches"><input name="customSearchLimit" type="number" min="0" defaultValue={shop.customConfig?.searchLimit ?? ""} required /></Field>
-                  <Field label="Monthly vector updates"><input name="customVectorUpdateLimit" type="number" min="0" defaultValue={shop.customConfig?.vectorUpdateLimit ?? ""} required /></Field>
+                  <Field label="Plan name">
+                    <input name="customName" required defaultValue={shop.customConfig?.name ?? "Custom"} />
+                  </Field>
+                  <Field label="Price">
+                    <input name="customPrice" type="number" min="0.01" step="0.01" defaultValue={shop.customConfig?.price ?? ""} required />
+                  </Field>
+                  <Field label="Currency">
+                    <input name="customCurrency" maxLength={3} required defaultValue={shop.customConfig?.currencyCode ?? "USD"} />
+                  </Field>
+                  <Field label="Billing interval">
+                    <select name="customInterval" defaultValue={shop.customConfig?.interval ?? "EVERY_30_DAYS"}>
+                      <option value="EVERY_30_DAYS">Every 30 days</option>
+                      <option value="ANNUAL">Annual</option>
+                    </select>
+                  </Field>
+                  <Field label="Trial days">
+                    <input name="customTrialDays" type="number" min="0" max="365" defaultValue={shop.customConfig?.trialDays ?? 0} />
+                  </Field>
+                  <Field label="Product limit">
+                    <input name="customProductLimit" type="number" min="0" defaultValue={shop.customConfig?.productLimit ?? ""} placeholder="Blank = unlimited" />
+                  </Field>
+                  <Field label="Monthly searches">
+                    <input name="customSearchLimit" type="number" min="0" defaultValue={shop.customConfig?.searchLimit ?? ""} placeholder="Blank = unlimited" />
+                  </Field>
+                  <Field label="Monthly vector updates">
+                    <input name="customVectorUpdateLimit" type="number" min="0" defaultValue={shop.customConfig?.vectorUpdateLimit ?? ""} placeholder="Blank = unlimited" />
+                  </Field>
                 </div>
-                <Field label="Agreement note / reason"><input name="reason" required /></Field>
-                <button className="dc-button dc-button-primary" disabled={busy} type="submit">Save proposed terms</button>
+
+                <Field label="Merchant-facing description">
+                  <textarea name="customDescription" rows={2} defaultValue={shop.customConfig?.features.description ?? ""} />
+                </Field>
+
+                <div>
+                  <strong style={{ display: "block", fontSize: 13, marginBottom: 8 }}>Included capabilities</strong>
+                  <div className="dc-form-grid-2">
+                    {PLAN_CAPABILITIES.map(([key, label]) => (
+                      <label key={key} style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 13 }}>
+                        <input
+                          type="checkbox"
+                          name="customCapability"
+                          value={key}
+                          defaultChecked={shop.customConfig
+                            ? shop.customConfig.features.capabilities[key]
+                            : key !== "customDataMode"}
+                        />
+                        {label}
+                      </label>
+                    ))}
+                  </div>
+                </div>
+
+                <Field label="Merchant-facing highlights (one per line)">
+                  <textarea
+                    name="customHighlights"
+                    rows={4}
+                    defaultValue={shop.customConfig?.features.highlights.join("\n") ?? ""}
+                    placeholder={"Priority indexing\nAdvanced analytics\nDedicated support"}
+                  />
+                </Field>
+
+                <label style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 13 }}>
+                  <input
+                    type="checkbox"
+                    name="customUsageBillingEnabled"
+                    defaultChecked={shop.customConfig?.usageBillingEnabled ?? false}
+                  />
+                  Usage billing enabled
+                </label>
+
+                <Field label="Agreement note / reason">
+                  <input name="reason" required defaultValue={shop.customConfig?.notes ?? ""} />
+                </Field>
+                <button className="dc-button dc-button-primary" disabled={busy} type="submit">
+                  {busy ? "Saving..." : shop.customConfig ? "Update Custom plan" : "Create Custom plan for this shop"}
+                </button>
               </Form>
             ) : <ReadOnly />}
           </DrawerSection>
@@ -477,7 +729,7 @@ function BusinessAudit({ event }: { event: DevDashboardData["recentAudit"][numbe
 
 function lifecycleTone(status: string): Tone { return status === "ACTIVE" ? "success" : /FROZEN|SUSPEND/.test(status) ? "warning" : /UNINSTALL|INACTIVE/.test(status) ? "danger" : "neutral"; }
 function subscriptionTone(status: string): Tone { return status === "ACTIVE" ? "success" : status === "FROZEN" || status === "PENDING" ? "warning" : "neutral"; }
-function commercialPrice(shop: Shop) { if (shop.commercial.priceSnapshot !== null) return `${formatMoney(shop.commercial.priceSnapshot, shop.commercial.currency ?? "USD")}${shop.commercial.interval === "ANNUAL" ? " / year" : " / month"}`; if (shop.commercial.customTerms?.price) return `Configured ${formatMoney(shop.commercial.customTerms.price, "USD")} / month · not billed`; return "No active billed price"; }
+function commercialPrice(shop: Shop) { if (shop.commercial.priceSnapshot !== null) return `${formatMoney(shop.commercial.priceSnapshot, shop.commercial.currency ?? "USD")}${shop.commercial.interval === "ANNUAL" ? " / year" : " / month"}`; if (shop.commercial.customTerms?.price) return `Configured ${formatMoney(shop.commercial.customTerms.price, shop.commercial.customTerms.currency)}${shop.commercial.customTerms.interval === "ANNUAL" ? " / year" : " / month"} · not billed`; return "No active billed price"; }
 function manageUrl(query: string, shop: string) { const params = new URLSearchParams(); if (query) params.set("q", query); params.set("manage", shop); return `/dev?${params.toString()}#shops`; }
 function closeManageUrl(query: string) { return query ? `/dev?q=${encodeURIComponent(query)}#shops` : "/dev#shops"; }
 function quotaText(used: number, limit: number | null) { return `${number(used)} / ${limit === null ? "Unlimited" : number(limit)}`; }

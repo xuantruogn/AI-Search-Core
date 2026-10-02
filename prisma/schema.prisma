@@ -200,16 +200,23 @@ model PlanAssignment {
   shopRecord AiSearchShop @relation(fields: [shop], references: [shop], onDelete: Cascade)
   plan       Plan         @relation(fields: [planId], references: [id], onDelete: Cascade)
 
-  customPriceOverride           Decimal? @db.Decimal(10, 2)
+  customName                    String?          @db.VarChar(191)
+  customPriceOverride           Decimal?         @db.Decimal(10, 2)
+  customCurrencyCode            String?          @db.VarChar(10)
+  customInterval                BillingInterval?
+  customTrialDays               Int?
   customMaxIndexedProducts      Int?
   customMaxMonthlySearches      Int?
   customMaxMonthlyVectorUpdates Int?
-  notes                         String?  @db.Text
+  customUsageBillingEnabled     Boolean?
+  customFeatureFlags            Json?
+  notes                         String?          @db.Text
 
   startsAt  DateTime? // NULL until an assignment actually starts
   endsAt    DateTime?
   isActive  Boolean? // NULL means not yet established/imported
   createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
 
   @@unique([shop, planId])
   @@index([shop, isActive])

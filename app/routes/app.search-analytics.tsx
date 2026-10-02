@@ -4,6 +4,7 @@ import { useLoaderData, useSubmit, useNavigation } from "react-router";
 
 import prisma from "../db.server";
 import { authenticate } from "../shopify.server";
+import { getShopEntitlement } from "../services/commerce/entitlement.server";
 import {
   classifyAbnormalSearchClass,
   hasReasonableProductSemanticFacets,
@@ -249,15 +250,29 @@ async function getShopAnalyticsData(shop: string, requestedDays: number = 30) {
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   try {
     const { session } = await authenticate.admin(request);
+    const entitlement = await getShopEntitlement(session.shop);
+    if (!entitlement.features.capabilities.searchAnalytics) {
+      return {
+        featureDisabled: true as const,
+        days: 30,
+        kpis: { totalSearches: 0, overallCTR: "0.0%", abnormalSearches: 0, abnormalRate: "0.0%" },
+        chartData: [],
+        tableRows: [],
+      };
+    }
     const url = new URL(request.url);
     const requestedDays = Number.parseInt(url.searchParams.get("days") || "30", 10);
     const days = Number.isSafeInteger(requestedDays)
       ? Math.max(1, Math.min(requestedDays, 365))
       : 30;
 
-    return await getShopAnalyticsData(session.shop, days);
+    return {
+      ...(await getShopAnalyticsData(session.shop, days)),
+      featureDisabled: false as const,
+    };
   } catch (error) {
     return {
+      featureDisabled: false as const,
       days: 30,
       kpis: { totalSearches: 0, overallCTR: "0.0%", abnormalSearches: 0, abnormalRate: "0.0%" },
       chartData: [],
@@ -390,6 +405,19 @@ export default function SearchAnalyticsPage() {
   });
 
   const visibleTableRows = filteredRows.slice(0, tableVisibleCount);
+
+  if (loaderData.featureDisabled) {
+    return (
+      <div style={{ padding: 24 }}>
+        <div style={{ maxWidth: 760, padding: 24, background: "#fff", border: "1px solid #e1e3e5", borderRadius: 12 }}>
+          <h2 style={{ marginTop: 0 }}>Search Analytics</h2>
+          <p style={{ marginBottom: 0, color: "#616161" }}>
+            Search Analytics is not included in the current plan.
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div style={{ width: "100%", padding: "0 24px 40px 24px", boxSizing: "border-box", fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif", opacity: isLoading ? 0.6 : 1, transition: "opacity 0.2s" }}>

@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useEffect } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { useFetcher, useLoaderData } from "react-router";
 import db from "../db.server";
@@ -10,11 +10,28 @@ import {
   reconcileShopifySubscriptionFromAdmin,
 } from "../services/billing/shopify-app-pricing.server";
 
-import { PLAN_DEFINITIONS } from "../services/commerce/plans.server";
 import { getShopEntitlement } from "../services/commerce/entitlement.server";
 import { getSubscriptionSnapshot } from "../services/commerce/shop-registry.server";
 import { reconcileShopCommercialState } from "../services/commerce/reconciliation.server";
 import { setBillingPlanChangeState } from "../services/commerce/billing-state.server";
+import {
+  getShopCustomPlanAssignment,
+  parsePlanFeatureFlags,
+  PLAN_CAPABILITY_DEFINITIONS,
+  resolveShopCustomPlanTerms,
+} from "../services/commerce/plan-catalog.server";
+
+function planPresentation(value: unknown) {
+  const features = parsePlanFeatureFlags(value);
+  const capabilityLabels = PLAN_CAPABILITY_DEFINITIONS
+    .filter(({ key }) => features.capabilities[key])
+    .map(({ label }) => label);
+  return {
+    description: features.description,
+    highlights: features.highlights,
+    capabilityLabels,
+  };
+}
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const debugId = crypto.randomUUID().slice(0, 8);
@@ -25,9 +42,29 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const entitlement = await getShopEntitlement(session.shop);
   const subscription = await getSubscriptionSnapshot(session.shop, { ensure: false });
   const billingPlans = await db.plan.findMany({
-    where: { handle: { in: ["basic", "pro"] } },
-    select: { handle: true, trialDays: true },
+    where: {
+      isActive: true,
+      visibility: "PUBLIC",
+      billingMode: "MANUAL_BILLING",
+      handle: { not: "custom" },
+    },
+    orderBy: [{ sortOrder: "asc" }, { name: "asc" }],
+    select: {
+      id: true,
+      handle: true,
+      name: true,
+      price: true,
+      currencyCode: true,
+      interval: true,
+      trialDays: true,
+      maxIndexedProducts: true,
+      maxMonthlySearches: true,
+      maxMonthlyVectorUpdates: true,
+      featureFlags: true,
+    },
   });
+  const customAssignment = await getShopCustomPlanAssignment(session.shop);
+  const customTerms = resolveShopCustomPlanTerms(customAssignment);
 
   let daysRemaining: number | null = null;
   let formattedPeriodEnd: string | null = null;
@@ -57,12 +94,49 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     },
     pricingUrl: getShopifyPricingPlansUrl(session.shop),
     partnerApiConfigured: isShopifyAppPricingConfigured(),
-    plans: [PLAN_DEFINITIONS.BASIC, PLAN_DEFINITIONS.PRO].map((plan) => ({
-      ...plan,
-      trialDays:
-        billingPlans.find((billingPlan) => billingPlan.handle === plan.key.toLowerCase())
-          ?.trialDays ?? 0,
-    })),
+    plans: billingPlans.map((plan) => {
+      const presentation = planPresentation(plan.featureFlags);
+      return {
+        id: plan.id,
+        handle: plan.handle,
+        name: plan.name,
+        price: Number(plan.price),
+        currencyCode: plan.currencyCode,
+        interval: plan.interval,
+        trialDays: plan.trialDays,
+        description: presentation.description,
+        highlights: presentation.highlights,
+        capabilityLabels: presentation.capabilityLabels,
+        limits: {
+          productLimit: plan.maxIndexedProducts,
+          searchLimit: plan.maxMonthlySearches,
+          vectorUpdateLimit: plan.maxMonthlyVectorUpdates,
+        },
+      };
+    }),
+    customPlan:
+      customTerms && customTerms.price !== null
+        ? {
+            id: customTerms.planId,
+            handle: customTerms.handle,
+            name: customTerms.name,
+            price: customTerms.price,
+            currencyCode: customTerms.currencyCode,
+            interval: customTerms.interval,
+            trialDays: customTerms.trialDays,
+            description: customTerms.features.description,
+            highlights: customTerms.features.highlights,
+            capabilityLabels: PLAN_CAPABILITY_DEFINITIONS
+              .filter(
+                ({ key }) =>
+                  customTerms.features.capabilities[key],
+              )
+              .map(({ label }) => label),
+            limits: customTerms.limits,
+            usageBillingEnabled:
+              customTerms.usageBillingEnabled,
+          }
+        : null,
   };
 };
 
@@ -233,8 +307,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   }
 
   if (intent === "subscribe") {
-    const planKey = String(form.get("planKey") || "");
-    const cycle = String(form.get("cycle") || "monthly");
+    const planHandle = String(form.get("planHandle") || "").trim().toLowerCase();
 
     const requestedReplacementBehavior =
       String(form.get("replacementBehavior") || "APPLY_IMMEDIATELY");
@@ -245,11 +318,37 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           ? "STANDARD"
           : "APPLY_IMMEDIATELY";
 
-    const baseMonthlyPrice = planKey === "PRO" ? 29.9 : 9.9;
-    const billingPlan = await db.plan.findUnique({
-      where: { handle: planKey.toLowerCase() },
-      select: { trialDays: true },
-    });
+    const customAssignment =
+      planHandle === "custom"
+        ? await getShopCustomPlanAssignment(session.shop)
+        : null;
+    const customTerms =
+      planHandle === "custom"
+        ? resolveShopCustomPlanTerms(customAssignment)
+        : null;
+
+    const billingPlan =
+      planHandle === "custom"
+        ? customAssignment?.plan ?? null
+        : await db.plan.findFirst({
+            where: {
+              handle: planHandle,
+              isActive: true,
+              visibility: "PUBLIC",
+              billingMode: "MANUAL_BILLING",
+            },
+          });
+
+    if (
+      !billingPlan ||
+      (planHandle === "custom" &&
+        (!customTerms || customTerms.price === null))
+    ) {
+      return {
+        success: false,
+        message: "This plan is not available for purchase.",
+      };
+    }
 
     // Trial is a shop-level first-subscription benefit, not a per-plan-change
     // benefit. Once this shop has ever had a Billing V2 subscription, every
@@ -266,19 +365,19 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       }),
     );
 
+    const configuredTrialDays =
+      customTerms?.trialDays ?? billingPlan.trialDays ?? 0;
     const trialDays = hasBillingHistory
       ? 0
-      : Math.max(0, billingPlan?.trialDays ?? 0);
+      : Math.max(0, configuredTrialDays);
     const isProduction = process.env.NODE_ENV === "production";
-
-    let finalPrice = baseMonthlyPrice;
-    let billingInterval = "EVERY_30_DAYS";
-    let planName = `AI Search ${planKey} Plan (${cycle})`;
-
-    if (cycle === "yearly") {
-      finalPrice = baseMonthlyPrice * 0.8 * 12;
-      billingInterval = "ANNUAL";
-    }
+    const finalPrice =
+      customTerms?.price ?? Number(billingPlan.price);
+    const billingInterval =
+      customTerms?.interval ?? billingPlan.interval;
+    const currencyCode =
+      customTerms?.currencyCode ?? billingPlan.currencyCode;
+    const planName = `AI Search ${customTerms?.name ?? billingPlan.name} Plan`;
 
     try {
       const shopHandle = session.shop.replace(/\.myshopify\.com$/i, "");
@@ -304,6 +403,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           $test: Boolean,
           $trialDays: Int,
           $interval: AppPricingInterval!,
+          $currencyCode: CurrencyCode!,
           $replacementBehavior: AppSubscriptionReplacementBehavior
         ) {
           appSubscriptionCreate(
@@ -315,7 +415,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
             lineItems: [{
               plan: {
                 appRecurringPricingDetails: {
-                  price: { amount: $price, currencyCode: USD }
+                  price: { amount: $price, currencyCode: $currencyCode }
                   interval: $interval
                 }
               }
@@ -339,6 +439,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
             test: !isProduction,
             trialDays: trialDays > 0 ? trialDays : null,
             interval: billingInterval,
+            currencyCode,
             replacementBehavior,
           },
         }
@@ -365,7 +466,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       await db.aiSearchShop.update({
         where: { shop: session.shop },
         data: {
-          pendingPlanHandle: planKey.toLowerCase(),
+          pendingPlanHandle: billingPlan.handle,
           pendingSubscriptionGid: createdSubscription.id,
         },
       });
@@ -374,8 +475,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         shop: session.shop,
         admin,
         expectedSubscriptionGid: createdSubscription.id,
-        preferredPlanHandle: planKey.toLowerCase(),
-        authoritativePlanHandle: planKey.toLowerCase(),
+        preferredPlanHandle: billingPlan.handle,
+        authoritativePlanHandle: billingPlan.handle,
         source: "CALLBACK",
       });
 
@@ -409,7 +510,6 @@ function limitText(value: number | null, suffix: string) {
     : `${value.toLocaleString("en-US")} ${suffix}`;
 }
 
-type Cycle = "monthly" | "yearly";
 
 export default function BillingPage() {
   const data = useLoaderData<typeof loader>();
@@ -426,10 +526,6 @@ export default function BillingPage() {
   }, [cancelFetcher.state, cancelFetcher.data]);
 
   if (!data) return null;
-
-  const [cycle, setCycle] = useState<Cycle>("monthly");
-  const [customRequestSent, setCustomRequestSent] = useState(false);
-  const [customShowForm, setCustomShowForm] = useState(false);
 
   useEffect(() => {
     if (subscribeFetcher.data?.confirmationUrl) {
@@ -450,17 +546,10 @@ export default function BillingPage() {
 
 
 
-  const cycleDiscount = {
-    monthly: 0,
-    yearly: 0.2,
-  };
-
-  const cycleText = {
-    monthly: "/month",
-    yearly: "/month (billed annually)",
-  };
-
-  const currentPlanKey = data.entitlement.planLabel?.toUpperCase() || "NONE";
+  const currentPlanHandle = data.subscription.planHandle?.toLowerCase() ?? null;
+  const availablePlans = data.customPlan
+    ? [...data.plans, data.customPlan]
+    : data.plans;
   const subscribeError =
     subscribeFetcher.data &&
     "success" in subscribeFetcher.data &&
@@ -471,60 +560,6 @@ export default function BillingPage() {
   const isNonRenewing = data.entitlement.cancellationStatus === "NON_RENEWING";
   const isActive =
     data.entitlement.subscriptionStatus === "ACTIVE" || isNonRenewing;
-
-  const planConfigs = {
-    BASIC: {
-      badge: "Popular",
-      badgeBg: "#008060",
-      priceBase: 9.9,
-      originalPrice: "$14.99/month",
-      isPopular: false,
-      btnBg: "#008060",
-      features: [
-        limitText(
-          data.plans[0]?.limits.productLimit ?? 500,
-          "Indexed products",
-        ),
-        limitText(
-          data.plans[0]?.limits.searchLimit ?? 3000,
-          "Searches / period",
-        ),
-        limitText(
-          data.plans[0]?.limits.vectorUpdateLimit ?? 500,
-          "vector updates / period",
-        ),
-        "Auto-fallback to Shopify Search when quota exceeded",
-        "24/7 Email & Ticket Support",
-      ],
-      buildWith: ["Search Engine", "Keyword Suggestions"],
-    },
-    PRO: {
-      badge: "Save 40%",
-      badgeBg: "#e51c00",
-      priceBase: 29.9,
-      originalPrice: "$49.99/month",
-      isPopular: true,
-      btnBg: "#e51c00",
-      features: [
-        limitText(
-          data.plans[1]?.limits.productLimit ?? null,
-          "Indexed products",
-        ),
-        limitText(
-          data.plans[1]?.limits.searchLimit ?? null,
-          "Searches / period",
-        ),
-        limitText(
-          data.plans[1]?.limits.vectorUpdateLimit ?? null,
-          "vector updates / period",
-        ),
-        "Priority Vector Search bandwidth processing",
-        "Auto-optimized Synonyms & Search Intent",
-        "1-on-1 Dedicated Technical Support",
-      ],
-      buildWith: ["Vector Analytics", "Full Synonyms Map"],
-    },
-  };
 
   return (
     <div
@@ -856,53 +891,8 @@ export default function BillingPage() {
             Plans that scale with your store
           </h1>
           <p style={{ color: "#667085", fontSize: 14, margin: "0 0 18px" }}>
-            Basic and Pro include a free trial. All paid plan changes are confirmed through Shopify.
+            Available plans, pricing, quotas and trial terms are managed by AI-Buyense. All paid plan changes are confirmed through Shopify.
           </p>
-
-          <div
-            style={{
-              display: "inline-flex",
-              background: "#f4f4f5",
-              padding: 4,
-              borderRadius: 999,
-              gap: 4,
-            }}
-          >
-            <button
-              type="button"
-              onClick={() => setCycle("monthly")}
-              style={{
-                padding: "8px 18px",
-                borderRadius: 999,
-                border: "none",
-                background: cycle === "monthly" ? "#fff" : "transparent",
-                fontWeight: 700,
-                fontSize: 13,
-                color: cycle === "monthly" ? "#111827" : "#6b7280",
-                cursor: "pointer",
-                boxShadow: cycle === "monthly" ? "0 1px 4px rgba(0,0,0,.08)" : "none",
-              }}
-            >
-              Monthly
-            </button>
-            <button
-              type="button"
-              onClick={() => setCycle("yearly")}
-              style={{
-                padding: "8px 18px",
-                borderRadius: 999,
-                border: "none",
-                background: cycle === "yearly" ? "#fff" : "transparent",
-                fontWeight: 700,
-                fontSize: 13,
-                color: cycle === "yearly" ? "#111827" : "#6b7280",
-                cursor: "pointer",
-                boxShadow: cycle === "yearly" ? "0 1px 4px rgba(0,0,0,.08)" : "none",
-              }}
-            >
-              Yearly <span style={{ color: "#5b3df5" }}>Save 20%</span>
-            </button>
-          </div>
         </div>
 
         {subscribeError ? (
@@ -931,37 +921,42 @@ export default function BillingPage() {
             alignItems: "stretch",
           }}
         >
-          {data.plans.map((plan) => {
-            const isPro = plan.key === "PRO";
-            const config = isPro ? planConfigs.PRO : planConfigs.BASIC;
-            const discountedPrice = (
-              config.priceBase * (1 - cycleDiscount[cycle])
-            ).toFixed(2);
-            const billedAmount =
-              cycle === "yearly"
-                ? (config.priceBase * 0.8 * 12).toFixed(2)
-                : config.priceBase.toFixed(2);
-            const isCurrentPlan = isActive && currentPlanKey.includes(plan.key);
+          {availablePlans.map((plan) => {
+            const isFeatured = plan.handle.toLowerCase() === "pro";
+            const isCurrentPlan =
+              isActive && currentPlanHandle === plan.handle.toLowerCase();
+            const featureList = [
+              limitText(plan.limits.productLimit, "Indexed products"),
+              limitText(plan.limits.searchLimit, "Searches / period"),
+              limitText(plan.limits.vectorUpdateLimit, "Vector updates / period"),
+              ...plan.capabilityLabels,
+              ...plan.highlights,
+            ].slice(0, 7);
+            const formattedPrice = new Intl.NumberFormat(undefined, {
+              style: "currency",
+              currency: plan.currencyCode,
+              maximumFractionDigits: 2,
+            }).format(plan.price);
 
             return (
               <article
-                key={plan.key}
+                key={plan.id}
                 style={{
                   position: "relative",
                   background: "#fff",
                   borderRadius: 14,
-                  border: isPro ? "2px solid #5b3df5" : "1px solid #dfe3ea",
+                  border: isFeatured ? "2px solid #5b3df5" : "1px solid #dfe3ea",
                   padding: "28px 28px 26px",
                   boxSizing: "border-box",
                   minHeight: 405,
                   display: "flex",
                   flexDirection: "column",
-                  boxShadow: isPro
+                  boxShadow: isFeatured
                     ? "0 14px 34px rgba(91,61,245,.10)"
                   : "0 2px 8px rgba(17,24,39,.03)",
                 }}
               >
-                {isPro ? (
+                {isFeatured ? (
                   <span
                     style={{
                       position: "absolute",
@@ -980,7 +975,7 @@ export default function BillingPage() {
                 ) : null}
 
                 <h2 style={{ margin: "0 0 10px", fontSize: 20, color: "#111827" }}>
-                  {plan.label}
+                  {plan.name}
                 </h2>
                 <p
                   style={{
@@ -991,21 +986,16 @@ export default function BillingPage() {
                     minHeight: 40,
                   }}
                 >
-                  {plan.description}
+                  {plan.description || "AI Search capacity configured for this plan."}
                 </p>
 
                 <div style={{ marginBottom: 18 }}>
                   <span style={{ fontSize: 34, fontWeight: 800, color: "#111827" }}>
-                    ${discountedPrice}
+                    {formattedPrice}
                   </span>
                   <span style={{ marginLeft: 6, color: "#667085", fontSize: 13 }}>
-                    / month
+                    {plan.interval === "ANNUAL" ? "/ year" : "/ month"}
                   </span>
-                  <div style={{ color: "#667085", fontSize: 12, marginTop: 6 }}>
-                    {cycle === "yearly"
-                      ? `Billed $${billedAmount} annually`
-                      : `Billed $${billedAmount} monthly`}
-                  </div>
                   {plan.trialDays > 0 ? (
                     <div style={{ color: "#5b3df5", fontSize: 12, fontWeight: 700, marginTop: 5 }}>
                       {plan.trialDays}-day free trial
@@ -1024,7 +1014,7 @@ export default function BillingPage() {
                     fontSize: 13,
                   }}
                 >
-                  {config.features.slice(0, 4).map((feat) => (
+                  {featureList.map((feat) => (
                     <li key={feat} style={{ display: "flex", gap: 9, alignItems: "flex-start" }}>
                       <span style={{ color: "#12a66a", fontWeight: 800 }}>✓</span>
                       <span>{feat}</span>
@@ -1034,8 +1024,7 @@ export default function BillingPage() {
 
                 <subscribeFetcher.Form method="post" style={{ marginTop: "auto" }}>
                   <input type="hidden" name="intent" value="subscribe" />
-                  <input type="hidden" name="planKey" value={plan.key} />
-                  <input type="hidden" name="cycle" value={cycle} />
+                  <input type="hidden" name="planHandle" value={plan.handle} />
                   <button
                     type="submit"
                     disabled={isCurrentPlan || subscribeFetcher.state !== "idle"}
@@ -1046,10 +1035,10 @@ export default function BillingPage() {
                       border: "1px solid #5b3df5",
                       background: isCurrentPlan
                         ? "#eef0f3"
-                        : isPro
+                        : isFeatured
                         ? "#5b3df5"
                         : "#fff",
-                      color: isCurrentPlan ? "#737b88" : isPro ? "#fff" : "#5b3df5",
+                      color: isCurrentPlan ? "#737b88" : isFeatured ? "#fff" : "#5b3df5",
                       fontWeight: 800,
                       cursor: isCurrentPlan ? "not-allowed" : "pointer",
                     }}
@@ -1058,239 +1047,15 @@ export default function BillingPage() {
                       ? "Current plan"
                       : subscribeFetcher.state !== "idle"
                         ? "Redirecting..."
-                        : `Start with ${plan.label}`}
+                        : `Start with ${plan.name}`}
                   </button>
                 </subscribeFetcher.Form>
               </article>
             );
           })}
 
-          <article
-            style={{
-              background: "#fff",
-              borderRadius: 14,
-              border: "1px solid #dfe3ea",
-              padding: "28px 28px 26px",
-              boxSizing: "border-box",
-              minHeight: 405,
-              display: "flex",
-              flexDirection: "column",
-              boxShadow: "0 2px 8px rgba(17,24,39,.03)",
-            }}
-          >
-            <h2 style={{ margin: "0 0 10px", fontSize: 20, color: "#111827" }}>Custom</h2>
-            <p
-              style={{
-                margin: "0 0 26px",
-                color: "#667085",
-                fontSize: 13,
-                lineHeight: 1.55,
-                minHeight: 40,
-              }}
-            >
-              Limits and pricing tailored to your store requirements.
-            </p>
-
-            <div style={{ marginBottom: 22 }}>
-              <span style={{ fontSize: 32, fontWeight: 800, color: "#111827" }}>Contact us</span>
-            </div>
-
-            <ul
-              style={{
-                listStyle: "none",
-                padding: 0,
-                margin: "0 0 24px",
-                display: "grid",
-                gap: 10,
-                color: "#475467",
-                fontSize: 13,
-              }}
-            >
-              {[
-                "Custom product and search limits",
-                "Usage and cost tracking",
-                "Managed through Shopify Billing",
-                "Dedicated implementation support",
-              ].map((feat) => (
-                <li key={feat} style={{ display: "flex", gap: 9, alignItems: "flex-start" }}>
-                  <span style={{ color: "#12a66a", fontWeight: 800 }}>✓</span>
-                  <span>{feat}</span>
-                </li>
-              ))}
-            </ul>
-
-            <button
-              type="button"
-              onClick={() => setCustomShowForm((value) => !value)}
-              style={{
-                marginTop: "auto",
-                width: "100%",
-                padding: "11px 16px",
-                borderRadius: 9,
-                border: "1px solid #5b3df5",
-                background: "#fff",
-                color: "#5b3df5",
-                fontWeight: 800,
-                cursor: "pointer",
-              }}
-            >
-              {customShowForm ? "Hide request form" : "Start with Custom"}
-            </button>
-          </article>
         </div>
 
-        {customShowForm ? (
-          <div
-            style={{
-              marginTop: 20,
-              padding: 24,
-              border: "1px solid #dfe3ea",
-              borderRadius: 14,
-              background: "#fff",
-            }}
-          >
-            {!customRequestSent ? (
-              <form
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  setCustomRequestSent(true);
-                }}
-                style={{
-                  display: "grid",
-                  gap: 14,
-                }}
-              >
-                <div
-                  style={{
-                    display: "grid",
-                    gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
-                    gap: 14,
-                  }}
-                >
-                  <label style={{ fontSize: 12, fontWeight: 700, color: "#475467" }}>
-                    Store
-                    <input
-                      value={data.shop}
-                      readOnly
-                      style={{
-                        display: "block",
-                        width: "100%",
-                        boxSizing: "border-box",
-                        marginTop: 6,
-                        padding: "10px 12px",
-                        border: "1px solid #d0d5dd",
-                        borderRadius: 8,
-                        background: "#f8fafc",
-                      }}
-                    />
-                  </label>
-                  <label style={{ fontSize: 12, fontWeight: 700, color: "#475467" }}>
-                    Contact email
-                    <input
-                      name="email"
-                      type="email"
-                      required
-                      placeholder="you@example.com"
-                      style={{
-                        display: "block",
-                        width: "100%",
-                        boxSizing: "border-box",
-                        marginTop: 6,
-                        padding: "10px 12px",
-                        border: "1px solid #d0d5dd",
-                        borderRadius: 8,
-                      }}
-                    />
-                  </label>
-                </div>
-
-                <div
-                  style={{
-                    display: "grid",
-                    gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
-                    gap: 14,
-                  }}
-                >
-                  {[
-                    ["indexedProducts", "Indexed products needed", "5000"],
-                    ["monthlySearches", "Searches / month", "50000"],
-                    ["vectorUpdates", "Vector updates / month", "10000"],
-                  ].map(([name, label, placeholder]) => (
-                    <label key={name} style={{ fontSize: 12, fontWeight: 700, color: "#475467" }}>
-                      {label}
-                      <input
-                        name={name}
-                        type="number"
-                        min="0"
-                        placeholder={placeholder}
-                        style={{
-                          display: "block",
-                          width: "100%",
-                          boxSizing: "border-box",
-                          marginTop: 6,
-                          padding: "10px 12px",
-                          border: "1px solid #d0d5dd",
-                          borderRadius: 8,
-                        }}
-                      />
-                    </label>
-                  ))}
-                </div>
-
-                <label style={{ fontSize: 12, fontWeight: 700, color: "#475467" }}>
-                  Requirements / message
-                  <textarea
-                    name="message"
-                    rows={4}
-                    required
-                    placeholder="Tell us about your requirements, expected traffic, or special needs."
-                    style={{
-                      display: "block",
-                      width: "100%",
-                      boxSizing: "border-box",
-                      marginTop: 6,
-                      padding: "10px 12px",
-                      border: "1px solid #d0d5dd",
-                      borderRadius: 8,
-                      resize: "vertical",
-                      fontFamily: "inherit",
-                    }}
-                  />
-                </label>
-
-                <div style={{ display: "flex", justifyContent: "flex-end" }}>
-                  <button
-                    type="submit"
-                    style={{
-                      padding: "10px 18px",
-                      borderRadius: 8,
-                      border: "none",
-                      background: "#5b3df5",
-                      color: "#fff",
-                      fontWeight: 800,
-                      cursor: "pointer",
-                    }}
-                  >
-                    Send request
-                  </button>
-                </div>
-              </form>
-            ) : (
-              <div
-                style={{
-                  padding: 16,
-                  borderRadius: 10,
-                  background: "#ecfdf3",
-                  border: "1px solid #abefc6",
-                  color: "#067647",
-                }}
-              >
-                <strong style={{ display: "block", marginBottom: 5 }}>Custom plan request sent</strong>
-                Your request has been received. We will contact you to discuss the requirements and pricing.
-              </div>
-            )}
-          </div>
-        ) : null}
       </section>
 
       {/* SECTION 6: SHOPIFY BILLING DISCLAIMER */}

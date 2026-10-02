@@ -33,6 +33,10 @@ import {
   type AiSearchPlan,
   type PlanLimits,
 } from "./plans.server";
+import {
+  disabledPlanFeatureConfig,
+  parsePlanFeatureFlags,
+} from "./plan-catalog.server";
 
 const BILLING_PLAN_SEEDS = [
   {
@@ -208,10 +212,9 @@ async function ensurePublicPlans() {
         trialDays: seed.trialDays,
         isActive: true,
       },
-      update: {
-        trialDays: seed.trialDays,
-        billingMode: "MANUAL_BILLING",
-      },
+      // Existing plan rows are owner-managed from Dev Center. Bootstrap seeds
+      // only create missing Basic/Pro records and must never overwrite edited terms.
+      update: {},
       });
     }
   })();
@@ -432,6 +435,10 @@ export async function getBillingSubscriptionSnapshot(
     planId: null,
     planLabel:
       PLAN_DEFINITIONS[plan]?.label ?? PLAN_DEFINITIONS.NONE.label,
+    features:
+      plan === AI_SEARCH_PLAN.none
+        ? disabledPlanFeatureConfig()
+        : parsePlanFeatureFlags(null),
     limits:
       PLAN_DEFINITIONS[plan]?.limits ?? PLAN_DEFINITIONS.NONE.limits,
     status: state.legacy.status,
@@ -465,6 +472,7 @@ export async function getBillingSubscriptionSnapshot(
       plan: AI_SEARCH_PLAN.none,
       planId: null,
       planLabel: PLAN_DEFINITIONS.NONE.label,
+      features: disabledPlanFeatureConfig(),
       limits: PLAN_DEFINITIONS.NONE.limits,
       status: "INACTIVE",
       planHandle: null,
@@ -539,6 +547,7 @@ export async function getBillingSubscriptionSnapshot(
       plan: AI_SEARCH_PLAN.none,
       planId: null,
       planLabel: PLAN_DEFINITIONS.NONE.label,
+      features: disabledPlanFeatureConfig(),
       limits: PLAN_DEFINITIONS.NONE.limits,
       status: "INACTIVE",
       planHandle: subscription.shopifyPlanHandle,
@@ -573,20 +582,28 @@ export async function getBillingSubscriptionSnapshot(
   }
 
   const planKey = mapPlanHandleToKey(plan.handle);
-  const limits =
-    planKey === AI_SEARCH_PLAN.custom
+  const isShopSpecificCustomPlan =
+    plan.handle.trim().toLowerCase() === "custom";
+  const limits = isShopSpecificCustomPlan
+    ? planAssignment
       ? {
-          productLimit:
-            planAssignment?.customMaxIndexedProducts ??
-            PLAN_DEFINITIONS.CUSTOM.limits.productLimit,
-          searchLimit:
-            planAssignment?.customMaxMonthlySearches ??
-            PLAN_DEFINITIONS.CUSTOM.limits.searchLimit,
+          productLimit: planAssignment.customMaxIndexedProducts,
+          searchLimit: planAssignment.customMaxMonthlySearches,
           vectorUpdateLimit:
-            planAssignment?.customMaxMonthlyVectorUpdates ??
-            PLAN_DEFINITIONS.CUSTOM.limits.vectorUpdateLimit,
+            planAssignment.customMaxMonthlyVectorUpdates,
         }
-      : limitsFromPlan(plan);
+      : PLAN_DEFINITIONS.CUSTOM.limits
+    : limitsFromPlan(plan);
+  const features =
+    isShopSpecificCustomPlan && planAssignment
+      ? parsePlanFeatureFlags(
+          planAssignment.customFeatureFlags ?? plan.featureFlags,
+        )
+      : parsePlanFeatureFlags(plan.featureFlags);
+  const planLabel =
+    isShopSpecificCustomPlan && planAssignment?.customName
+      ? planAssignment.customName
+      : plan.name;
   const trialStatus = getTrialStatus(
     subscription.trialStartsAt,
     subscription.trialEndsAt,
@@ -603,7 +620,8 @@ export async function getBillingSubscriptionSnapshot(
     shop,
     plan: planKey,
     planId: plan.id,
-    planLabel: plan.name,
+    planLabel,
+    features,
     limits,
     status: subscription.status ?? "INACTIVE",
     planHandle: subscription.shopifyPlanHandle ?? plan.handle,

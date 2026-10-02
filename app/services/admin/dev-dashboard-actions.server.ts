@@ -23,6 +23,13 @@ import {
   setShopAiEnabledWithAudit,
   type QuotaGrantKind,
 } from "../commerce/quota-grants.server";
+import {
+  createPlanDefinition,
+  PLAN_CAPABILITY_DEFINITIONS,
+  setPlanActive,
+  updatePlanDefinition,
+  type SavePlanInput,
+} from "../commerce/plan-catalog.server";
 
 function parseNullableNonNegative(form: FormData, name: string) {
   const raw = String(form.get(name) ?? "").trim();
@@ -34,14 +41,53 @@ function parseNullableNonNegative(form: FormData, name: string) {
   return Math.trunc(value);
 }
 
-function parseRequiredNonNegative(form: FormData, name: string) {
-  const raw = String(form.get(name) ?? "").trim();
-  if (!raw) throw new Error(`${name} is required`);
-  const value = Number(raw);
-  if (!Number.isFinite(value) || value < 0) {
-    throw new Error(`${name} must be >= 0`);
+function parsePlanInput(form: FormData): SavePlanInput {
+  const price = Number(String(form.get("planPrice") ?? "").trim());
+  if (!Number.isFinite(price) || price < 0) {
+    throw new Error("Plan price must be >= 0.");
   }
-  return Math.trunc(value);
+
+  const interval = String(form.get("planInterval") ?? "EVERY_30_DAYS");
+  if (!["EVERY_30_DAYS", "ANNUAL"].includes(interval)) {
+    throw new Error("Invalid billing interval.");
+  }
+  const visibility = String(form.get("planVisibility") ?? "PUBLIC");
+  if (!["PUBLIC", "PRIVATE", "INTERNAL"].includes(visibility)) {
+    throw new Error("Invalid plan visibility.");
+  }
+  const billingMode = String(form.get("planBillingMode") ?? "MANUAL_BILLING");
+  if (!["SHOPIFY_APP_PRICING", "MANUAL_BILLING"].includes(billingMode)) {
+    throw new Error("Invalid billing mode.");
+  }
+
+  const trialDays = Number(String(form.get("planTrialDays") ?? "0").trim());
+  const sortOrder = Number(String(form.get("planSortOrder") ?? "0").trim());
+  const capabilities = Object.fromEntries(
+    PLAN_CAPABILITY_DEFINITIONS.map(({ key }) => [
+      key,
+      form.getAll("planCapability").some((value) => String(value) === key),
+    ]),
+  ) as SavePlanInput["capabilities"];
+
+  return {
+    handle: String(form.get("planHandle") ?? "").trim(),
+    name: String(form.get("planName") ?? "").trim(),
+    price,
+    currencyCode: String(form.get("planCurrency") ?? "USD").trim(),
+    interval: interval as SavePlanInput["interval"],
+    visibility: visibility as SavePlanInput["visibility"],
+    billingMode: billingMode as SavePlanInput["billingMode"],
+    trialDays,
+    maxIndexedProducts: parseNullableNonNegative(form, "planProductLimit"),
+    maxMonthlySearches: parseNullableNonNegative(form, "planSearchLimit"),
+    maxMonthlyVectorUpdates: parseNullableNonNegative(form, "planVectorLimit"),
+    usageBillingEnabled: form.get("planUsageBillingEnabled") === "on",
+    sortOrder,
+    isActive: form.get("planIsActive") === "on",
+    description: String(form.get("planDescription") ?? "").trim(),
+    highlights: String(form.get("planHighlights") ?? "").split(/\r?\n/),
+    capabilities,
+  };
 }
 
 function requireReason(form: FormData) {
@@ -70,10 +116,16 @@ export async function handleDevDashboardAction({
   const intent = String(form.get("intent") ?? "");
   const targetShop = String(form.get("targetShop") ?? "").trim();
   const actor = `dev:${user.email}`;
+  const globalPlanIntent = ["create_plan", "update_plan", "set_plan_active"].includes(intent);
 
-  if (!targetShop) throw new Response("Target shop is required", { status: 400 });
+  if (!globalPlanIntent && !targetShop) {
+    throw new Response("Target shop is required", { status: 400 });
+  }
 
-  if (intent === "grant_quota" || intent === "revoke_grant") {
+  if (globalPlanIntent) {
+    await requireDevPermission(request, "shop_plan.write");
+    await requireRecentDevAuthentication(request);
+  } else if (intent === "grant_quota" || intent === "revoke_grant") {
     await requireDevPermission(request, "shop_quota.write");
   } else if (intent === "set_limits") {
     await requireDevPermission(request, "shop_quota.write");
@@ -88,6 +140,59 @@ export async function handleDevDashboardAction({
   }
 
   try {
+    if (intent === "create_plan") {
+      const reason = requireReason(form);
+      const plan = await createPlanDefinition(parsePlanInput(form));
+      await writeDevAudit({
+        request,
+        devUserId: user.id,
+        action: "PLAN_CREATED",
+        resourceType: "plan",
+        resourceId: plan.id,
+        result: "SUCCESS",
+        metadata: { handle: plan.handle, name: plan.name, reason },
+      });
+      return { ok: true, message: `Plan ${plan.name} created.` };
+    }
+
+    if (intent === "update_plan") {
+      const planId = String(form.get("planId") ?? "").trim();
+      if (!planId) throw new Error("Plan ID is required.");
+      const reason = requireReason(form);
+      const plan = await updatePlanDefinition(planId, parsePlanInput(form));
+      await writeDevAudit({
+        request,
+        devUserId: user.id,
+        action: "PLAN_UPDATED",
+        resourceType: "plan",
+        resourceId: plan.id,
+        result: "SUCCESS",
+        metadata: { handle: plan.handle, name: plan.name, version: plan.version, reason },
+      });
+      return { ok: true, message: `Plan ${plan.name} updated.` };
+    }
+
+    if (intent === "set_plan_active") {
+      const planId = String(form.get("planId") ?? "").trim();
+      if (!planId) throw new Error("Plan ID is required.");
+      const reason = requireReason(form);
+      const enabled = String(form.get("enabled") ?? "") === "true";
+      const plan = await setPlanActive(planId, enabled);
+      await writeDevAudit({
+        request,
+        devUserId: user.id,
+        action: enabled ? "PLAN_ACTIVATED" : "PLAN_DEACTIVATED",
+        resourceType: "plan",
+        resourceId: plan.id,
+        result: "SUCCESS",
+        metadata: { handle: plan.handle, name: plan.name, reason },
+      });
+      return {
+        ok: true,
+        message: `Plan ${plan.name} ${enabled ? "activated" : "deactivated"}.`,
+      };
+    }
+
     if (intent === "grant_quota") {
       const kind = String(form.get("kind") ?? "") as QuotaGrantKind;
       if (!Object.values(QUOTA_GRANT_KIND).includes(kind)) {
@@ -150,20 +255,58 @@ export async function handleDevDashboardAction({
       if (!Number.isFinite(price) || price <= 0) {
         throw new Error("Custom price must be greater than 0");
       }
-      const productLimit = parseRequiredNonNegative(form, "customProductLimit");
-      const searchLimit = parseRequiredNonNegative(form, "customSearchLimit");
-      const vectorUpdateLimit = parseRequiredNonNegative(
-        form,
-        "customVectorUpdateLimit",
+
+      const interval = String(form.get("customInterval") ?? "EVERY_30_DAYS");
+      if (!["EVERY_30_DAYS", "ANNUAL"].includes(interval)) {
+        throw new Error("Invalid Custom billing interval.");
+      }
+
+      const trialDays = Number(
+        String(form.get("customTrialDays") ?? "0").trim(),
       );
+      if (
+        !Number.isFinite(trialDays) ||
+        trialDays < 0 ||
+        trialDays > 365
+      ) {
+        throw new Error("Custom trial days must be between 0 and 365.");
+      }
+
+      const capabilities = Object.fromEntries(
+        PLAN_CAPABILITY_DEFINITIONS.map(({ key }) => [
+          key,
+          form
+            .getAll("customCapability")
+            .some((value) => String(value) === key),
+        ]),
+      );
+
       const reason = requireReason(form);
       const terms = await setCustomPlanTerms({
         actorShop: actor,
         targetShop,
+        name: String(form.get("customName") ?? "Custom").trim(),
         price,
-        productLimit,
-        searchLimit,
-        vectorUpdateLimit,
+        currencyCode: String(
+          form.get("customCurrency") ?? "USD",
+        ).trim(),
+        interval: interval as "EVERY_30_DAYS" | "ANNUAL",
+        trialDays: Math.trunc(trialDays),
+        productLimit: parseNullableNonNegative(form, "customProductLimit"),
+        searchLimit: parseNullableNonNegative(form, "customSearchLimit"),
+        vectorUpdateLimit: parseNullableNonNegative(
+          form,
+          "customVectorUpdateLimit",
+        ),
+        usageBillingEnabled:
+          form.get("customUsageBillingEnabled") === "on",
+        description: String(
+          form.get("customDescription") ?? "",
+        ).trim(),
+        highlights: String(
+          form.get("customHighlights") ?? "",
+        ).split(/\r?\n/),
+        capabilities,
         reason,
       });
       await writeDevAudit({

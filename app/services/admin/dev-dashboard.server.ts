@@ -1,3 +1,5 @@
+import type { Prisma } from "@prisma/client";
+
 import db from "../../db.server";
 import {
   AI_SEARCH_PLAN,
@@ -6,6 +8,7 @@ import {
   type AiSearchPlan,
   type PlanLimits,
 } from "../commerce/plans.server";
+import { parsePlanFeatureFlags } from "../commerce/plan-catalog.server";
 import {
   buildQuotaView,
   calculateSubscriptionMrr,
@@ -257,15 +260,28 @@ export async function getDevDashboardData(search = "") {
       WHERE \`createdAt\` >= ${from}
     `,
     db.plan.findMany({
-      where: { isActive: true },
       orderBy: [{ sortOrder: "asc" }, { name: "asc" }],
       select: {
         id: true,
         handle: true,
         name: true,
+        visibility: true,
+        billingMode: true,
+        interval: true,
         price: true,
         currencyCode: true,
-        interval: true,
+        trialDays: true,
+        maxIndexedProducts: true,
+        maxMonthlySearches: true,
+        maxMonthlyVectorUpdates: true,
+        usageBillingEnabled: true,
+        featureFlags: true,
+        shopifyPlanHandle: true,
+        version: true,
+        isActive: true,
+        sortOrder: true,
+        createdAt: true,
+        updatedAt: true,
       },
     }),
     db.billingSubscription.findMany({
@@ -441,59 +457,28 @@ export async function getDevDashboardData(search = "") {
   >();
   for (const assignment of planAssignments) {
     if (
-      semanticPlanKey(assignment.plan.handle) === AI_SEARCH_PLAN.custom &&
+      assignment.plan.handle.trim().toLowerCase() === "custom" &&
       !customAssignmentByShop.has(assignment.shop)
     ) {
       customAssignmentByShop.set(assignment.shop, assignment);
     }
   }
 
-  const basicPlan = billingPlans.find(
-    (plan) => semanticPlanKey(plan.handle) === AI_SEARCH_PLAN.basic,
+  const planStats = billingPlans.map((plan) => ({
+    key: plan.handle.toUpperCase(),
+    id: plan.id,
+    handle: plan.handle,
+    name: plan.name,
+    active: 0,
+    trials: 0,
+    frozen: 0,
+    cancelled: 0,
+    revenueByCurrency: new Map<string, number>(),
+  }));
+  const planStatsById = new Map(planStats.map((plan) => [plan.id, plan]));
+  const planStatsByHandle = new Map(
+    planStats.map((plan) => [plan.handle.trim().toLowerCase(), plan]),
   );
-  const proPlan = billingPlans.find(
-    (plan) => semanticPlanKey(plan.handle) === AI_SEARCH_PLAN.pro,
-  );
-  const customPlan = billingPlans.find(
-    (plan) => semanticPlanKey(plan.handle) === AI_SEARCH_PLAN.custom,
-  );
-
-  const planStats = [
-    {
-      key: AI_SEARCH_PLAN.basic,
-      id: basicPlan?.id ?? AI_SEARCH_PLAN.basic,
-      handle: basicPlan?.handle ?? "basic",
-      name: basicPlan?.name ?? "Basic",
-      active: 0,
-      trials: 0,
-      frozen: 0,
-      cancelled: 0,
-      revenueByCurrency: new Map<string, number>(),
-    },
-    {
-      key: AI_SEARCH_PLAN.pro,
-      id: proPlan?.id ?? AI_SEARCH_PLAN.pro,
-      handle: proPlan?.handle ?? "pro",
-      name: proPlan?.name ?? "Pro",
-      active: 0,
-      trials: 0,
-      frozen: 0,
-      cancelled: 0,
-      revenueByCurrency: new Map<string, number>(),
-    },
-    {
-      key: AI_SEARCH_PLAN.custom,
-      id: customPlan?.id ?? AI_SEARCH_PLAN.custom,
-      handle: customPlan?.handle ?? "custom",
-      name: "Custom",
-      active: 0,
-      trials: 0,
-      frozen: 0,
-      cancelled: 0,
-      revenueByCurrency: new Map<string, number>(),
-    },
-  ];
-  const planStatsMap = new Map(planStats.map((plan) => [plan.key, plan]));
 
   const revenueByCurrency = new Map<string, number>();
   let activeSubscriptions = 0;
@@ -503,11 +488,15 @@ export async function getDevDashboardData(search = "") {
 
   for (const subscription of currentSubscriptions) {
     const status = subscription.status ?? null;
-    const planKey = semanticPlanKey(
-      subscription.plan?.handle ?? subscription.shopifyPlanHandle,
-    );
-    const stats =
-      planKey === AI_SEARCH_PLAN.none ? undefined : planStatsMap.get(planKey);
+    const subscriptionHandle =
+      subscription.plan?.handle?.trim().toLowerCase() ??
+      subscription.shopifyPlanHandle?.trim().toLowerCase() ??
+      null;
+    const stats = subscription.plan?.id
+      ? planStatsById.get(subscription.plan.id)
+      : subscriptionHandle
+        ? planStatsByHandle.get(subscriptionHandle)
+        : undefined;
 
     if (status === "ACTIVE") {
       activeSubscriptions += 1;
@@ -608,28 +597,29 @@ export async function getDevDashboardData(search = "") {
         )
       : devOverridePlan;
 
+    const isShopSpecificCustomPlan =
+      billing?.plan?.handle?.trim().toLowerCase() === "custom";
     const planLabel =
-      billing?.plan?.name ?? PLAN_DEFINITIONS[plan].label;
+      isShopSpecificCustomPlan && customConfig?.customName
+        ? customConfig.customName
+        : billing?.plan?.name ?? PLAN_DEFINITIONS[plan].label;
 
-    const baseLimits: PlanLimits = plan === AI_SEARCH_PLAN.custom
+    const baseLimits: PlanLimits = isShopSpecificCustomPlan
+      ? customConfig
         ? {
-            productLimit:
-              customConfig?.customMaxIndexedProducts ??
-              PLAN_DEFINITIONS.CUSTOM.limits.productLimit,
-            searchLimit:
-              customConfig?.customMaxMonthlySearches ??
-              PLAN_DEFINITIONS.CUSTOM.limits.searchLimit,
+            productLimit: customConfig.customMaxIndexedProducts,
+            searchLimit: customConfig.customMaxMonthlySearches,
             vectorUpdateLimit:
-              customConfig?.customMaxMonthlyVectorUpdates ??
-              PLAN_DEFINITIONS.CUSTOM.limits.vectorUpdateLimit,
+              customConfig.customMaxMonthlyVectorUpdates,
           }
-        : billing?.plan
-          ? {
-              productLimit: billing.plan.maxIndexedProducts,
-              searchLimit: billing.plan.maxMonthlySearches,
-              vectorUpdateLimit: billing.plan.maxMonthlyVectorUpdates,
-            }
-          : PLAN_DEFINITIONS[plan].limits;
+        : PLAN_DEFINITIONS.CUSTOM.limits
+      : billing?.plan
+        ? {
+            productLimit: billing.plan.maxIndexedProducts,
+            searchLimit: billing.plan.maxMonthlySearches,
+            vectorUpdateLimit: billing.plan.maxMonthlyVectorUpdates,
+          }
+        : PLAN_DEFINITIONS[plan].limits;
 
     const adjustedLimits = applyShopAdjustments(
       baseLimits,
@@ -661,7 +651,7 @@ export async function getDevDashboardData(search = "") {
     const customTermsDiffer = Boolean(
       billing &&
         customConfig &&
-        plan === AI_SEARCH_PLAN.custom &&
+        isShopSpecificCustomPlan &&
         hasPendingCustomPrice({
           subscriptionStatus,
           billedPrice,
@@ -699,10 +689,30 @@ export async function getDevDashboardData(search = "") {
       },
       customConfig: customConfig
         ? {
+            name: customConfig.customName ?? "Custom",
             price: customPrice,
+            currencyCode:
+              customConfig.customCurrencyCode ??
+              customConfig.plan.currencyCode ??
+              "USD",
+            interval:
+              customConfig.customInterval ??
+              customConfig.plan.interval,
+            trialDays:
+              customConfig.customTrialDays ??
+              customConfig.plan.trialDays ??
+              0,
             productLimit: customConfig.customMaxIndexedProducts,
             searchLimit: customConfig.customMaxMonthlySearches,
             vectorUpdateLimit: customConfig.customMaxMonthlyVectorUpdates,
+            usageBillingEnabled:
+              customConfig.customUsageBillingEnabled ??
+              customConfig.plan.usageBillingEnabled,
+            features: parsePlanFeatureFlags(
+              customConfig.customFeatureFlags ??
+                customConfig.plan.featureFlags,
+            ),
+            notes: customConfig.notes,
           }
         : null,
       identity: {
@@ -728,13 +738,30 @@ export async function getDevDashboardData(search = "") {
         customTerms: customConfig
           ? {
               configured: true,
+              name: customConfig.customName ?? "Custom",
               price: customPrice,
-              currency: "USD",
-              interval: "EVERY_30_DAYS" as const,
+              currency:
+                customConfig.customCurrencyCode ??
+                customConfig.plan.currencyCode ??
+                "USD",
+              interval:
+                customConfig.customInterval ??
+                customConfig.plan.interval,
+              trialDays:
+                customConfig.customTrialDays ??
+                customConfig.plan.trialDays ??
+                0,
               productLimit: customConfig.customMaxIndexedProducts,
               searchLimit: customConfig.customMaxMonthlySearches,
               vectorUpdateLimit:
                 customConfig.customMaxMonthlyVectorUpdates,
+              usageBillingEnabled:
+                customConfig.customUsageBillingEnabled ??
+                customConfig.plan.usageBillingEnabled,
+              features: parsePlanFeatureFlags(
+                customConfig.customFeatureFlags ??
+                  customConfig.plan.featureFlags,
+              ),
               pendingCommercialChange: customTermsDiffer,
             }
           : null,
@@ -785,6 +812,42 @@ export async function getDevDashboardData(search = "") {
     vectorUpdates: overall.vectorUpdates,
   };
 
+  const planCatalog = billingPlans.map((plan) => {
+    const subscriptionsForPlan = billingSubscriptions.filter(
+      (subscription) => subscription.plan?.id === plan.id,
+    );
+    return {
+      id: plan.id,
+      handle: plan.handle,
+      name: plan.name,
+      visibility: plan.visibility,
+      billingMode: plan.billingMode,
+      interval: plan.interval,
+      price: n(plan.price),
+      currencyCode: plan.currencyCode,
+      trialDays: plan.trialDays,
+      limits: {
+        productLimit: plan.maxIndexedProducts,
+        searchLimit: plan.maxMonthlySearches,
+        vectorUpdateLimit: plan.maxMonthlyVectorUpdates,
+      },
+      usageBillingEnabled: plan.usageBillingEnabled,
+      shopifyPlanHandle: plan.shopifyPlanHandle,
+      version: plan.version,
+      isActive: plan.isActive,
+      sortOrder: plan.sortOrder,
+      features: parsePlanFeatureFlags(plan.featureFlags),
+      subscriptions: {
+        total: subscriptionsForPlan.length,
+        active: subscriptionsForPlan.filter((item) => item.status === "ACTIVE").length,
+        pending: subscriptionsForPlan.filter((item) => item.status === "PENDING").length,
+        frozen: subscriptionsForPlan.filter((item) => item.status === "FROZEN").length,
+      },
+      createdAt: plan.createdAt.toISOString(),
+      updatedAt: plan.updatedAt.toISOString(),
+    };
+  });
+
   return {
     generatedAt: now.toISOString(),
     monthStart: from.toISOString(),
@@ -795,6 +858,7 @@ export async function getDevDashboardData(search = "") {
     },
     overview,
     financial,
+    planCatalog,
     provider: {
       inputTokens: n(provider.inputTokens),
       outputTokens: n(provider.outputTokens),
@@ -863,18 +927,34 @@ export type DevDashboardData = Awaited<
 export async function setCustomPlanTerms({
   actorShop,
   targetShop,
+  name,
   price,
+  currencyCode,
+  interval,
+  trialDays,
   productLimit,
   searchLimit,
   vectorUpdateLimit,
+  usageBillingEnabled,
+  description,
+  highlights,
+  capabilities,
   reason,
 }: {
   actorShop: string;
   targetShop: string;
+  name: string;
   price: number;
-  productLimit: number;
-  searchLimit: number;
-  vectorUpdateLimit: number;
+  currencyCode: string;
+  interval: "EVERY_30_DAYS" | "ANNUAL";
+  trialDays: number;
+  productLimit: number | null;
+  searchLimit: number | null;
+  vectorUpdateLimit: number | null;
+  usageBillingEnabled: boolean;
+  description: string;
+  highlights: string[];
+  capabilities: Record<string, boolean>;
   reason: string;
 }) {
   const cleanReason = reason.trim();
@@ -882,23 +962,62 @@ export async function setCustomPlanTerms({
     throw new Error("Reason is required for Custom plan changes");
   }
 
+  const cleanName = name.trim().slice(0, 120);
+  if (!cleanName) {
+    throw new Error("Custom plan name is required");
+  }
+
   const cleanPrice = Number(price);
   if (!Number.isFinite(cleanPrice) || cleanPrice <= 0 || cleanPrice > 1_000_000) {
     throw new Error("Custom price must be greater than 0");
   }
 
-  const normalizeLimit = (value: number, label: string) => {
+  const cleanCurrencyCode = currencyCode.trim().toUpperCase();
+  if (!/^[A-Z]{3}$/.test(cleanCurrencyCode)) {
+    throw new Error("Custom currency must be a 3-letter ISO code");
+  }
+
+  if (!["EVERY_30_DAYS", "ANNUAL"].includes(interval)) {
+    throw new Error("Invalid Custom billing interval");
+  }
+
+  const cleanTrialDays = Math.trunc(trialDays);
+  if (
+    !Number.isFinite(cleanTrialDays) ||
+    cleanTrialDays < 0 ||
+    cleanTrialDays > 365
+  ) {
+    throw new Error("Custom trial days must be between 0 and 365");
+  }
+
+  const normalizeLimit = (value: number | null, label: string) => {
+    if (value === null) return null;
     if (!Number.isFinite(value) || value < 0) {
-      throw new Error(label + " must be >= 0");
+      throw new Error(label + " must be blank for unlimited or >= 0");
     }
     return Math.min(1_000_000_000, Math.trunc(value));
   };
 
+  const features = parsePlanFeatureFlags({
+    description,
+    highlights,
+    capabilities,
+  });
+
   const terms = {
+    name: cleanName,
     price: Math.round(cleanPrice * 100) / 100,
+    currencyCode: cleanCurrencyCode,
+    interval,
+    trialDays: cleanTrialDays,
     productLimit: normalizeLimit(productLimit, "Product limit"),
     searchLimit: normalizeLimit(searchLimit, "Search limit"),
-    vectorUpdateLimit: normalizeLimit(vectorUpdateLimit, "Vector update limit"),
+    vectorUpdateLimit: normalizeLimit(
+      vectorUpdateLimit,
+      "Vector update limit",
+    ),
+    usageBillingEnabled: Boolean(usageBillingEnabled),
+    features,
   };
 
   const target = await db.aiSearchShop.findUnique({
@@ -913,19 +1032,23 @@ export async function setCustomPlanTerms({
       handle: "custom",
       name: "Custom",
       visibility: "INTERNAL",
-      billingMode: "SHOPIFY_APP_PRICING",
+      billingMode: "MANUAL_BILLING",
       interval: "EVERY_30_DAYS",
       price: 0,
       currencyCode: "USD",
-      maxIndexedProducts: 0,
-      maxMonthlySearches: 0,
-      maxMonthlyVectorUpdates: 0,
+      trialDays: 0,
+      maxIndexedProducts: null,
+      maxMonthlySearches: null,
+      maxMonthlyVectorUpdates: null,
+      usageBillingEnabled: false,
+      featureFlags: features as Prisma.InputJsonValue,
       isActive: true,
       sortOrder: 30,
     },
     update: {
       name: "Custom",
       visibility: "INTERNAL",
+      billingMode: "MANUAL_BILLING",
       isActive: true,
       sortOrder: 30,
     },
@@ -939,10 +1062,17 @@ export async function setCustomPlanTerms({
       },
     },
     select: {
+      customName: true,
       customPriceOverride: true,
+      customCurrencyCode: true,
+      customInterval: true,
+      customTrialDays: true,
       customMaxIndexedProducts: true,
       customMaxMonthlySearches: true,
       customMaxMonthlyVectorUpdates: true,
+      customUsageBillingEnabled: true,
+      customFeatureFlags: true,
+      notes: true,
       isActive: true,
       startsAt: true,
       endsAt: true,
@@ -950,10 +1080,17 @@ export async function setCustomPlanTerms({
   });
 
   const after = {
+    customName: terms.name,
     customPriceOverride: terms.price,
+    customCurrencyCode: terms.currencyCode,
+    customInterval: terms.interval,
+    customTrialDays: terms.trialDays,
     customMaxIndexedProducts: terms.productLimit,
     customMaxMonthlySearches: terms.searchLimit,
     customMaxMonthlyVectorUpdates: terms.vectorUpdateLimit,
+    customUsageBillingEnabled: terms.usageBillingEnabled,
+    customFeatureFlags: terms.features,
+    notes: cleanReason,
     isActive: true,
   };
 
@@ -968,20 +1105,32 @@ export async function setCustomPlanTerms({
       create: {
         shop: targetShop,
         planId: customPlan.id,
+        customName: terms.name,
         customPriceOverride: terms.price,
+        customCurrencyCode: terms.currencyCode,
+        customInterval: terms.interval,
+        customTrialDays: terms.trialDays,
         customMaxIndexedProducts: terms.productLimit,
         customMaxMonthlySearches: terms.searchLimit,
         customMaxMonthlyVectorUpdates: terms.vectorUpdateLimit,
+        customUsageBillingEnabled: terms.usageBillingEnabled,
+        customFeatureFlags: terms.features as Prisma.InputJsonValue,
         notes: cleanReason,
         startsAt: new Date(),
         endsAt: null,
         isActive: true,
       },
       update: {
+        customName: terms.name,
         customPriceOverride: terms.price,
+        customCurrencyCode: terms.currencyCode,
+        customInterval: terms.interval,
+        customTrialDays: terms.trialDays,
         customMaxIndexedProducts: terms.productLimit,
         customMaxMonthlySearches: terms.searchLimit,
         customMaxMonthlyVectorUpdates: terms.vectorUpdateLimit,
+        customUsageBillingEnabled: terms.usageBillingEnabled,
+        customFeatureFlags: terms.features as Prisma.InputJsonValue,
         notes: cleanReason,
         endsAt: null,
         isActive: true,
