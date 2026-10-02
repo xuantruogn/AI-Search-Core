@@ -251,24 +251,33 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       select: { trialDays: true },
     });
 
-    // Trial is a shop-level first-subscription benefit, not a per-plan-change
-    // benefit. Once this shop has ever had a Billing V2 subscription, every
-    // later replacement/change must be created without trialDays.
+    // Trial policy:
+    // - Trial is for a NEW SHOP only: once ANY subscription is approved,
+    //   the shop permanently loses trial eligibility.
+    // - PENDING subscriptions do NOT consume trial eligibility because the
+    //   merchant has not approved any subscription yet.
+    // - BASIC is the only plan that can receive trial days.
+    // - PRO must always be created with zero trial days.
     //
-    // AiSearchSubscription is bootstrapped for every shop even when there has
-    // never been a paid/trial subscription, so its mere existence is not
-    // sufficient to determine trial eligibility. A real BillingSubscription
-    // row is the authoritative local marker that billing history has started.
-    const hasBillingHistory = Boolean(
-      await db.billingSubscription.findFirst({
-        where: { shop: session.shop },
+    // BillingSubscription rows are created for PENDING subscriptions, so
+    // their existence is NOT evidence that the shop has used billing/trial.
+    // BillingEvent SUBSCRIPTION_APPROVED is the durable local evidence that
+    // Shopify actually approved a subscription.
+    const hasEverApprovedSubscription = Boolean(
+      await db.billingEvent.findFirst({
+        where: {
+          shop: session.shop,
+          type: "SUBSCRIPTION_APPROVED",
+        },
         select: { id: true },
       }),
     );
 
-    const trialDays = hasBillingHistory
-      ? 0
-      : Math.max(0, billingPlan?.trialDays ?? 0);
+    const isBasicPlan = planKey.toUpperCase() === "BASIC";
+    const trialDays =
+      isBasicPlan && !hasEverApprovedSubscription
+        ? Math.max(0, billingPlan?.trialDays ?? 0)
+        : 0;
     const isProduction = process.env.NODE_ENV === "production";
 
     let finalPrice = baseMonthlyPrice;
