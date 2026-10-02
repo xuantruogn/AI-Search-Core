@@ -20,10 +20,6 @@ api_version = "2026-10"
 topics = [ "app_subscriptions/update" ]
 uri = "/webhooks/app/subscriptions_update"
 
-[[webhooks.subscriptions]]
-topics = [ "app/uninstalled" ]
-uri = "/webhooks/app/uninstalled"
-
 [app_proxy]
 url = "/proxy/ai-search"
 prefix = "apps"
