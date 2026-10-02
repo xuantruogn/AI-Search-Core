@@ -32,7 +32,9 @@
     "test:billing-simulation:s02-s05": "tsx --env-file=.env scripts/billing-simulation-s02-s05.ts",
     "test:billing-simulation:s06-s08": "tsx --env-file=.env scripts/billing-simulation-s06-s08.ts",
     "test:billing-simulation:s09-s14": "tsx --env-file=.env scripts/billing-simulation-s09-s14.ts",
-    "sim:s09-14": "npm run test:billing-simulation:s09-s14"
+    "sim:s09-14": "npm run test:billing-simulation:s09-s14",
+    "test:billing-simulation:s15-s18": "tsx --env-file=.env scripts/billing-simulation-s15-s18.ts",
+    "sim:s15-18": "npm run test:billing-simulation:s15-s18"
   },
   "type": "module",
   "engines": {
