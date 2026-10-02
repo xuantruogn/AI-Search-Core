@@ -18,7 +18,7 @@ function pageHtml() {
     window.AI_SEARCH_CONFIG={version:4,theme_map_version:4,theme_id:"1",search_url:"/search",search_endpoint:"/apps/ai-search"};
   </script><script src="/runtime.js" defer></script></head><body>
     <form action="/search"><input name="q"></form>
-    <main><p role="status">No results found for "green".</p><ul id="VerifiedMount"><li data-handle="native">native</li></ul></main>
+    <main><p role="status">No results found for "green".</p><ul id="VerifiedMount"><li data-handle="native">native</li></ul><nav class="native-pagination"><a href="?page=2">2</a></nav></main>
   </body></html>`;
 }
 
@@ -43,6 +43,13 @@ function renderMetadata(page, options = {}) {
       selector: options.missingMount ? "#MissingMount" : "#VerifiedMount",
       sourceFile: "sections/arbitrary.liquid",
       verification: { expectedTag: "ul", expectedMatchCount: 1 },
+    },
+    nativePagination: {
+      scope: "SEARCH_SECTION",
+      strategy: "SOURCE_PROVEN_SELECTOR",
+      selector: "nav.native-pagination",
+      sourceFile: "snippets/arbitrary-pagination.liquid",
+      verification: { expectedTag: "nav", expectedMatchCount: 1 },
     },
     products: page === 1
       ? [{ productId: "gid://shopify/Product/2", handle: "beta" }, { productId: "gid://shopify/Product/1", handle: "alpha" }]
@@ -137,6 +144,10 @@ async function scenario(browser, options = {}) {
     );
     assert.equal(await page.getByRole("status").textContent(), "3 results");
     assert.match(await page.title(), /^Search: 3 results found for/);
+    assert.equal(
+      await page.locator("nav.native-pagination").evaluate((element) => element.hidden),
+      true,
+    );
     if (options.inPlaceOverlay) {
       await page.evaluate(() => {
         const details = document.createElement("details");

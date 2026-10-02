@@ -2,6 +2,10 @@ import db from "../../db.server";
 import { PRODUCT_ENRICHMENT_VERSION } from "../products/product-embedding-input.server";
 import type { QueryConstraint, QueryPlan } from "./query-plan.server";
 import { normalizeQueryText } from "./deterministic-query-parser.server";
+import {
+  findSemanticProductIds,
+  loadShopSemanticRows,
+} from "./product-semantic-profile.server";
 
 export type AbsenceProofStatus =
   | "CERTAIN_NO_RESULT"
@@ -87,36 +91,22 @@ async function exactMatches(args: {
   kinds: string[];
   value: string;
 }) {
-  // Query the indexed facet itself and intersect candidate IDs in memory.
-  // Avoid a large productId IN (...) predicate here: it is unnecessary and
-  // has caused intermittent empty-engine responses in Prisma/MySQL.
-  const rows = await db.aiSearchShopContextTerm.findMany({
-    where: {
-      shop: args.shop,
-      kind: { in: args.kinds },
-      normalizedValue: args.value,
-    },
-    select: { productId: true },
-    take: 50_000,
+  return findSemanticProductIds({
+    shop: args.shop,
+    kinds: args.kinds,
+    normalizedValue: args.value,
   });
-  return new Set(rows.map((row) => row.productId));
 }
 
 async function canonicalCoverage(shop: string, searchableIds: string[]) {
   if (!searchableIds.length) return true;
 
-  // Avoid Prisma groupBy + a large IN predicate here. On MySQL that path can
-  // intermittently return an empty engine response under concurrent search
-  // load. Read the shop's canonical rows once and compare coverage in memory.
-  const rows = await db.aiSearchShopContextTerm.findMany({
-    where: {
-      shop,
-      kind: "CANONICAL_PRODUCT_TYPE",
-    },
-    select: { productId: true },
-    take: 50_000,
-  });
-  const covered = new Set(rows.map((row) => row.productId));
+  const rows = await loadShopSemanticRows(shop);
+  const covered = new Set(
+    rows
+      .filter((row) => row.kind === "CANONICAL_PRODUCT_TYPE")
+      .map((row) => row.productId),
+  );
   return searchableIds.every((productId) => covered.has(productId));
 }
 async function enrichmentCoverage(shop: string, productIds: string[]) {

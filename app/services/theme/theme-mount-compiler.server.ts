@@ -21,6 +21,87 @@ export type ThemeMountCompileResult =
       mount?: never;
     };
 
+/**
+ * Compile selector cho một element cụ thể trong một source file.
+ * Dùng cho auxiliary UI (ví dụ native pagination), không đoán tên/class.
+ */
+export function compileSourceProvenElementMount(
+  args: {
+    document: ParsedLiquidDocument;
+    tokenIndex: number;
+    sourceFile: string;
+    sectionKey?: string;
+    sectionType?: string;
+  },
+): ThemeMountCompileResult {
+  const token =
+    args.document.tokens[
+      args.tokenIndex
+    ];
+
+  const frame =
+    token
+      ? frameFromOpenToken(
+          token,
+        )
+      : null;
+
+  if (!frame) {
+    return {
+      status: "UNSUPPORTED",
+      reason: "SOURCE_ELEMENT_NOT_FOUND",
+    };
+  }
+
+  const direct =
+    strongDirectMountRecipe(
+      args.document,
+      frame,
+      args,
+    );
+
+  if (direct) {
+    return {
+      status: "PROVEN",
+      mount: direct,
+    };
+  }
+
+  const unique =
+    uniqueAnchorDescriptor(
+      args.document,
+      frame,
+    );
+
+  if (!unique) {
+    return {
+      status: "UNSUPPORTED",
+      reason: "SOURCE_PROVEN_ELEMENT_SELECTOR_NOT_FOUND",
+    };
+  }
+
+  return {
+    status: "PROVEN",
+    mount: {
+      sectionKey:
+        args.sectionKey,
+      sectionType:
+        args.sectionType,
+      strategy:
+        unique.strategy,
+      selector:
+        unique.descriptor.selector,
+      sourceFile:
+        args.sourceFile,
+      verification: {
+        expectedTag:
+          frame.tagName.toLowerCase(),
+        expectedMatchCount: 1,
+      },
+    },
+  };
+}
+
 interface SelectorDescriptor {
   selector: string;
 

@@ -1,6 +1,7 @@
 import db from "../../db.server";
 
 import {
+  THEME_MAP_V4_COMPILER_REVISION,
   THEME_MAP_V4_VERSION,
   type ThemeMapV4,
 } from "./theme-map-v4.types";
@@ -54,6 +55,13 @@ function parseThemeMap(
     const map = value as Partial<ThemeMapV4>;
 
     if (map.version !== THEME_MAP_V4_VERSION) {
+      return null;
+    }
+
+    if (
+      map.compilerRevision !==
+      THEME_MAP_V4_COMPILER_REVISION
+    ) {
       return null;
     }
 

@@ -1,8 +1,8 @@
-import db from "../../db.server";
 import { listSearchableIndexedProducts } from "../commerce/indexed-products.server";
 import type { QueryPlan, QueryConstraint } from "./query-plan.server";
 import { normalizeQueryText } from "./deterministic-query-parser.server";
 import type { SearchResult } from "./semantic-search.server";
+import { loadShopSemanticRows } from "./product-semantic-profile.server";
 
 export const STRUCTURED_RANKING_WEIGHTS = {
   IDENTIFIER: 100,
@@ -124,11 +124,10 @@ export async function retrieveStructuredCandidates(args: {
     constraint.normalizedValue || normalizeQueryText(constraint.value),
   ))];
 
-  const rows = await db.aiSearchShopContextTerm.findMany({
-    where: { shop: args.shop, normalizedValue: { in: normalizedValues } },
-    select: { productId: true, kind: true, normalizedValue: true },
-    take: 50_000,
-  });
+  const normalizedSet = new Set(normalizedValues);
+  const rows = (await loadShopSemanticRows(args.shop)).filter((row) =>
+    normalizedSet.has(row.normalizedValue),
+  );
   const scores = new Map<string, number>();
   const matchedMust = new Map<string, Set<string>>();
   const matchedKeys = new Map<string, Set<string>>();

@@ -684,8 +684,8 @@ model AiSearchIndexedProduct {
   lastEmbeddedAt   DateTime?
   lastSyncedAt     DateTime?
 
-  shopRecord   AiSearchShop              @relation(fields: [shop], references: [shop], onDelete: Cascade)
-  contextTerms AiSearchShopContextTerm[]
+  shopRecord      AiSearchShop                    @relation(fields: [shop], references: [shop], onDelete: Cascade)
+  semanticProfile AiSearchProductSemanticProfile?
 
   @@unique([shop, productId])
   @@index([shop, status])
@@ -792,22 +792,22 @@ model AiSearchResultReceipt {
   @@index([expiresAt])
 }
 
-// Semantic vocabulary built only while products are synchronized. Search-time
-// code reads this compact index instead of sending catalog data to the query LLM.
-model AiSearchShopContextTerm {
-  id              Int      @id @default(autoincrement())
-  shop            String   @db.VarChar(191)
-  productId       String   @db.VarChar(64)
-  kind            String   @db.VarChar(64)
-  value           String   @db.VarChar(255)
-  normalizedValue String   @db.VarChar(255)
-  createdAt       DateTime @default(now())
+// One JSON semantic profile per indexed product. This replaces the old
+// one-row-per-term AiSearchShopContextTerm table and keeps semantic/context
+// storage proportional to product count instead of term count.
+model AiSearchProductSemanticProfile {
+  id            Int      @id @default(autoincrement())
+  shop          String   @db.VarChar(191)
+  productId     String   @db.VarChar(64)
+  schemaVersion Int      @default(1)
+  profile       Json
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 
   productRecord AiSearchIndexedProduct @relation(fields: [shop, productId], references: [shop, productId], onDelete: Cascade)
 
-  @@unique([shop, productId, kind, normalizedValue])
-  @@index([shop, kind])
-  @@index([shop, normalizedValue])
+  @@unique([shop, productId])
+  @@index([shop, updatedAt])
 }
 
 model AiSearchRenderTransportKey {

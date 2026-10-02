@@ -1,6 +1,6 @@
-import db from "../../db.server";
 import { normalizeQueryText } from "./deterministic-query-parser.server";
 import { createHash } from "node:crypto";
+import { loadShopSemanticRows } from "./product-semantic-profile.server";
 
 export type DictionaryField =
   | "PRODUCT_TYPE"
@@ -80,25 +80,7 @@ async function loadShopSearchDictionaryUncached(
   const cached = cache.get(shop);
   if (cached && cached.expiresAt > Date.now()) return cached.value;
 
-  const rows = await db.aiSearchShopContextTerm.findMany({
-    where: {
-      shop,
-      productRecord: {
-        is: {
-          searchable: true,
-          hasVector: true,
-        },
-      },
-    },
-    select: {
-      kind: true,
-      value: true,
-      normalizedValue: true,
-      productId: true,
-      createdAt: true,
-    },
-    take: 50_000,
-  });
+  const rows = await loadShopSemanticRows(shop);
 
   const grouped = new Map<string, DictionaryEntry & { productIds: Set<string> }>();
   let newestTimestamp = 0;
@@ -133,7 +115,7 @@ async function loadShopSearchDictionaryUncached(
         confidence: confidenceForKind(row.kind, normalized),
       });
     }
-    newestTimestamp = Math.max(newestTimestamp, row.createdAt.getTime());
+    newestTimestamp = Math.max(newestTimestamp, row.updatedAt.getTime());
   }
 
   const entries = [...grouped.values()].map(({ productIds, ...entry }) => ({

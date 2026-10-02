@@ -15,10 +15,11 @@ import {
   type ThemeSourceFile,
 } from "./theme-dependency-graph.server";
 
-import type {
-  ThemeArgumentValue,
-  ThemeMapV4,
-  ThemeMapV4SearchIdentity,
+import {
+  THEME_MAP_V4_COMPILER_REVISION,
+  type ThemeArgumentValue,
+  type ThemeMapV4,
+  type ThemeMapV4SearchIdentity,
 } from "./theme-map-v4.types";
 
 import type {
@@ -1184,6 +1185,9 @@ function unsupportedMap(
 ): ThemeMapV4 {
   return {
     version: 4,
+
+    compilerRevision:
+      THEME_MAP_V4_COMPILER_REVISION,
 
     theme: {
       id:

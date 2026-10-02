@@ -1,5 +1,11 @@
 export const THEME_MAP_V4_VERSION = 4 as const;
 
+/**
+ * Tăng khi compiler semantics thay đổi nhưng public Theme Map schema vẫn là V4.
+ * Persisted map có revision cũ phải được compile lại ngay cả khi theme không đổi.
+ */
+export const THEME_MAP_V4_COMPILER_REVISION = 2 as const;
+
 export const THEME_MAP_V4_DEFAULT_PAGE_SIZE = 20 as const;
 
 export type RendererRuntimeMode =
@@ -80,6 +86,15 @@ export interface ThemeMountRecipe {
      */
     expectedMatchCount: 1;
   };
+}
+
+export interface ThemeNativePaginationRecipe
+  extends ThemeMountRecipe {
+  /**
+   * Pagination được resolve bên trong search section chứa product mount.
+   * Không query/mutate một pagination cùng class ở section khác.
+   */
+  scope: "SEARCH_SECTION";
 }
 
 export interface ThemeRendererCandidate {
@@ -182,6 +197,12 @@ export interface ThemeRendererCandidate {
    * vì vậy không dùng một global mount chung cho mọi candidate.
    */
   mount?: ThemeMountRecipe;
+
+  /**
+   * Native pagination nằm ngoài product mount và phải được ẩn khi AI render
+   * thành công. Selector luôn được compile từ source Liquid thật.
+   */
+  nativePagination?: ThemeNativePaginationRecipe;
 }
 
 export interface ThemeMapV4ThemeIdentity {
@@ -204,6 +225,9 @@ export interface ThemeMapV4SearchIdentity {
 interface ThemeMapV4Base {
   version:
     typeof THEME_MAP_V4_VERSION;
+
+  compilerRevision:
+    typeof THEME_MAP_V4_COMPILER_REVISION;
 
   theme:
     ThemeMapV4ThemeIdentity;

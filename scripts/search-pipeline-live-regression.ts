@@ -4,6 +4,7 @@ import { retrieveStructuredCandidates } from "../app/services/search/structured-
 import { semanticSearch, type SemanticSearchDiagnostics } from "../app/services/search/semantic-search.server";
 import { applyShopContextToQuery, filterResultsByExplicitGender, type ExplicitGenderFilterDiagnostics } from "../app/services/search/shop-context-index.server";
 import { getShopSettings } from "../app/services/commerce/shop-registry.server";
+import { loadProductSemanticRows } from "../app/services/search/product-semantic-profile.server";
 
 const shop = process.env.AI_SEARCH_REGRESSION_SHOP || "dev-app-6fvh2isn.myshopify.com";
 const cases = [
@@ -47,18 +48,13 @@ const expectedTopFacetByQuery = new Map<string, string>([
   ["white women's top", "white"],
 ]);
 async function topProductHasFacetToken(productId: string, facet: string) {
-  const rows = await db.aiSearchShopContextTerm.findMany({
-    where: {
-      shop,
-      productId,
-      kind: { in: ["ATTRIBUTE", "VARIANT_OPTION"] },
-    },
-    select: { normalizedValue: true },
-  });
+  const rows = await loadProductSemanticRows(shop, [productId]);
   const token = facet.trim().toLowerCase();
-  return rows.some((row) =>
-    ` ${row.normalizedValue.toLowerCase()} `.includes(` ${token} `),
-  );
+  return rows
+    .filter((row) => ["ATTRIBUTE", "VARIANT_OPTION"].includes(row.kind))
+    .some((row) =>
+      ` ${row.normalizedValue.toLowerCase()} `.includes(` ${token} `),
+    );
 }
 for (const [group, query] of cases.filter(([, query]) =>
   !process.env.AI_SEARCH_REGRESSION_FILTER ||

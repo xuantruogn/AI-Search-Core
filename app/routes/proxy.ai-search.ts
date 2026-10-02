@@ -723,6 +723,7 @@ let resultCacheStatus: "HIT" | "MISS" = "MISS";
             theme_id: string;
             map_fingerprint: string;
             mount: ThemeRendererCandidate["mount"];
+            native_pagination: ThemeRendererCandidate["nativePagination"];
           }
         | null = null;
 
@@ -790,6 +791,8 @@ let resultCacheStatus: "HIT" | "MISS" = "MISS";
               theme_id: syncedMap.map.theme.id,
               map_fingerprint: syncedMap.map.fingerprint,
               mount: bootstrapCandidate.mount,
+              native_pagination:
+                bootstrapCandidate.nativePagination,
             };
           }
         }
@@ -1223,6 +1226,9 @@ let resultCacheStatus: "HIT" | "MISS" = "MISS";
           mount:
             candidate.mount,
 
+          native_pagination:
+            candidate.nativePagination,
+
           search_section: {
             template_file:
               map.search
@@ -1624,6 +1630,9 @@ let resultCacheStatus: "HIT" | "MISS" = "MISS";
 
               mount:
                 renderPlan.mount,
+
+              nativePagination:
+                renderPlan.candidate.nativePagination,
 
               candidateIds:
                 getThemeResultRendererCandidates(
@@ -3864,6 +3873,9 @@ let resultCacheStatus: "HIT" | "MISS" = "MISS";
 
               mount:
                 themeContextCandidate.mount,
+
+              native_pagination:
+                themeContextCandidate.nativePagination,
 
               search_section: {
                 template_file:

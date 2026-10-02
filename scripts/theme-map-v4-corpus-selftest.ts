@@ -133,6 +133,14 @@ function main() {
       assert.doesNotMatch(ridePlan.liquid, /ai_product\.object_type/);
       assert.doesNotMatch(ridePlan.liquid, /item\.object_type/);
       assert.match(ridePlan.liquid, /render\s+'card-product'/);
+      assert.equal(
+        ridePlan.candidate.nativePagination?.selector,
+        "div.pagination-wrapper",
+      );
+      assert.equal(
+        ridePlan.candidate.nativePagination?.scope,
+        "SEARCH_SECTION",
+      );
       assert.match(ridePlan.liquid, /card_product:\s*ai_product/);
       assert.ok(
         ridePlan.liquid.indexOf("women-jacket") < ridePlan.liquid.indexOf("winter-jacket"),

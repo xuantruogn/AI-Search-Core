@@ -110,6 +110,16 @@
     if (bootstrapRecipe) {
       rememberLoadingMount(bootstrapRecipe);
       concealNativeResults(bootstrapRecipe);
+      try {
+        concealSourceProvenPagination(
+          validateLoadingMount(bootstrapRecipe),
+          config.theme_map_bootstrap?.native_pagination,
+        );
+      } catch (error) {
+        console.info(logPrefix, "native pagination conceal skipped", {
+          reason: error instanceof Error ? error.message : String(error),
+        });
+      }
       if (concealedMount) return;
     }
 
@@ -132,6 +142,7 @@
 
   const renderedPageCache = new Map();
   const pagePrefetches = new Map();
+  const concealedNativePagination = new Set();
   const PAGE_CACHE_LIMIT = 12;
 
   function isSearchPath(pathname) {
@@ -339,6 +350,9 @@
       return;
     }
     clearMountBusy();
+    if (nextState === UI_STATE.NATIVE_FALLBACK) {
+      revealNativePagination();
+    }
     closeActiveSearchOverlay();
     hideLoading();
   }
@@ -502,16 +516,23 @@
       return null;
     }
 
-    suspendNativePaginationRuntime(mount, metadata.page);
-    mount.replaceChildren(...nodes);
+    const rollback = replaceMountContent(
+      mount,
+      nodes,
+      metadata,
+    );
+
+    suspendNativePaginationRuntime(
+      mount,
+      metadata.page,
+      metadata.nativePagination,
+    );
 
     activeProducts = Array.isArray(cached.products)
       ? clonePlainValue(cached.products)
       : [];
 
     metadata.products = activeProducts;
-
-    activateRuntime(mount, metadata);
 
     renderedPageCache.delete(key);
     renderedPageCache.set(key, cached);
@@ -525,6 +546,7 @@
     return {
       mount,
       metadata,
+      rollback,
     };
   }
 
@@ -795,6 +817,130 @@
     }
   }
 
+  function hasMeaningfulProductCard(root) {
+    return Array.from(root?.children || []).some(function (element) {
+      if ((element.textContent || "").trim()) return true;
+
+      return Boolean(
+        element.matches(
+          "a[href], img, picture, form, button, product-component, [data-product-id]",
+        ) ||
+          element.querySelector(
+            "a[href], img, picture, form, button, product-component, [data-product-id]",
+          ),
+      );
+    });
+  }
+
+  function assertMountedProductCards(mount, metadata, verifyVisibility) {
+    if (!(Number(metadata?.totalProducts || 0) > 0)) return;
+
+    if (!(mount instanceof Element) || !mount.isConnected) {
+      throw new Error("THEME_RENDER_MOUNT_DISCONNECTED");
+    }
+
+    if (!hasMeaningfulProductCard(mount)) {
+      throw new Error("THEME_RENDER_EMPTY_PRODUCT_CARDS");
+    }
+
+    if (!verifyVisibility) return;
+
+    const style = window.getComputedStyle(mount);
+    if (
+      style.display === "none" ||
+      style.visibility === "hidden" ||
+      mount.getClientRects().length === 0
+    ) {
+      throw new Error("THEME_RENDER_PRODUCT_CARDS_NOT_VISIBLE");
+    }
+  }
+
+  function replaceMountContent(mount, nodes, metadata) {
+    const previousNodes = Array.from(mount.childNodes);
+    const nextNodes = Array.from(nodes || []);
+
+    try {
+      mount.replaceChildren(...nextNodes);
+      activateRuntime(mount, metadata);
+      assertMountedProductCards(mount, metadata, false);
+    } catch (error) {
+      mount.replaceChildren(...previousNodes);
+      throw error;
+    }
+
+    let rolledBack = false;
+    return function rollback() {
+      if (rolledBack) return;
+      rolledBack = true;
+      mount.replaceChildren(...previousNodes);
+      revealNativePagination();
+    };
+  }
+
+  function nextPaint() {
+    return new Promise(function (resolve) {
+      window.requestAnimationFrame(function () {
+        window.requestAnimationFrame(resolve);
+      });
+    });
+  }
+
+  function paginationScopeForMount(mount) {
+    if (!(mount instanceof Element)) return null;
+
+    return (
+      mount.closest('[id^="shopify-section-"]') ||
+      mount.closest("section") ||
+      mount.closest("main")
+    );
+  }
+
+  function concealSourceProvenPagination(mount, recipe) {
+    if (!recipe?.selector || recipe.scope !== "SEARCH_SECTION") return;
+
+    const scope = paginationScopeForMount(mount);
+    if (!scope) return;
+
+    let matches;
+    try {
+      matches = scope.querySelectorAll(recipe.selector);
+    } catch {
+      throw new Error("THEME_NATIVE_PAGINATION_SELECTOR_INVALID");
+    }
+
+    // Một page native có thể không render pagination khi chỉ có một trang.
+    if (matches.length === 0) return;
+
+    if (matches.length !== recipe.verification?.expectedMatchCount) {
+      throw new Error("THEME_NATIVE_PAGINATION_NOT_UNIQUE");
+    }
+
+    const expectedTag = recipe.verification?.expectedTag;
+    const pagination = matches[0];
+    if (
+      expectedTag &&
+      pagination.tagName.toLowerCase() !== String(expectedTag).toLowerCase()
+    ) {
+      throw new Error("THEME_NATIVE_PAGINATION_TAG_MISMATCH");
+    }
+
+    pagination.hidden = true;
+    pagination.inert = true;
+    pagination.setAttribute("aria-hidden", "true");
+    pagination.setAttribute("data-ai-search-v4-native-pagination", "hidden");
+    concealedNativePagination.add(pagination);
+  }
+
+  function revealNativePagination() {
+    concealedNativePagination.forEach(function (pagination) {
+      pagination.hidden = false;
+      pagination.inert = false;
+      pagination.removeAttribute("aria-hidden");
+      pagination.removeAttribute("data-ai-search-v4-native-pagination");
+    });
+    concealedNativePagination.clear();
+  }
+
   function numericThemeId(value) {
     return String(value || "").replace(
       /^gid:\/\/shopify\/(?:OnlineStore)?Theme\//,
@@ -885,7 +1031,11 @@
     return mount;
   }
 
-  function suspendNativePaginationRuntime(mount, page = 1) {
+  function suspendNativePaginationRuntime(
+    mount,
+    page = 1,
+    nativePagination = null,
+  ) {
     const parsedPage = Number.parseInt(String(page || "1"), 10);
 
     const safePage =
@@ -918,9 +1068,9 @@
       }
     }
 
-    if (!host) {
-      return;
-    }
+    concealSourceProvenPagination(mount, nativePagination);
+
+    if (!host) return;
 
     const firstSuspend =
       host.dataset.aiSearchV4NativePaginationSuspended !== "true";
@@ -1045,13 +1195,16 @@
         const mount =
           verifyMount(metadata, receipt);
 
+        const rollback = replaceMountContent(
+          mount,
+          Array.from(template.content.childNodes),
+          metadata,
+        );
+
         suspendNativePaginationRuntime(
           mount,
           metadata.page,
-        );
-
-        mount.replaceChildren(
-          template.content,
+          metadata.nativePagination,
         );
 
         activeProducts =
@@ -1059,14 +1212,10 @@
             ? metadata.products
             : [];
 
-        activateRuntime(
-          mount,
-          metadata,
-        );
-
         return {
           mount,
           metadata,
+          rollback,
         };
       } catch (error) {
         rejected.add(
@@ -1832,6 +1981,10 @@
       mount:
         plan.mount,
 
+      nativePagination:
+        plan.native_pagination ||
+        null,
+
       candidateIds:
         plan.candidate?.id
           ? [plan.candidate.id]
@@ -2040,22 +2193,20 @@
      * Không để native infinite-scroll append
      * Shopify-native pages vào AI result grid.
      */
+    const rollback = replaceMountContent(
+      mount,
+      orderedCards,
+      metadata,
+    );
+
     suspendNativePaginationRuntime(
       mount,
       metadata.page,
-    );
-
-    mount.replaceChildren(
-      ...orderedCards,
+      metadata.nativePagination,
     );
 
     activeProducts =
       products;
-
-    activateRuntime(
-      mount,
-      metadata,
-    );
 
     cacheRenderedMount(
       mount,
@@ -2085,6 +2236,7 @@
     return {
       mount,
       metadata,
+      rollback,
     };
   }
 
@@ -3364,6 +3516,20 @@
       });
 
       transitionUi(UI_STATE.AI_READY, { mount: rendered.mount });
+
+      await nextPaint();
+
+      try {
+        assertMountedProductCards(
+          rendered.mount,
+          rendered.metadata,
+          true,
+        );
+      } catch (error) {
+        rendered.rollback?.();
+        activeProducts = [];
+        throw error;
+      }
 
       updateResultCount(
         rendered.mount,

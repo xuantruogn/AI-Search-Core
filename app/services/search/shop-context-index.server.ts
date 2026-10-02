@@ -7,6 +7,12 @@ import {
   parseDeterministicQuery,
 } from "./deterministic-query-parser.server";
 import { invalidateShopSearchDictionary } from "./shop-search-dictionary.server";
+import {
+  ensureProductSemanticTerms,
+  loadProductSemanticRows,
+  loadShopSemanticRows,
+  replaceProductSemanticProfile,
+} from "./product-semantic-profile.server";
 
 type ContextKind =
   | "PRODUCT_TITLE"
@@ -358,24 +364,16 @@ export async function replaceProductShopContext({
 }) {
   const terms = collectProductContextTerms(product, analysis);
 
-  await db.$transaction(async (tx) => {
-    await tx.aiSearchShopContextTerm.deleteMany({
-      where: { shop, productId: product.id },
-    });
-    if (terms.length > 0) {
-      await tx.aiSearchShopContextTerm.createMany({
-        data: terms.map((term) => ({
-          shop,
-          productId: product.id,
-          ...term,
-        })),
-      });
-    }
+  const count = await replaceProductSemanticProfile({
+    shop,
+    productId: product.id,
+    analysis,
+    terms,
   });
 
   contextCache.delete(shop);
   invalidateShopSearchDictionary(shop);
-  return terms.length;
+  return count;
 }
 
 export async function ensureProductShopContext({
@@ -386,67 +384,49 @@ export async function ensureProductShopContext({
   product: ProductForIndex;
 }) {
   const deterministicTerms = collectProductContextTerms(product, null);
-  if (deterministicTerms.length > 0) {
-    // Repair missing base terms without deleting LLM-derived augmentation.
-    // The old count-only check allowed partially populated products to remain
-    // permanently incomplete.
-    await db.aiSearchShopContextTerm.createMany({
-      data: deterministicTerms.map((term) => ({
-        shop,
-        productId: product.id,
-        ...term,
-      })),
-      skipDuplicates: true,
-    });
-    contextCache.delete(shop);
-    invalidateShopSearchDictionary(shop);
-  }
-  return db.aiSearchShopContextTerm.count({
-    where: { shop, productId: product.id },
+  const count = await ensureProductSemanticTerms({
+    shop,
+    productId: product.id,
+    terms: deterministicTerms,
   });
+  contextCache.delete(shop);
+  invalidateShopSearchDictionary(shop);
+  return count;
 }
 
 export async function getShopContextCoverage(shop: string) {
-  const [coverageRows, missingBaseRows] = await Promise.all([
-    db.$queryRaw<Array<{
-      contextProducts: bigint | number;
-      canonicalTypeProducts: bigint | number;
-    }>>`
-      SELECT
-        COUNT(DISTINCT c.\`productId\`) AS \`contextProducts\`,
-        COUNT(DISTINCT CASE
-          WHEN c.\`kind\` = 'CANONICAL_PRODUCT_TYPE' THEN c.\`productId\`
-          ELSE NULL
-        END) AS \`canonicalTypeProducts\`
-      FROM \`AiSearchShopContextTerm\` c
-      INNER JOIN \`AiSearchIndexedProduct\` p
-        ON p.\`shop\` = c.\`shop\`
-       AND p.\`productId\` = c.\`productId\`
-      WHERE c.\`shop\` = ${shop}
-        AND p.\`searchable\` = true
-        AND p.\`hasVector\` = true
-    `,
-    db.$queryRaw<Array<{ count: bigint | number }>>`
-      SELECT COUNT(*) AS \`count\`
-      FROM \`AiSearchIndexedProduct\` p
-      WHERE p.\`shop\` = ${shop}
-        AND p.\`searchable\` = true
-        AND p.\`hasVector\` = true
-        AND NOT EXISTS (
-          SELECT 1 FROM \`AiSearchShopContextTerm\` c
-          WHERE c.\`shop\` = p.\`shop\`
-            AND c.\`productId\` = p.\`productId\`
-            AND c.\`kind\` IN ('PRODUCT_TITLE', 'PRODUCT_TYPE', 'CANONICAL_PRODUCT_TYPE')
-        )
-    `,
+  const [indexed, rows] = await Promise.all([
+    db.aiSearchIndexedProduct.findMany({
+      where: { shop, searchable: true, hasVector: true },
+      select: { productId: true },
+    }),
+    loadShopSemanticRows(shop),
   ]);
-  const total = Number(coverageRows[0]?.contextProducts ?? 0);
-  const canonical = Number(coverageRows[0]?.canonicalTypeProducts ?? 0);
+
+  const contextProducts = new Set(rows.map((row) => row.productId));
+  const canonicalProducts = new Set(
+    rows
+      .filter((row) => row.kind === "CANONICAL_PRODUCT_TYPE")
+      .map((row) => row.productId),
+  );
+  const baseProducts = new Set(
+    rows
+      .filter((row) =>
+        ["PRODUCT_TITLE", "PRODUCT_TYPE", "CANONICAL_PRODUCT_TYPE"].includes(row.kind),
+      )
+      .map((row) => row.productId),
+  );
+
   return {
-    contextProducts: total,
-    canonicalTypeProducts: canonical,
-    coverageRatio: total > 0 ? canonical / total : 0,
-    productsMissingDeterministicBaseContext: Number(missingBaseRows[0]?.count ?? 0),
+    contextProducts: contextProducts.size,
+    canonicalTypeProducts: canonicalProducts.size,
+    coverageRatio:
+      contextProducts.size > 0
+        ? canonicalProducts.size / contextProducts.size
+        : 0,
+    productsMissingDeterministicBaseContext: indexed.filter(
+      (product) => !baseProducts.has(product.productId),
+    ).length,
   };
 }
 
@@ -466,19 +446,7 @@ async function loadShopContextUncached(
   }
 
   const dbStartedAt = Date.now();
-  const rows = await db.aiSearchShopContextTerm.findMany({
-    where: {
-      shop,
-      productRecord: {
-        is: {
-          searchable: true,
-          hasVector: true,
-        },
-      },
-    },
-    select: { productId: true, kind: true, value: true, normalizedValue: true },
-    take: 50_000,
-  });
+  const rows = await loadShopSemanticRows(shop);
   const dbReadMs = Date.now() - dbStartedAt;
   const aggregateStartedAt = Date.now();
   const aggregated = new Map<string, ContextTerm>();
@@ -1810,22 +1778,10 @@ export async function filterResultsByExplicitGender<
   }
 
   const dbStartedAt = Date.now();
-  const rows = await db.aiSearchShopContextTerm.findMany({
-    where: {
-      shop,
-      productId: { in: results.map((result) => result.productId) },
-      kind: {
-        in: [
-          "PRODUCT_TITLE", "PRODUCT_TYPE", "VENDOR", "TAG", "VARIANT",
-          "SKU", "BARCODE", "ATTRIBUTE", "MEASUREMENT", "VARIANT_OPTION",
-          "USE_CASE", "SOFT_CONTEXT", "ALIAS", "CATEGORY", "BRAND",
-          "MODEL", "IDENTIFIER", "AUDIENCE", "INFERRED_AUDIENCE",
-          "COMPATIBILITY", "CANONICAL_PRODUCT_TYPE",
-        ],
-      },
-    },
-    select: { productId: true, kind: true, normalizedValue: true },
-  });
+  const rows = await loadProductSemanticRows(
+    shop,
+    results.map((result) => result.productId),
+  );
   const dbReadMs = Date.now() - dbStartedAt;
   const filterStartedAt = Date.now();
   const genders = new Map<string, { male: boolean; female: boolean }>();

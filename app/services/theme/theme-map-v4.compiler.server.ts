@@ -35,6 +35,11 @@ import {
 } from "./theme-runtime-analyzer.server";
 
 import {
+  compileThemeNativePagination,
+} from "./theme-pagination-compiler.server";
+
+import {
+  THEME_MAP_V4_COMPILER_REVISION,
   THEME_MAP_V4_DEFAULT_PAGE_SIZE,
   THEME_MAP_V4_VERSION,
   type RendererContextClass,
@@ -3755,6 +3760,30 @@ export function compileThemeMapV4(
     );
   }
 
+  const nativePagination =
+    compileThemeNativePagination({
+      sourceFile:
+        input.sourceFile,
+      files,
+      sectionKey:
+        input.search.sectionKey,
+      sectionType:
+        input.search.sectionType,
+    });
+
+  if (nativePagination.recipe) {
+    for (const candidate of candidates) {
+      candidate.nativePagination =
+        nativePagination.recipe;
+
+      candidate.dependencies =
+        unique([
+          ...candidate.dependencies,
+          ...nativePagination.dependencies,
+        ]);
+    }
+  }
+
   candidates.sort(
     (
       left,
@@ -3849,6 +3878,9 @@ export function compileThemeMapV4(
         version:
           THEME_MAP_V4_VERSION,
 
+        compilerRevision:
+          THEME_MAP_V4_COMPILER_REVISION,
+
         theme:
           input.theme,
 
@@ -3882,6 +3914,9 @@ export function compileThemeMapV4(
     {
       version:
         THEME_MAP_V4_VERSION,
+
+      compilerRevision:
+        THEME_MAP_V4_COMPILER_REVISION,
 
       theme:
         input.theme,
