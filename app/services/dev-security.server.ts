@@ -263,6 +263,9 @@ export function sanitizeForLog(value: unknown, depth = 0): unknown {
 
 export function devSecurityHeaders() {
   return {
+    "Cache-Control": "no-store, no-cache, must-revalidate, private",
+    "Pragma": "no-cache",
+    "Expires": "0",
     "Content-Security-Policy": "default-src 'self'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; object-src 'none'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'",
     "X-Content-Type-Options": "nosniff",
     "Referrer-Policy": "no-referrer",

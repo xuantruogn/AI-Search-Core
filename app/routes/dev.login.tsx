@@ -99,7 +99,7 @@ export default function DevLogin() {
           <span>Use your internal administrator credentials to continue.</span>
         </div>
         {actionData?.error ? <div className="dc-alert is-error">{actionData.error}</div> : null}
-        <Form method="post" className="dc-auth-form">
+        <Form method="post" reloadDocument className="dc-auth-form">
           <input type="hidden" name="_csrf" value={csrfToken} />
           <label><span>Email address</span><input name="email" type="email" autoComplete="username" required /></label>
           <label><span>Password</span><input name="password" type="password" autoComplete="current-password" required /></label>

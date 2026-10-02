@@ -97,7 +97,7 @@ export default function DevMfa() {
           <span>Enter the six-digit code for <strong>{email}</strong>.</span>
         </div>
         {actionData?.error ? <div className="dc-alert is-error">{actionData.error}</div> : null}
-        <Form method="post" className="dc-auth-form">
+        <Form method="post" reloadDocument className="dc-auth-form">
           <input type="hidden" name="_csrf" value={csrfToken} />
           <label><span>Authentication code</span><input className="dc-auth-code" name="code" inputMode="numeric" pattern="[0-9]{6}" autoComplete="one-time-code" required maxLength={6} placeholder="000000" /></label>
           <button className="dc-button dc-button-primary" type="submit">Verify and sign in</button>
