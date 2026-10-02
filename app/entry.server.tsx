@@ -3,7 +3,6 @@ import { renderToPipeableStream } from "react-dom/server";
 import { ServerRouter } from "react-router";
 import { createReadableStreamFromReadable } from "@react-router/node";
 import { type EntryContext } from "react-router";
-import { isbot } from "isbot";
 import { addDocumentResponseHeaders } from "./shopify.server";
 import { startProductSyncQueueWorker } from "./services/products/product-sync-queue.server";
 import { startCatalogSyncQueueWorker } from "./services/catalog/catalog-sync-queue.server";
@@ -24,14 +23,11 @@ export default async function handleRequest(
   reactRouterContext: EntryContext,
 ) {
   addDocumentResponseHeaders(request, responseHeaders);
-  const userAgent = request.headers.get("user-agent");
-  const callbackName = isbot(userAgent ?? "") ? "onAllReady" : "onShellReady";
-
   return new Promise((resolve, reject) => {
     const { pipe, abort } = renderToPipeableStream(
       <ServerRouter context={reactRouterContext} url={request.url} />,
       {
-        [callbackName]: () => {
+        onAllReady: () => {
           const body = new PassThrough();
           const stream = createReadableStreamFromReadable(body);
 
