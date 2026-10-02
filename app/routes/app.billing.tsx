@@ -306,7 +306,13 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       isBasicPlan && !hasEverApprovedSubscription
         ? Math.max(0, billingPlan?.trialDays ?? 0)
         : 0;
-    const isProduction = process.env.NODE_ENV === "production";
+
+    // Billing test mode is controlled explicitly by deployment ENV.
+    // This allows the app server to run in production while internal/dev
+    // stores use Shopify test charges. Set BILLING_TEST_MODE=false for real
+    // merchant billing.
+    const billingTestMode =
+      String(process.env.BILLING_TEST_MODE ?? "").trim().toLowerCase() === "true";
 
     let finalPrice = baseMonthlyPrice;
     let billingInterval = "EVERY_30_DAYS";
@@ -373,7 +379,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
             name: planName,
             price: finalPrice.toFixed(2),
             returnUrl: returnUrl.toString(),
-            test: !isProduction,
+            test: billingTestMode,
             trialDays: trialDays > 0 ? trialDays : null,
             interval: billingInterval,
             replacementBehavior,
