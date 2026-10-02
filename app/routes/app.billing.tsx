@@ -29,6 +29,16 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     select: { handle: true, trialDays: true },
   });
 
+  const hasEverApprovedSubscription = Boolean(
+    await db.billingEvent.findFirst({
+      where: {
+        shop: session.shop,
+        type: "SUBSCRIPTION_APPROVED",
+      },
+      select: { id: true },
+    }),
+  );
+
   let daysRemaining: number | null = null;
   let formattedPeriodEnd: string | null = null;
 
@@ -57,12 +67,30 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     },
     pricingUrl: getShopifyPricingPlansUrl(session.shop),
     partnerApiConfigured: isShopifyAppPricingConfigured(),
-    plans: [PLAN_DEFINITIONS.BASIC, PLAN_DEFINITIONS.PRO].map((plan) => ({
-      ...plan,
-      trialDays:
-        billingPlans.find((billingPlan) => billingPlan.handle === plan.key.toLowerCase())
-          ?.trialDays ?? 0,
-    })),
+    plans: [PLAN_DEFINITIONS.BASIC, PLAN_DEFINITIONS.PRO].map((plan) => {
+      const configuredTrialDays =
+        billingPlans.find(
+          (billingPlan) => billingPlan.handle === plan.key.toLowerCase(),
+        )?.trialDays ?? 0;
+
+      const isBasic = plan.key === "BASIC";
+      const isActiveBasicTrial =
+        isBasic &&
+        subscription.plan === "BASIC" &&
+        subscription.trialStatus === "ACTIVE";
+
+      return {
+        ...plan,
+        // Only BASIC can advertise a trial. A shop that has already
+        // approved any subscription cannot start another trial.
+        // The current BASIC trial remains visible while it is active.
+        trialDays:
+          isBasic &&
+          (isActiveBasicTrial || !hasEverApprovedSubscription)
+            ? configuredTrialDays
+            : 0,
+      };
+    }),
   };
 };
 
