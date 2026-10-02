@@ -187,10 +187,10 @@ export default function SettingsPage() {
         <h1
           style={{ margin: 0, fontSize: 22, fontWeight: 700, color: "#1a1a1a" }}
         >
-          AI Search Configuration & Preferences
+          Search Configuration & Preferences
         </h1>
         <p style={{ margin: "4px 0 0 0", fontSize: 13, color: "#616161" }}>
-          Configure AI Search behavior on your Storefront, primary recognition language, and result display limits.
+          Configure search behavior on your Storefront, primary recognition language, and result display limits.
         </p>
       </div>
 
@@ -237,8 +237,8 @@ export default function SettingsPage() {
                     lineHeight: 1.5,
                   }}
                 >
-                  <strong>Required setup:</strong> Choose the catalog language before using AI Search.
-                  Shopper queries can still be written in any language; AI Search detects the query
+                  <strong>Required setup:</strong> Choose the catalog language before using search.
+                  Shopper queries can still be written in any language; Search detects the query
                   language and normalizes it to the language selected here.
                 </div>
               ) : null}
@@ -297,7 +297,7 @@ export default function SettingsPage() {
 
                 {data.usingLocaleFallback ? (
                   <p style={{ margin: "7px 0 0 0", fontSize: 12, color: "#8a6116" }}>
-                    Shopify locale access is not active yet, so all supported AI Search languages
+                    Shopify locale access is not active yet, so all supported search languages
                     are shown. You can select and save a language now. Once locale access is granted,
                     this list will automatically use the languages enabled on the store.
                   </p>
@@ -338,7 +338,7 @@ export default function SettingsPage() {
                     defaultChecked={data.aiSearchEnabled}
                     style={{ width: 18, height: 18, accentColor: "#008060" }}
                   />
-                  Enable AI Search Engine on Storefront
+                  Enable Search Engine on Storefront
                 </label>
 
                 <label
@@ -382,7 +382,7 @@ export default function SettingsPage() {
                   {isSavingSettings
                     ? "Saving settings..."
                     : data.onboardingRequired
-                      ? "Continue to AI Search"
+                      ? "Continue to Search"
                       : "Save Settings"}
                 </button>
 

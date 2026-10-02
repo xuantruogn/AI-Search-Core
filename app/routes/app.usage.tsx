@@ -126,7 +126,7 @@ function renderProgressBar(current: number, max: number | null, color = "#008060
 function formatEventType(type: string) {
   switch (type) {
     case "SEARCH":
-      return "🔍 AI Storefront Search";
+      return "🔍 Storefront Search";
     case "PRODUCT_SYNC":
       return "🔄 Catalog Product Sync";
     case "VECTOR_UPDATE":
@@ -208,7 +208,7 @@ export default function UsagePage() {
           marginBottom: 28,
         }}
       >
-        {/* AI SEARCHES */}
+        {/* SEARCHES */}
         <div
           style={{
             background: "#fff",
@@ -219,7 +219,7 @@ export default function UsagePage() {
           }}
         >
           <div style={{ fontSize: 13, fontWeight: 600, color: "#616161" }}>
-            AI Storefront Searches
+            Storefront Searches
           </div>
           {renderProgressBar(period.searchCount, limits.searchLimit, "#008060")}
           <div style={{ fontSize: 11, color: "#8c9196", marginTop: 8 }}>
@@ -227,7 +227,7 @@ export default function UsagePage() {
           </div>
         </div>
 
-        {/* ACTIVE AI PRODUCTS */}
+        {/* ACTIVE PRODUCTS */}
         <div
           style={{
             background: "#fff",
@@ -238,11 +238,11 @@ export default function UsagePage() {
           }}
         >
           <div style={{ fontSize: 13, fontWeight: 600, color: "#616161" }}>
-            Active AI Products
+            Active Products
           </div>
           {renderProgressBar(data.activeProductsCount, limits.productLimit, "#5c6ac4")}
           <div style={{ fontSize: 11, color: "#8c9196", marginTop: 8 }}>
-            {data.cachedVectorCount.toLocaleString("en-US")} vectors cached · {data.cachedProductLimitBlockedCount.toLocaleString("en-US")} cached & blocked from AI Search.
+            {data.cachedVectorCount.toLocaleString("en-US")} vectors cached · {data.cachedProductLimitBlockedCount.toLocaleString("en-US")} cached & blocked by the product limit.
           </div>
         </div>
 

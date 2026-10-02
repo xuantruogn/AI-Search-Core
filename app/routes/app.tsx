@@ -130,7 +130,7 @@ export default function App() {
           }}
         />
         <nav
-          aria-label="AI Search navigation"
+          aria-label="Search navigation"
           style={{
             display: "flex",
             gap: 12, // Tăng khoảng cách giãn cách giữa các nút Tab (từ 4px lên 12px)

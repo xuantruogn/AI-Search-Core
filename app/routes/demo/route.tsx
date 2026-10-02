@@ -4,10 +4,10 @@ import type { MetaFunction } from "react-router";
 import styles from "./demo.module.css";
 
 export const meta: MetaFunction = () => [
-  { title: "NOVA - AI Search Control Room" },
+  { title: "NOVA - Search Control Room" },
   {
     name: "description",
-    content: "Interactive product demo for AI Search Core and LLM query rewriting.",
+    content: "Interactive product demo for Search Core and LLM query rewriting.",
   },
 ];
 
@@ -97,7 +97,7 @@ export default function DemoPage() {
   return (
     <div className={styles.shell}>
       <aside className={styles.sidebar}>
-        <div className={styles.brand}><span className={styles.brandMark}>N</span><span>NOVA<small>AI SEARCH</small></span></div>
+        <div className={styles.brand}><span className={styles.brandMark}>N</span><span>NOVA<small>SEARCH</small></span></div>
         <nav aria-label="Demo navigation">
           <a className={styles.activeNav} href="#overview"><Icon name="overview" />Overview</a>
           <a href="#search-lab"><Icon name="search" />Search lab</a>

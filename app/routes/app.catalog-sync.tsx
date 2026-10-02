@@ -429,7 +429,7 @@ export default function CatalogSyncPage() {
       {/* PAGE HEADER */}
       <div className="cat-header">
         <h1 style={{ margin: 0, fontSize: 22, fontWeight: 800 }}>
-          Catalog & AI Vector Index Management
+          Catalog & Vector Index Management
         </h1>
         <p style={{ margin: "4px 0 0 0", fontSize: 13, color: "#5c6270" }}>
           Trigger product catalog synchronization, monitor background jobs, and review vector index registry logs.
@@ -449,7 +449,7 @@ export default function CatalogSyncPage() {
             </div>
 
             <p style={{ fontSize: 13, color: "#5c6270", lineHeight: 1.6, margin: "0 0 16px 0" }}>
-              Click the button below to update product details and refresh AI vector indexes for your store catalog.
+              Click the button below to update product details and refresh vector indexes for your store catalog.
             </p>
 
             <div style={{ fontSize: 12, color: "#616161", background: "#f8f9fa", padding: 12, borderRadius: 10, lineHeight: 1.5, marginBottom: 20 }}>

@@ -397,7 +397,7 @@ export default function SearchAnalyticsPage() {
       {/* HEADER & TIME RANGE GLOBAL FILTER */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: 24, borderBottom: "1px solid #e1e3e5", paddingBottom: 16 }}>
         <div>
-          <h1 style={{ margin: 0, fontSize: 22, fontWeight: 700, color: "#1a1a1a" }}>AI Search Analytics & Insights</h1>
+          <h1 style={{ margin: 0, fontSize: 22, fontWeight: 700, color: "#1a1a1a" }}>Search Analytics & Insights</h1>
           <p style={{ margin: "4px 0 0 0", fontSize: 13, color: "#616161" }}>
             Monitor search performance, customer interaction rates, and abnormal queries requiring optimization.
           </p>

@@ -324,7 +324,7 @@ function SearchPerformanceChart({
   if (totalSearches === 0) {
     return (
       <div className="vip-chart-empty">
-        No AI search activity recorded in the last 7 days.
+        No search activity recorded in the last 7 days.
       </div>
     );
   }
@@ -402,7 +402,7 @@ function SearchPerformanceChart({
       <svg
         viewBox={`0 0 ${width} ${height}`}
         role="img"
-        aria-label="Total AI searches, searches with clicks, and search anomalies over the last 7 days"
+        aria-label="Total searches, searches with clicks, and search anomalies over the last 7 days"
         className="vip-chart"
       >
         {[0, 0.25, 0.5, 0.75, 1].map((ratio) => {
@@ -1661,8 +1661,7 @@ export default function Dashboard() {
                   detail={`${entitlement.planLabel} · ${entitlement.subscriptionStatus}`}
                   action={{
                     label: "Manage plan",
-                    href: "/app/billing",
-                    targetTop: true,
+                    href: "/app/billing#plans",
                   }}
                 />
               ) : null}
@@ -1693,7 +1692,7 @@ export default function Dashboard() {
               {!searchSettingReady ? (
                 <ReadinessItem
                   index={3}
-                  title="AI Search settings"
+                  title="Search settings"
                   state="neutral"
                   status="Disabled"
                   detail={`Language ${data.settings.searchLanguage ?? "not configured"}${data.settings.resultLimit ? ` · ${data.settings.resultLimit} results/search` : ""}`}
@@ -1715,9 +1714,9 @@ export default function Dashboard() {
                   }
                   detail={
                     data.theme.appEmbedReason === "STALE_APP_EMBED_ENABLED"
-                      ? `Published theme: ${data.theme.themeName ?? "unknown"} · The toggle is ON, but this theme points to an older AI-Buyense extension deployment. Deploy the current extension, then reopen Theme Editor and save the current embed.`
+                      ? `Published theme: ${data.theme.themeName ?? "unknown"} · The toggle is ON, but this theme points to an older app extension deployment. Deploy the current extension, then reopen Theme Editor and save the current embed.`
                       : data.theme.appEmbedReason === "STALE_OTHER_APP_EMBED_ONLY"
-                        ? `Published theme: ${data.theme.themeName ?? "unknown"} · A stale AI-Buyense embed exists, but the current extension is not enabled.`
+                        ? `Published theme: ${data.theme.themeName ?? "unknown"} · A stale app embed exists, but the current extension is not enabled.`
                         : `Published theme: ${data.theme.themeName ?? "unknown"} · Enable this app's embed in Theme Editor.`
                   }
                   action={
@@ -1761,8 +1760,8 @@ export default function Dashboard() {
                   status="Paused"
                   detail={
                     entitlement.disabledReason
-                      ? `AI Search is temporarily paused: ${entitlement.disabledReason}.`
-                      : "AI Search is temporarily paused by entitlement limits."
+                      ? `Search is temporarily paused: ${entitlement.disabledReason}.`
+                      : "Search is temporarily paused by entitlement limits."
                   }
                   action={{ label: "Review usage", href: "/app/usage" }}
                 />
@@ -1781,7 +1780,7 @@ export default function Dashboard() {
             }
           >
             {entitlement.productLimitBlockedProducts > 0
-              ? `${entitlement.productLimitBlockedProducts.toLocaleString("en-US")} products are excluded from AI Search by the product limit. `
+              ? `${entitlement.productLimitBlockedProducts.toLocaleString("en-US")} products are excluded by the product limit. `
               : ""}
             {entitlement.cachedProductLimitBlockedProducts > 0
               ? `${entitlement.cachedProductLimitBlockedProducts.toLocaleString("en-US")} of them retain cached vectors for fast recovery but remain non-searchable. `
@@ -1798,7 +1797,7 @@ export default function Dashboard() {
             value={formatUsage(entitlement.activeProductSlotsUsed, displayProductLimit)}
             detail={
               subscriptionReady
-                ? `${entitlement.cachedVectorCount.toLocaleString("en-US")} vectors cached · ${entitlement.cachedProductLimitBlockedProducts.toLocaleString("en-US")} cached & blocked from AI Search.`
+                ? `${entitlement.cachedVectorCount.toLocaleString("en-US")} vectors cached · ${entitlement.cachedProductLimitBlockedProducts.toLocaleString("en-US")} cached & blocked by the product limit.`
                 : `${entitlement.cachedVectorCount.toLocaleString("en-US")} vectors cached. Product quota becomes usable after plan activation.`
             }
             progress={productProgress}
@@ -1806,7 +1805,7 @@ export default function Dashboard() {
             isSyncing={isBackgroundSyncing}
           />
           <MetricCard
-            eyebrow="AI searches"
+            eyebrow="Searches"
             value={formatUsage(entitlement.usage.searchCount, displaySearchLimit)}
             detail={
               !subscriptionReady
@@ -1846,7 +1845,7 @@ export default function Dashboard() {
 
             <div className="vip-impact-kpis">
               <div className="vip-impact-kpi">
-                <span>AI searches · 7 days</span>
+                <span>Searches · 7 days</span>
                 <strong>{current7dSearches.toLocaleString("en-US")}</strong>
                 <small>
                   {previous7dSearches > 0
@@ -1942,7 +1941,7 @@ export default function Dashboard() {
               </div>
               <div className="vip-alert-check-item">
                 <span className="vip-alert-check-item__ok">✓</span>
-                <span>Low-Similarity AI Fallback</span>
+                <span>Low-Similarity Fallback</span>
               </div>
               <div className="vip-alert-check-item">
                 <span className="vip-alert-check-item__ok">✓</span>

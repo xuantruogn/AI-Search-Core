@@ -438,6 +438,16 @@ export default function BillingPage() {
     }
   }, [subscribeFetcher.data]);
 
+  useEffect(() => {
+    if (window.location.hash !== "#plans") return;
+    window.requestAnimationFrame(() => {
+      document.getElementById("plans")?.scrollIntoView({
+        behavior: "smooth",
+        block: "start",
+      });
+    });
+  }, []);
+
 
 
   const cycleDiscount = {
@@ -473,11 +483,11 @@ export default function BillingPage() {
       features: [
         limitText(
           data.plans[0]?.limits.productLimit ?? 500,
-          "AI indexed products",
+          "Indexed products",
         ),
         limitText(
           data.plans[0]?.limits.searchLimit ?? 3000,
-          "AI searches / period",
+          "Searches / period",
         ),
         limitText(
           data.plans[0]?.limits.vectorUpdateLimit ?? 500,
@@ -486,7 +496,7 @@ export default function BillingPage() {
         "Auto-fallback to Shopify Search when quota exceeded",
         "24/7 Email & Ticket Support",
       ],
-      buildWith: ["AI Search Engine", "AI Keyword Suggestions"],
+      buildWith: ["Search Engine", "Keyword Suggestions"],
     },
     PRO: {
       badge: "Save 40%",
@@ -498,11 +508,11 @@ export default function BillingPage() {
       features: [
         limitText(
           data.plans[1]?.limits.productLimit ?? null,
-          "AI indexed products",
+          "Indexed products",
         ),
         limitText(
           data.plans[1]?.limits.searchLimit ?? null,
-          "AI searches / period",
+          "Searches / period",
         ),
         limitText(
           data.plans[1]?.limits.vectorUpdateLimit ?? null,
@@ -512,7 +522,7 @@ export default function BillingPage() {
         "Auto-optimized Synonyms & Search Intent",
         "1-on-1 Dedicated Technical Support",
       ],
-      buildWith: ["AI Vector Analytics", "Full Synonyms Map"],
+      buildWith: ["Vector Analytics", "Full Synonyms Map"],
     },
   };
 
@@ -776,9 +786,9 @@ export default function BillingPage() {
           📊 Usage & Capacity this Period
         </h3>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 16 }}>
-          {/* AI Searches */}
+          {/* Searches */}
           <div style={{ border: "1px solid #f1f2f3", borderRadius: 8, padding: 14, background: "#fafafa" }}>
-            <div style={{ fontSize: 12, color: "#616161", marginBottom: 4 }}>AI Searches</div>
+            <div style={{ fontSize: 12, color: "#616161", marginBottom: 4 }}>Searches</div>
             <div style={{ fontSize: 18, fontWeight: 700, color: "#1a1a1a" }}>
               {data.entitlement.usage.searchCount.toLocaleString("en-US")} / {limitText(data.entitlement.limits.searchLimit, "")}
             </div>
@@ -787,14 +797,14 @@ export default function BillingPage() {
             </div>
           </div>
 
-          {/* AI Indexed Products */}
+          {/* Indexed Products */}
           <div style={{ border: "1px solid #f1f2f3", borderRadius: 8, padding: 14, background: "#fafafa" }}>
-            <div style={{ fontSize: 12, color: "#616161", marginBottom: 4 }}>AI Indexed Products</div>
+            <div style={{ fontSize: 12, color: "#616161", marginBottom: 4 }}>Indexed Products</div>
             <div style={{ fontSize: 18, fontWeight: 700, color: "#1a1a1a" }}>
               {data.entitlement.indexedProducts.toLocaleString("en-US")} / {limitText(data.entitlement.limits.productLimit, "")}
             </div>
             <div style={{ fontSize: 11, color: "#616161", marginTop: 4 }}>
-              Products ready for AI ranking
+              Products ready for ranking
             </div>
           </div>
 
@@ -811,462 +821,353 @@ export default function BillingPage() {
         </div>
       </div>
 
-      {/* SECTION 3: PLAN SELECTION HEADER & CYCLE TOGGLE */}
-      <div style={{ textAlign: "center", marginBottom: 32 }}>
-        <h1
-          style={{
-            fontSize: 26,
-            fontWeight: 800,
-            color: "#1a1a1a",
-            margin: "0 0 8px 0",
-          }}
-        >
-          Choose the Right Plan for Your Store
-        </h1>
-        <p style={{ color: "#616161", fontSize: 14, margin: "0 0 20px 0" }}>
-          Optimize AI search experiences and boost sales conversion rates today.
-        </p>
-
-        <div
-          style={{
-            display: "inline-flex",
-            background: "#f1f2f3",
-            padding: 4,
-            borderRadius: 10,
-            gap: 4,
-          }}
-        >
-          <button
-            type="button"
-            onClick={() => setCycle("monthly")}
-            style={{
-              padding: "8px 20px",
-              borderRadius: 8,
-              border: "none",
-              background: cycle === "monthly" ? "#fff" : "transparent",
-              fontWeight: 600,
-              fontSize: 13,
-              color: cycle === "monthly" ? "#1a1a1a" : "#616161",
-              cursor: "pointer",
-              boxShadow:
-                cycle === "monthly" ? "0 1px 3px rgba(0,0,0,0.1)" : "none",
-            }}
-          >
-            Monthly
-          </button>
-          <button
-            type="button"
-            onClick={() => setCycle("yearly")}
-            style={{
-              padding: "8px 20px",
-              borderRadius: 8,
-              border: "none",
-              background: cycle === "yearly" ? "#fff" : "transparent",
-              fontWeight: 600,
-              fontSize: 13,
-              color: cycle === "yearly" ? "#1a1a1a" : "#616161",
-              cursor: "pointer",
-              boxShadow:
-                cycle === "yearly" ? "0 1px 3px rgba(0,0,0,0.1)" : "none",
-            }}
-          >
-            Yearly <span style={{ color: "#008060", fontSize: 11 }}>(Save 20%)</span>
-          </button>
-        </div>
-      </div>
-
-      {subscribeError && (
-        <div
-          role="alert"
-          style={{
-            maxWidth: 960,
-            margin: "0 auto 20px auto",
-            padding: "12px 14px",
-            borderRadius: 8,
-            border: "1px solid #d72c0d",
-            background: "#fff4f4",
-            color: "#8e1f0b",
-            fontSize: 13,
-            fontWeight: 600,
-          }}
-        >
-          {subscribeError}
-        </div>
-      )}
-
-      {/* SECTION 4: PRICING CARDS */}
-      <div
+      {/* SECTION 3: PLAN SELECTION */}
+      <section
+        id="plans"
         style={{
-          display: "flex",
-          justifyContent: "center",
-          gap: 24,
-          flexWrap: "wrap",
-          maxWidth: 960,
+          scrollMarginTop: 24,
+          maxWidth: 1180,
           margin: "0 auto",
+          padding: "8px 0 0",
         }}
       >
-        {data.plans.map((plan) => {
-          const isPro = plan.key === "PRO";
-          const config = isPro ? planConfigs.PRO : planConfigs.BASIC;
-          const discountedPrice = (
-            config.priceBase *
-            (1 - cycleDiscount[cycle])
-          ).toFixed(2);
-          const billedAmount =
-            cycle === "yearly"
-              ? (config.priceBase * 0.8 * 12).toFixed(2)
-              : config.priceBase.toFixed(2);
+        <div style={{ textAlign: "center", marginBottom: 28 }}>
+          <div
+            style={{
+              color: "#5b3df5",
+              fontSize: 12,
+              fontWeight: 800,
+              letterSpacing: "0.08em",
+              textTransform: "uppercase",
+              marginBottom: 10,
+            }}
+          >
+            Billing through Shopify
+          </div>
+          <h1
+            style={{
+              fontSize: 30,
+              lineHeight: 1.15,
+              fontWeight: 800,
+              color: "#111827",
+              margin: "0 0 10px",
+            }}
+          >
+            Plans that scale with your store
+          </h1>
+          <p style={{ color: "#667085", fontSize: 14, margin: "0 0 18px" }}>
+            Basic and Pro include a free trial. All paid plan changes are confirmed through Shopify.
+          </p>
 
-          const isCurrentPlan = isActive && currentPlanKey.includes(plan.key);
-
-          return (
-            <div
-              key={plan.key}
+          <div
+            style={{
+              display: "inline-flex",
+              background: "#f4f4f5",
+              padding: 4,
+              borderRadius: 999,
+              gap: 4,
+            }}
+          >
+            <button
+              type="button"
+              onClick={() => setCycle("monthly")}
               style={{
-                background: "#fff",
-                borderRadius: 16,
-                border: config.isPopular
-                  ? "2px solid #008060"
-                  : "1px solid #e1e3e5",
-                padding: 28,
-                width: "100%",
-                maxWidth: 420,
-                boxSizing: "border-box",
-                boxShadow: config.isPopular
-                  ? "0 10px 30px rgba(0,128,96,0.12)"
-                  : "0 2px 8px rgba(0,0,0,0.04)",
-                position: "relative",
-                display: "flex",
-                flexDirection: "column",
-                justifyContent: "space-between",
+                padding: "8px 18px",
+                borderRadius: 999,
+                border: "none",
+                background: cycle === "monthly" ? "#fff" : "transparent",
+                fontWeight: 700,
+                fontSize: 13,
+                color: cycle === "monthly" ? "#111827" : "#6b7280",
+                cursor: "pointer",
+                boxShadow: cycle === "monthly" ? "0 1px 4px rgba(0,0,0,.08)" : "none",
               }}
             >
-              <div>
-                <div
-                  style={{
-                    display: "flex",
-                    gap: 8,
-                    marginBottom: 16,
-                    alignItems: "center",
-                  }}
-                >
+              Monthly
+            </button>
+            <button
+              type="button"
+              onClick={() => setCycle("yearly")}
+              style={{
+                padding: "8px 18px",
+                borderRadius: 999,
+                border: "none",
+                background: cycle === "yearly" ? "#fff" : "transparent",
+                fontWeight: 700,
+                fontSize: 13,
+                color: cycle === "yearly" ? "#111827" : "#6b7280",
+                cursor: "pointer",
+                boxShadow: cycle === "yearly" ? "0 1px 4px rgba(0,0,0,.08)" : "none",
+              }}
+            >
+              Yearly <span style={{ color: "#5b3df5" }}>Save 20%</span>
+            </button>
+          </div>
+        </div>
+
+        {subscribeError ? (
+          <div
+            role="alert"
+            style={{
+              margin: "0 0 18px",
+              padding: "12px 14px",
+              borderRadius: 10,
+              border: "1px solid #f0a08c",
+              background: "#fff6f3",
+              color: "#9a3412",
+              fontSize: 13,
+              fontWeight: 600,
+            }}
+          >
+            {subscribeError}
+          </div>
+        ) : null}
+
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(270px, 1fr))",
+            gap: 18,
+            alignItems: "stretch",
+          }}
+        >
+          {data.plans.map((plan) => {
+            const isPro = plan.key === "PRO";
+            const config = isPro ? planConfigs.PRO : planConfigs.BASIC;
+            const discountedPrice = (
+              config.priceBase * (1 - cycleDiscount[cycle])
+            ).toFixed(2);
+            const billedAmount =
+              cycle === "yearly"
+                ? (config.priceBase * 0.8 * 12).toFixed(2)
+                : config.priceBase.toFixed(2);
+            const isCurrentPlan = isActive && currentPlanKey.includes(plan.key);
+
+            return (
+              <article
+                key={plan.key}
+                style={{
+                  position: "relative",
+                  background: "#fff",
+                  borderRadius: 14,
+                  border: isPro ? "2px solid #5b3df5" : "1px solid #dfe3ea",
+                  padding: "28px 28px 26px",
+                  boxSizing: "border-box",
+                  minHeight: 405,
+                  display: "flex",
+                  flexDirection: "column",
+                  boxShadow: isPro
+                    ? "0 14px 34px rgba(91,61,245,.10)"
+                  : "0 2px 8px rgba(17,24,39,.03)",
+                }}
+              >
+                {isPro ? (
                   <span
                     style={{
-                      background: config.badgeBg,
+                      position: "absolute",
+                      top: -12,
+                      right: 18,
+                      borderRadius: 999,
+                      background: "#5b3df5",
                       color: "#fff",
+                      padding: "5px 11px",
                       fontSize: 11,
-                      fontWeight: 700,
-                      padding: "3px 8px",
-                      borderRadius: 4,
+                      fontWeight: 800,
                     }}
                   >
-                    {config.badge}
+                    Popular
                   </span>
-                  {config.isPopular && (
-                    <span
-                      style={{
-                        background: "#e4f8f0",
-                        color: "#008060",
-                        fontSize: 11,
-                        fontWeight: 700,
-                        padding: "3px 8px",
-                        borderRadius: 4,
-                      }}
-                    >
-                      Most Popular
-                    </span>
-                  )}
-                </div>
+                ) : null}
 
-                <h2
-                  style={{
-                    margin: "0 0 8px 0",
-                    fontSize: 22,
-                    fontWeight: 800,
-                    color: "#1a1a1a",
-                  }}
-                >
+                <h2 style={{ margin: "0 0 10px", fontSize: 20, color: "#111827" }}>
                   {plan.label}
                 </h2>
                 <p
                   style={{
-                    margin: "0 0 20px 0",
+                    margin: "0 0 26px",
+                    color: "#667085",
                     fontSize: 13,
-                    color: "#616161",
-                    minHeight: 36,
+                    lineHeight: 1.55,
+                    minHeight: 40,
                   }}
                 >
                   {plan.description}
                 </p>
 
-                <div style={{ marginBottom: 20 }}>
-                  <div
-                    style={{
-                      display: "flex",
-                      alignItems: "baseline",
-                      gap: 6,
-                    }}
-                  >
-                    <span
-                      style={{ fontSize: 36, fontWeight: 800, color: "#1a1a1a" }}
-                    >
-                      ${discountedPrice}
-                    </span>
-                    <span style={{ fontSize: 13, color: "#616161" }}>
-                      {cycleText[cycle]}
-                    </span>
+                <div style={{ marginBottom: 18 }}>
+                  <span style={{ fontSize: 34, fontWeight: 800, color: "#111827" }}>
+                    ${discountedPrice}
+                  </span>
+                  <span style={{ marginLeft: 6, color: "#667085", fontSize: 13 }}>
+                    / month
+                  </span>
+                  <div style={{ color: "#667085", fontSize: 12, marginTop: 6 }}>
+                    {cycle === "yearly"
+                      ? `Billed $${billedAmount} annually`
+                      : `Billed $${billedAmount} monthly`}
                   </div>
-                  <div
-                    style={{
-                      fontSize: 12,
-                      color: "#8c9196",
-                      textDecoration: "line-through",
-                      marginTop: 4,
-                    }}
-                  >
-                    Regular: {config.originalPrice}
-                  </div>
-                  {plan.trialDays > 0 && (
-                    <div
-                      style={{
-                        fontSize: 12,
-                        color: "#008060",
-                        fontWeight: 700,
-                        marginTop: 6,
-                      }}
-                    >
+                  {plan.trialDays > 0 ? (
+                    <div style={{ color: "#5b3df5", fontSize: 12, fontWeight: 700, marginTop: 5 }}>
                       {plan.trialDays}-day free trial
                     </div>
-                  )}
-                  <div
-                    style={{
-                      fontSize: 12,
-                      color: "#616161",
-                      marginTop: 6,
-                    }}
-                  >
-                    {cycle === "yearly"
-                      ? "Billed $" + billedAmount + " annually"
-                      : "Billed $" + billedAmount + " monthly"}
-                  </div>
+                  ) : null}
                 </div>
 
-                {/* Subscription Form */}
-                <subscribeFetcher.Form method="post" style={{ marginBottom: 24 }}>
+                <ul
+                  style={{
+                    listStyle: "none",
+                    padding: 0,
+                    margin: "0 0 24px",
+                    display: "grid",
+                    gap: 10,
+                    color: "#475467",
+                    fontSize: 13,
+                  }}
+                >
+                  {config.features.slice(0, 4).map((feat) => (
+                    <li key={feat} style={{ display: "flex", gap: 9, alignItems: "flex-start" }}>
+                      <span style={{ color: "#12a66a", fontWeight: 800 }}>✓</span>
+                      <span>{feat}</span>
+                    </li>
+                  ))}
+                </ul>
+
+                <subscribeFetcher.Form method="post" style={{ marginTop: "auto" }}>
                   <input type="hidden" name="intent" value="subscribe" />
                   <input type="hidden" name="planKey" value={plan.key} />
                   <input type="hidden" name="cycle" value={cycle} />
-
                   <button
                     type="submit"
                     disabled={isCurrentPlan || subscribeFetcher.state !== "idle"}
                     style={{
                       width: "100%",
-                      textAlign: "center",
-                      background: isCurrentPlan ? "#8c9196" : config.btnBg,
-                      color: "#fff",
-                      padding: "12px 20px",
-                      borderRadius: 10,
-                      fontWeight: 700,
-                      fontSize: 14,
-                      border: "none",
+                      padding: "11px 16px",
+                      borderRadius: 9,
+                      border: "1px solid #5b3df5",
+                      background: isCurrentPlan
+                        ? "#eef0f3"
+                        : isPro
+                        ? "#5b3df5"
+                        : "#fff",
+                      color: isCurrentPlan ? "#737b88" : isPro ? "#fff" : "#5b3df5",
+                      fontWeight: 800,
                       cursor: isCurrentPlan ? "not-allowed" : "pointer",
-                      boxShadow: "0 2px 4px rgba(0,0,0,0.1)",
                     }}
                   >
                     {isCurrentPlan
-                      ? "Your Current Plan"
+                      ? "Current plan"
                       : subscribeFetcher.state !== "idle"
-                      ? "Redirecting..."
-                      : `Choose ${plan.label}`}
+                        ? "Redirecting..."
+                        : `Start with ${plan.label}`}
                   </button>
                 </subscribeFetcher.Form>
+              </article>
+            );
+          })}
 
-                <div
-                  style={{
-                    borderTop: "1px solid #f1f2f3",
-                    paddingTop: 20,
-                    fontSize: 13,
-                  }}
-                >
-                  <div
-                    style={{
-                      fontWeight: 700,
-                      color: "#1a1a1a",
-                      marginBottom: 12,
-                    }}
-                  >
-                    Features Included:
-                  </div>
-                  <ul
-                    style={{
-                      listStyle: "none",
-                      padding: 0,
-                      margin: 0,
-                      display: "flex",
-                      flexDirection: "column",
-                      gap: 10,
-                    }}
-                  >
-                    {config.features.map((feat, idx) => (
-                      <li
-                        key={idx}
-                        style={{
-                          display: "flex",
-                          alignItems: "flex-start",
-                          gap: 8,
-                          color: "#4a4a4a",
-                        }}
-                      >
-                        <span style={{ color: "#008060", fontWeight: "bold" }}>
-                          ✓
-                        </span>
-                        <span>{feat}</span>
-                      </li>
-                    ))}
-                  </ul>
+          <article
+            style={{
+              background: "#fff",
+              borderRadius: 14,
+              border: "1px solid #dfe3ea",
+              padding: "28px 28px 26px",
+              boxSizing: "border-box",
+              minHeight: 405,
+              display: "flex",
+              flexDirection: "column",
+              boxShadow: "0 2px 8px rgba(17,24,39,.03)",
+            }}
+          >
+            <h2 style={{ margin: "0 0 10px", fontSize: 20, color: "#111827" }}>Custom</h2>
+            <p
+              style={{
+                margin: "0 0 26px",
+                color: "#667085",
+                fontSize: 13,
+                lineHeight: 1.55,
+                minHeight: 40,
+              }}
+            >
+              Limits and pricing tailored to your store requirements.
+            </p>
 
-                  {config.buildWith && (
-                    <div style={{ marginTop: 16 }}>
-                      <div
-                        style={{
-                          fontSize: 11,
-                          fontWeight: 700,
-                          color: "#8c9196",
-                          textTransform: "uppercase",
-                          marginBottom: 8,
-                        }}
-                      >
-                        Integrated Tech:
-                      </div>
-                      <ul
-                        style={{
-                          listStyle: "none",
-                          padding: 0,
-                          margin: 0,
-                          display: "flex",
-                          flexDirection: "column",
-                          gap: 8,
-                        }}
-                      >
-                        {config.buildWith.map((item, idx) => (
-                          <li
-                            key={idx}
-                            style={{
-                              display: "flex",
-                              alignItems: "center",
-                              gap: 8,
-                              color: "#303030",
-                            }}
-                          >
-                            <span style={{ color: "#5c6ac4" }}>⚡</span>
-                            <span>{item}</span>
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
-                </div>
-              </div>
-            </div>
-          );
-        })}
-      </div>
-
-      {/* SECTION 5: CUSTOM PLAN — NEGOTIATED / SALES-ASSISTED */}
-      <div
-        style={{
-          maxWidth: 960,
-          margin: "40px auto 0 auto",
-          padding: 28,
-          background: "#fff",
-          borderRadius: 16,
-          border: "1px solid #e1e3e5",
-          boxShadow: "0 2px 8px rgba(0,0,0,0.04)",
-        }}
-      >
-        {!customRequestSent ? (
-          <>
-            <div style={{ textAlign: "center", marginBottom: 20 }}>
-              <div
-                style={{
-                  display: "inline-block",
-                  padding: "5px 10px",
-                  borderRadius: 999,
-                  background: "#f1f2f3",
-                  color: "#4a4a4a",
-                  fontSize: 11,
-                  fontWeight: 700,
-                  textTransform: "uppercase",
-                }}
-              >
-                Custom Plan
-              </div>
-              <h2
-                style={{
-                  margin: "12px 0 8px 0",
-                  fontSize: 22,
-                  fontWeight: 800,
-                  color: "#1a1a1a",
-                }}
-              >
-                Need a plan tailored to your store?
-              </h2>
-              <p
-                style={{
-                  margin: 0,
-                  color: "#616161",
-                  fontSize: 13,
-                  lineHeight: 1.6,
-                }}
-              >
-                Tell us what you need. Our team will review your requirements,
-                discuss the plan and pricing with you, and send a Shopify
-                payment link after you agree to the offer.
-              </p>
+            <div style={{ marginBottom: 22 }}>
+              <span style={{ fontSize: 32, fontWeight: 800, color: "#111827" }}>Contact us</span>
             </div>
 
-            {!customShowForm ? (
-              <div style={{ textAlign: "center" }}>
-                <button
-                  type="button"
-                  onClick={() => setCustomShowForm(true)}
-                  style={{
-                    padding: "12px 24px",
-                    borderRadius: 10,
-                    border: "none",
-                    background: "#1a1a1a",
-                    color: "#fff",
-                    fontWeight: 700,
-                    fontSize: 14,
-                    cursor: "pointer",
-                  }}
-                >
-                  Request a Custom Plan
-                </button>
-              </div>
-            ) : (
+            <ul
+              style={{
+                listStyle: "none",
+                padding: 0,
+                margin: "0 0 24px",
+                display: "grid",
+                gap: 10,
+                color: "#475467",
+                fontSize: 13,
+              }}
+            >
+              {[
+                "Custom product and search limits",
+                "Usage and cost tracking",
+                "Managed through Shopify Billing",
+                "Dedicated implementation support",
+              ].map((feat) => (
+                <li key={feat} style={{ display: "flex", gap: 9, alignItems: "flex-start" }}>
+                  <span style={{ color: "#12a66a", fontWeight: 800 }}>✓</span>
+                  <span>{feat}</span>
+                </li>
+              ))}
+            </ul>
+
+            <button
+              type="button"
+              onClick={() => setCustomShowForm((value) => !value)}
+              style={{
+                marginTop: "auto",
+                width: "100%",
+                padding: "11px 16px",
+                borderRadius: 9,
+                border: "1px solid #5b3df5",
+                background: "#fff",
+                color: "#5b3df5",
+                fontWeight: 800,
+                cursor: "pointer",
+              }}
+            >
+              {customShowForm ? "Hide request form" : "Start with Custom"}
+            </button>
+          </article>
+        </div>
+
+        {customShowForm ? (
+          <div
+            style={{
+              marginTop: 20,
+              padding: 24,
+              border: "1px solid #dfe3ea",
+              borderRadius: 14,
+              background: "#fff",
+            }}
+          >
+            {!customRequestSent ? (
               <form
                 onSubmit={(event) => {
                   event.preventDefault();
                   setCustomRequestSent(true);
                 }}
                 style={{
-                  maxWidth: 680,
-                  margin: "0 auto",
-                  display: "flex",
-                  flexDirection: "column",
+                  display: "grid",
                   gap: 14,
                 }}
               >
                 <div
                   style={{
                     display: "grid",
-                    gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+                    gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
                     gap: 14,
                   }}
                 >
-                  <label style={{ fontSize: 12, fontWeight: 700, color: "#4a4a4a" }}>
+                  <label style={{ fontSize: 12, fontWeight: 700, color: "#475467" }}>
                     Store
                     <input
                       value={data.shop}
@@ -1277,15 +1178,13 @@ export default function BillingPage() {
                         boxSizing: "border-box",
                         marginTop: 6,
                         padding: "10px 12px",
-                        border: "1px solid #c9cccf",
+                        border: "1px solid #d0d5dd",
                         borderRadius: 8,
-                        background: "#f6f6f7",
-                        color: "#616161",
+                        background: "#f8fafc",
                       }}
                     />
                   </label>
-
-                  <label style={{ fontSize: 12, fontWeight: 700, color: "#4a4a4a" }}>
+                  <label style={{ fontSize: 12, fontWeight: 700, color: "#475467" }}>
                     Contact email
                     <input
                       name="email"
@@ -1298,7 +1197,7 @@ export default function BillingPage() {
                         boxSizing: "border-box",
                         marginTop: 6,
                         padding: "10px 12px",
-                        border: "1px solid #c9cccf",
+                        border: "1px solid #d0d5dd",
                         borderRadius: 8,
                       }}
                     />
@@ -1308,82 +1207,50 @@ export default function BillingPage() {
                 <div
                   style={{
                     display: "grid",
-                    gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+                    gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
                     gap: 14,
                   }}
                 >
-                  <label style={{ fontSize: 12, fontWeight: 700, color: "#4a4a4a" }}>
-                    Indexed products needed
-                    <input
-                      name="indexedProducts"
-                      type="number"
-                      min="0"
-                      placeholder="e.g. 5000"
-                      style={{
-                        display: "block",
-                        width: "100%",
-                        boxSizing: "border-box",
-                        marginTop: 6,
-                        padding: "10px 12px",
-                        border: "1px solid #c9cccf",
-                        borderRadius: 8,
-                      }}
-                    />
-                  </label>
-
-                  <label style={{ fontSize: 12, fontWeight: 700, color: "#4a4a4a" }}>
-                    AI searches / month
-                    <input
-                      name="monthlySearches"
-                      type="number"
-                      min="0"
-                      placeholder="e.g. 50000"
-                      style={{
-                        display: "block",
-                        width: "100%",
-                        boxSizing: "border-box",
-                        marginTop: 6,
-                        padding: "10px 12px",
-                        border: "1px solid #c9cccf",
-                        borderRadius: 8,
-                      }}
-                    />
-                  </label>
-
-                  <label style={{ fontSize: 12, fontWeight: 700, color: "#4a4a4a" }}>
-                    Vector updates / month
-                    <input
-                      name="vectorUpdates"
-                      type="number"
-                      min="0"
-                      placeholder="e.g. 10000"
-                      style={{
-                        display: "block",
-                        width: "100%",
-                        boxSizing: "border-box",
-                        marginTop: 6,
-                        padding: "10px 12px",
-                        border: "1px solid #c9cccf",
-                        borderRadius: 8,
-                      }}
-                    />
-                  </label>
+                  {[
+                    ["indexedProducts", "Indexed products needed", "5000"],
+                    ["monthlySearches", "Searches / month", "50000"],
+                    ["vectorUpdates", "Vector updates / month", "10000"],
+                  ].map(([name, label, placeholder]) => (
+                    <label key={name} style={{ fontSize: 12, fontWeight: 700, color: "#475467" }}>
+                      {label}
+                      <input
+                        name={name}
+                        type="number"
+                        min="0"
+                        placeholder={placeholder}
+                        style={{
+                          display: "block",
+                          width: "100%",
+                          boxSizing: "border-box",
+                          marginTop: 6,
+                          padding: "10px 12px",
+                          border: "1px solid #d0d5dd",
+                          borderRadius: 8,
+                        }}
+                      />
+                    </label>
+                  ))}
                 </div>
 
-                <label style={{ fontSize: 12, fontWeight: 700, color: "#4a4a4a" }}>
+                <label style={{ fontSize: 12, fontWeight: 700, color: "#475467" }}>
                   Requirements / message
                   <textarea
                     name="message"
-                    rows={5}
+                    rows={4}
                     required
-                    placeholder="Tell us about your requirements, expected traffic, features, or anything you would like to discuss."
+                    placeholder="Tell us about your requirements, expected traffic, or special needs."
                     style={{
                       display: "block",
                       width: "100%",
                       boxSizing: "border-box",
                       marginTop: 6,
                       padding: "10px 12px",
-                      border: "1px solid #c9cccf",
+                      border: "1px solid #d0d5dd",
                       borderRadius: 8,
                       resize: "vertical",
                       fontFamily: "inherit",
@@ -1391,111 +1258,40 @@ export default function BillingPage() {
                   />
                 </label>
 
-                <div
-                  style={{
-                    display: "flex",
-                    gap: 10,
-                    justifyContent: "flex-end",
-                    alignItems: "center",
-                    marginTop: 4,
-                  }}
-                >
-                  <button
-                    type="button"
-                    onClick={() => setCustomShowForm(false)}
-                    style={{
-                      padding: "10px 16px",
-                      borderRadius: 8,
-                      border: "1px solid #c9cccf",
-                      background: "#fff",
-                      fontWeight: 600,
-                      cursor: "pointer",
-                    }}
-                  >
-                    Cancel
-                  </button>
+                <div style={{ display: "flex", justifyContent: "flex-end" }}>
                   <button
                     type="submit"
                     style={{
                       padding: "10px 18px",
                       borderRadius: 8,
                       border: "none",
-                      background: "#008060",
+                      background: "#5b3df5",
                       color: "#fff",
-                      fontWeight: 700,
+                      fontWeight: 800,
                       cursor: "pointer",
                     }}
                   >
-                    Send Request
+                    Send request
                   </button>
                 </div>
               </form>
+            ) : (
+              <div
+                style={{
+                  padding: 16,
+                  borderRadius: 10,
+                  background: "#ecfdf3",
+                  border: "1px solid #abefc6",
+                  color: "#067647",
+                }}
+              >
+                <strong style={{ display: "block", marginBottom: 5 }}>Custom plan request sent</strong>
+                Your request has been received. We will contact you to discuss the requirements and pricing.
+              </div>
             )}
-          </>
-        ) : (
-          <div style={{ maxWidth: 680, margin: "0 auto" }}>
-            <div
-              style={{
-                padding: 18,
-                borderRadius: 10,
-                background: "#e4f8f0",
-                border: "1px solid #b7e5d3",
-                color: "#006644",
-                marginBottom: 20,
-              }}
-            >
-              <strong style={{ display: "block", marginBottom: 6 }}>
-                Custom plan request sent
-              </strong>
-              Your request has been received. We will contact you to discuss
-              the requirements and agree on the plan and price.
-            </div>
-
-            <div
-              style={{
-                border: "1px solid #e1e3e5",
-                borderRadius: 12,
-                padding: 20,
-                background: "#fafafa",
-              }}
-            >
-              <div
-                style={{
-                  fontSize: 12,
-                  fontWeight: 700,
-                  color: "#8c9196",
-                  textTransform: "uppercase",
-                  marginBottom: 8,
-                }}
-              >
-                Waiting for offer
-              </div>
-              <h3 style={{ margin: "0 0 8px 0", fontSize: 18, color: "#1a1a1a" }}>
-                Your custom plan will appear here
-              </h3>
-              <p style={{ margin: "0 0 16px 0", fontSize: 13, color: "#616161", lineHeight: 1.6 }}>
-                After we agree on the requirements and price, the app can show
-                the agreed offer here together with a Shopify payment button.
-              </p>
-
-              <div
-                style={{
-                  padding: 14,
-                  borderRadius: 8,
-                  background: "#fff",
-                  border: "1px dashed #c9cccf",
-                  fontSize: 12,
-                  color: "#8c9196",
-                }}
-              >
-                <strong style={{ color: "#616161" }}>Next step:</strong> once
-                an offer is agreed, the backend will provide the final price,
-                billing interval, and Shopify payment link/button here.
-              </div>
-            </div>
           </div>
-        )}
-      </div>
+        ) : null}
+      </section>
 
       {/* SECTION 6: SHOPIFY BILLING DISCLAIMER */}
       <div
