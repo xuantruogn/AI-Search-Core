@@ -29,6 +29,29 @@ function hasValidShopifyHmac(
   );
 }
 
+/**
+ * GET probe for the uninstall webhook endpoint.
+ *
+ * Shopify delivers the real uninstall event as POST. This GET exists only
+ * to verify that the current dev tunnel reaches this exact route.
+ */
+export const loader = async ({ request }: ActionFunctionArgs) => {
+  const requestUrl = new URL(request.url);
+
+  console.log("[AI Search][UNINSTALL TRACE] endpoint probe", {
+    method: request.method,
+    pathname: requestUrl.pathname,
+    host: requestUrl.host,
+  });
+
+  return Response.json({
+    ok: true,
+    endpoint: requestUrl.pathname,
+    message:
+      "Uninstall webhook endpoint is reachable. Shopify uninstall delivery uses POST.",
+  });
+};
+
 export const action = async ({ request }: ActionFunctionArgs) => {
   const requestUrl = new URL(request.url);
 
