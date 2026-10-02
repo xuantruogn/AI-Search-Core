@@ -5,6 +5,19 @@ import {
 import type { DeterministicQueryParse } from "./deterministic-query-parser.server";
 import type { CatalogTermMatch } from "./catalog-term-matcher.server";
 
+const UNRESOLVED_CONTROL_TOKENS = new Set([
+  "only", "just", "exactly", "please", "show", "find", "need", "want",
+  "chi", "chỉ", "dung", "đúng",
+]);
+
+export function shouldAnalyzeUnresolvedIdentityRemainder(
+  unresolvedSegments: string[],
+) {
+  const tokens = unresolvedSegments
+    .flatMap((segment) => segment.toLowerCase().split(/\s+/).filter(Boolean));
+  return tokens.some((token) => !UNRESOLVED_CONTROL_TOKENS.has(token));
+}
+
 export function routeQuery(args: {
   deterministic: DeterministicQueryParse;
   matches: CatalogTermMatch[];
@@ -41,6 +54,9 @@ export function routeQuery(args: {
       ["ATTRIBUTE", "CONTEXT", "AUDIENCE"].includes(match.entry.field) &&
       match.confidence >= 0.5,
   );
+  const unresolvedTokenCount = unresolvedSegments
+    .flatMap((segment) => segment.split(/\s+/).filter(Boolean))
+    .length;
   const hasStrongStructuredConstraint =
     deterministic.measurements.length > 0 ||
     matches.some(
@@ -106,9 +122,24 @@ export function routeQuery(args: {
   } else if (unresolvedSegments.length === 0 && matches.length > 0) {
     route = "CODE_SEMANTIC";
     reasons.push("NON_IDENTITY_TERMS_FULLY_RESOLVED");
+  } else if (
+    hasIdentitySignal &&
+    shouldAnalyzeUnresolvedIdentityRemainder(unresolvedSegments)
+  ) {
+    // A catalog family plus an unresolved content word may name a missing
+    // subtype rather than a soft preference ("smart speaker", "computer
+    // monitor"). Let the lightweight analyzer preserve the full requested
+    // class so a broad homonym cannot satisfy it by itself. Control words such
+    // as "only" remain code-owned and do not incur an LLM call.
+    route = "LIGHT_LLM";
+    reasons.push(
+      unresolvedTokenCount >= 3
+        ? "IDENTITY_WITH_SUBSTANTIAL_SEMANTIC_REMAINDER"
+        : "IDENTITY_WITH_UNGROUNDED_SEMANTIC_REMAINDER",
+    );
   } else if (hasIdentitySignal) {
     route = "VECTOR_SEMANTIC";
-    reasons.push("IDENTITY_RESOLVED_SEMANTIC_REMAINDER");
+    reasons.push("IDENTITY_RESOLVED_CONTROL_REMAINDER");
   } else if (unresolvedSegments.length <= 1 && matches.length > 0) {
     route = "LIGHT_LLM";
     reasons.push("PARTIALLY_RESOLVED_SINGLE_REMAINDER");

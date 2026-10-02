@@ -33,6 +33,7 @@ export type SearchProductVectorsInput = {
   vector: number[];
   limit?: number;
   scoreThreshold?: number;
+  productIds?: string[];
   onDiagnostics?: (diagnostics: {
     requestMs: number;
     responseMappingCodeMs: number;
@@ -645,6 +646,7 @@ export async function searchProductVectors({
   vector,
   limit = 20,
   scoreThreshold,
+  productIds,
   onDiagnostics,
 }: SearchProductVectorsInput): Promise<ProductVectorSearchResult[]> {
   const totalStartedAt = Date.now();
@@ -653,7 +655,12 @@ export async function searchProductVectors({
     SELECT \`productId\` FROM \`AiSearchIndexedProduct\`
     WHERE \`shop\` = ${shop} AND \`searchable\` = true AND \`hasVector\` = true
   `;
-  const eligibleProductIds = eligibleRows.map((row) => row.productId);
+  const requestedProductIds = productIds?.length
+    ? new Set(productIds)
+    : null;
+  const eligibleProductIds = eligibleRows
+    .map((row) => row.productId)
+    .filter((productId) => !requestedProductIds || requestedProductIds.has(productId));
   if (eligibleProductIds.length === 0) {
     onDiagnostics?.({
       requestMs: 0, responseMappingCodeMs: 0,
@@ -661,8 +668,10 @@ export async function searchProductVectors({
     });
     return [];
   }
-  const safeLimit = Number.isFinite(limit)
-    ? Math.max(1, Math.min(Math.trunc(limit), 1000)) : 20;
+  const requestedLimit = Number.isFinite(limit)
+    ? Math.max(1, Math.min(Math.trunc(limit), 1000))
+    : 20;
+  const safeLimit = Math.min(requestedLimit, eligibleProductIds.length);
 
   // During the one-time Phase-1 -> V2 point-ID migration, a product can
   // temporarily have both a legacy numeric point and the new tenant UUID.
@@ -784,12 +793,14 @@ export async function searchProductVectorsBatch({
   vectors,
   limits,
   scoreThreshold,
+  productIds,
   onDiagnostics,
 }: {
   shop: string;
   vectors: number[][];
   limits?: number[];
   scoreThreshold?: number;
+  productIds?: string[];
   onDiagnostics?: (diagnostics: {
     requestMs: number;
     responseMappingCodeMs: number;
@@ -806,7 +817,12 @@ export async function searchProductVectorsBatch({
     SELECT \`productId\` FROM \`AiSearchIndexedProduct\`
     WHERE \`shop\` = ${shop} AND \`searchable\` = true AND \`hasVector\` = true
   `;
-  const eligibleProductIds = eligibleRows.map((row) => row.productId);
+  const requestedProductIds = productIds?.length
+    ? new Set(productIds)
+    : null;
+  const eligibleProductIds = eligibleRows
+    .map((row) => row.productId)
+    .filter((productId) => !requestedProductIds || requestedProductIds.has(productId));
   if (eligibleProductIds.length === 0) {
     onDiagnostics?.({
       requestMs: 0,
@@ -829,9 +845,10 @@ export async function searchProductVectorsBatch({
       : 1.5;
   const safeLimits = vectors.map((_, index) => {
     const requested = limits?.[index] ?? 20;
-    return Number.isFinite(requested)
+    const normalizedRequested = Number.isFinite(requested)
       ? Math.max(1, Math.min(Math.trunc(requested), 1000))
       : 20;
+    return Math.min(normalizedRequested, eligibleProductIds.length);
   });
   const candidateLimits = safeLimits.map((safeLimit) =>
     Math.min(

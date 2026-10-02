@@ -46,11 +46,43 @@ function normalizeUnicodeTokens(value: string) {
     .filter(Boolean);
 }
 
-function phraseTokenSpan(queryTokens: string[], phrase: string) {
+function identityTokenVariants(token: string) {
+  const variants = new Set([token]);
+  if (token.length < 4) return variants;
+  if (token.endsWith("ies") && token.length > 4) {
+    variants.add(token.slice(0, -3) + "y");
+  }
+  if (token.endsWith("es") && token.length > 4) {
+    variants.add(token.slice(0, -2));
+  }
+  if (token.endsWith("s") && !token.endsWith("ss") && token.length > 3) {
+    variants.add(token.slice(0, -1));
+  }
+  return variants;
+}
+
+function identityTokenEquals(left: string, right: string) {
+  if (left === right) return true;
+  const leftVariants = identityTokenVariants(left);
+  const rightVariants = identityTokenVariants(right);
+  return [...leftVariants].some((value) => rightVariants.has(value));
+}
+
+function phraseTokenSpan(
+  queryTokens: string[],
+  phrase: string,
+  allowIdentityMorphology = false,
+) {
   const phraseTokens = phrase.split(" ").filter(Boolean);
   if (phraseTokens.length === 0) return null;
   for (let start = 0; start <= queryTokens.length - phraseTokens.length; start += 1) {
-    if (phraseTokens.every((token, offset) => queryTokens[start + offset] === token)) {
+    if (
+      phraseTokens.every((token, offset) =>
+        allowIdentityMorphology
+          ? identityTokenEquals(queryTokens[start + offset], token)
+          : queryTokens[start + offset] === token,
+      )
+    ) {
       return { start, end: start + phraseTokens.length };
     }
   }
@@ -98,7 +130,11 @@ export function matchCatalogTerms(
       (FIELD_PRIORITY[b.field] ?? 0) - (FIELD_PRIORITY[a.field] ?? 0);
     return identityTierDelta || tokenDelta || confidenceDelta || priorityDelta;
   })) {
-    const span = phraseTokenSpan(queryTokens, entry.normalized);
+    const span = phraseTokenSpan(
+      queryTokens,
+      entry.normalized,
+      ["PRODUCT_TYPE", "CATEGORY"].includes(entry.field),
+    );
     if (!span) continue;
 
     // Do not let diacritic folding turn a foreign-language source token into

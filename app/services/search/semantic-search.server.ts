@@ -48,6 +48,35 @@ function readDiscoveryMinRecallResults() {
     : 8;
 }
 
+export function computeDiscoveryNoEvidenceThreshold(args: {
+  retrievalMode: "DIRECT" | "DISCOVERY" | "COMPLEMENT";
+  baseThreshold: number;
+  hasStrongCatalogEvidence: boolean;
+  expansionGroundedCount: number;
+}) {
+  if (args.retrievalMode === "DIRECT") {
+    return args.hasStrongCatalogEvidence
+      ? args.baseThreshold
+      : Math.max(args.baseThreshold, 0.60);
+  }
+  if (args.retrievalMode !== "DISCOVERY") return args.baseThreshold;
+  if (!args.hasStrongCatalogEvidence && args.expansionGroundedCount === 0) {
+    // With no source-grounded or expansion-grounded catalog evidence, vector
+    // similarity alone must clear a conservative bar. This blocks sibling
+    // product classes such as a plain digital watch for an absent "smart
+    // watch" query while still allowing grounded discovery flows to use the
+    // lower recall thresholds below.
+    return Math.max(args.baseThreshold, 0.55);
+  }
+  if (args.expansionGroundedCount >= 8) {
+    return Math.min(args.baseThreshold, 0.45);
+  }
+  if (args.expansionGroundedCount >= 3) {
+    return Math.min(args.baseThreshold, 0.46);
+  }
+  return args.baseThreshold;
+}
+
 export function computeDiscoveryRecallThreshold(args: {
   retrievalMode: "DIRECT" | "DISCOVERY" | "COMPLEMENT";
   baseThreshold: number;
@@ -149,6 +178,90 @@ function isGenericCatalogEvidenceValue(value: string) {
   );
 }
 
+export function singleTokenSourceIdentityEvidence(args: {
+  sourceQuery: string;
+  sourceMustTerms: string[];
+  catalogTerms: Array<{ kind: string; value: string; score: number }>;
+}) {
+  const sourceTokens = normalizeEmbeddingBranch(args.sourceQuery)
+    .split(" ")
+    .filter(Boolean);
+  if (sourceTokens.length !== 1) return false;
+
+  const sourceToken = sourceTokens[0];
+  const sourceMustOwnsToken = args.sourceMustTerms.some(
+    (term) => normalizeEmbeddingBranch(term) === sourceToken,
+  );
+  if (!sourceMustOwnsToken) return false;
+
+  return args.catalogTerms.some((term) => {
+    if (
+      !["CANONICAL_PRODUCT_TYPE", "PRODUCT_TYPE", "ALIAS"].includes(term.kind) ||
+      term.score < 18 ||
+      isGenericCatalogEvidenceValue(term.value)
+    ) {
+      return false;
+    }
+    const catalogTokens = normalizeEmbeddingBranch(term.value)
+      .split(" ")
+      .filter(Boolean);
+    return catalogTokens.includes(sourceToken);
+  });
+}
+
+export function catalogEvidenceNeedMatches(
+  needValue: string,
+  catalogValue: string,
+) {
+  const needTokens = normalizeEmbeddingBranch(needValue).split(" ").filter(Boolean);
+  const catalogTokens = normalizeEmbeddingBranch(catalogValue).split(" ").filter(Boolean);
+  if (needTokens.length === 0 || catalogTokens.length === 0) return false;
+  if (
+    needTokens.length === catalogTokens.length &&
+    needTokens.every((token, index) => token === catalogTokens[index])
+  ) {
+    return true;
+  }
+
+  const containsSequence = (haystack: string[], needle: string[]) => {
+    if (needle.length < 2 || needle.length > haystack.length) return false;
+    for (let start = 0; start <= haystack.length - needle.length; start += 1) {
+      if (needle.every((token, offset) => haystack[start + offset] === token)) {
+        return true;
+      }
+    }
+    return false;
+  };
+
+  return (
+    containsSequence(needTokens, catalogTokens) ||
+    containsSequence(catalogTokens, needTokens)
+  );
+}
+
+export function catalogEvidenceCoversSemanticMustTerms(
+  semanticMustTerms: string[],
+  catalogValues: string[],
+) {
+  const needGroups = semanticMustTerms
+    .map((value) =>
+      normalizeEmbeddingBranch(value).split(" ").filter(Boolean),
+    )
+    .filter((tokens) => tokens.length > 0);
+  if (needGroups.length === 0) return true;
+
+  const catalogTokens = new Set(
+    catalogValues.flatMap((value) =>
+      normalizeEmbeddingBranch(value).split(" ").filter(Boolean),
+    ),
+  );
+  if (catalogTokens.size === 0) return false;
+
+  return needGroups.every((needTokens) =>
+    needTokens.every((token) => catalogTokens.has(token)),
+  );
+}
+
 export function buildDiscoveryEmbeddingBranches(
   rewrite: QueryRewriteResult | null | undefined,
 ) {
@@ -207,7 +320,10 @@ export function buildDiscoveryEmbeddingBranches(
     }
     const branch = parts.join(" ; ").slice(0, 260).trim();
     if (branch) branches.push(branch);
-    if (branches.length >= 6) break;
+    // The primary vector already keeps the broad recall horizon. Secondary
+    // discovery branches are targeted recall probes, so cap them at four to
+    // avoid multiplying Qdrant work for the 500-result storefront horizon.
+    if (branches.length >= 4) break;
   }
   return branches;
 }
@@ -1091,6 +1207,16 @@ export async function semanticSearch({
         ? Math.min(minimumScore, discoveryMinimumScore)
         : minimumScore;
 
+  const identityIds = effectiveRewrite?.context?.identityCandidateProductIds ?? [];
+  const directExpansionScopeIds =
+    effectiveRewrite?.context?.directExpansionGroundedProductIds ?? [];
+  const directIdentityScopeIds =
+    retrievalMode === "DIRECT" &&
+    identityIds.length > 0 &&
+    effectiveRewrite?.context?.canonicalTypeCoverageComplete === true
+      ? [...new Set([...identityIds, ...directExpansionScopeIds])]
+      : undefined;
+
   const onQdrantDiagnostics = (
     diagnostics: {
       requestMs: number;
@@ -1115,18 +1241,15 @@ export async function semanticSearch({
           ],
           limits: [
             limit,
-            ...semanticBranchVectors.map(() =>
-              Math.min(
-                60,
-                Math.max(
-                  20,
-                  Math.ceil(limit / Math.max(8, semanticBranchVectors.length * 2)),
-                ),
-              ),
-            ),
+            // Branch vectors only supplement the primary 500-result horizon.
+            // Keep their per-branch recall budget fixed so a broad storefront
+            // limit does not inflate every semantic expansion query.
+            ...semanticBranchVectors.map(() => 20),
           ],
           scoreThreshold:
             retrievalMinimumScore,
+          productIds:
+            directIdentityScopeIds,
           onDiagnostics:
             onQdrantDiagnostics,
         }).then((resultSets) =>
@@ -1139,6 +1262,8 @@ export async function semanticSearch({
           limit,
           scoreThreshold:
             retrievalMinimumScore,
+          productIds:
+            directIdentityScopeIds,
           onDiagnostics:
             onQdrantDiagnostics,
         });
@@ -1184,20 +1309,28 @@ export async function semanticSearch({
 
   let results = retrieval.value;
 
-  const identityIds = effectiveRewrite?.context?.identityCandidateProductIds ?? [];
   const vectorCandidateCount = results.length;
-  if (identityIds.length > 0) {
+  const evidenceCandidateIds = [
+    ...new Set([
+      ...identityIds,
+      ...directExpansionScopeIds,
+    ]),
+  ];
+  if (evidenceCandidateIds.length > 0) {
     const existing = new Set(results.map((result) => result.productId));
-    const identityRows = await listSearchableIndexedProducts(
+    const evidenceRows = await listSearchableIndexedProducts(
       shop,
-      identityIds.filter((id) => !existing.has(id)).slice(0, limit),
+      evidenceCandidateIds.filter((id) => !existing.has(id)).slice(0, limit),
     );
     const identitySet = new Set(identityIds);
     results = [
       ...results.map((result) => identitySet.has(result.productId)
         ? { ...result, score: Math.min(1, result.score + 0.2) }
         : result),
-      ...identityRows.map((row) => ({ ...row, score: 0.5 })),
+      // Canonical expansion-grounded leaves are proven catalog candidates.
+      // Give them a conservative floor so they survive vector thresholding;
+      // the typed reranker decides their final order.
+      ...evidenceRows.map((row) => ({ ...row, score: 0.5 })),
     ].sort((left, right) => right.score - left.score).slice(0, limit);
   }
   console.log("[AI Search][CANDIDATE GENERATION]", {
@@ -1388,6 +1521,10 @@ export async function semanticSearch({
         )
       : retrievalMinimumScore;
 
+  const directExpansionGroundedIds =
+    retrievalMode === "DIRECT"
+      ? (effectiveRewrite?.context?.directExpansionGroundedProductIds ?? [])
+      : [];
   const discoverySourceGroundedIds =
     retrievalMode === "DISCOVERY"
       ? (effectiveRewrite?.context?.discoverySourceGroundedProductIds ?? [])
@@ -1407,8 +1544,8 @@ export async function semanticSearch({
     "AUDIENCE",
     "COMPATIBILITY",
   ]);
-  const selectedStrongCatalogEvidence = Boolean(
-    effectiveRewrite?.context?.selectedTerms.some(
+  const selectedStrongCatalogTerms =
+    effectiveRewrite?.context?.selectedTerms.filter(
       (term) =>
         strongContextKinds.has(term.kind) &&
         term.score >= 12 &&
@@ -1417,8 +1554,14 @@ export async function semanticSearch({
           retrievalMode === "DISCOVERY" &&
           ["PRODUCT_TYPE", "ALIAS"].includes(term.kind)
         ),
-    ),
-  );
+    ) ?? [];
+  const selectedStrongCatalogEvidence = selectedStrongCatalogTerms.length > 0;
+  const directSemanticMustCoverage =
+    retrievalMode !== "DIRECT" ||
+    catalogEvidenceCoversSemanticMustTerms(
+      effectiveRewrite?.analysis.semanticMustTerms ?? [],
+      selectedStrongCatalogTerms.map((term) => term.value),
+    );
   const semanticNeedValues = [
     ...(effectiveRewrite?.analysis.semanticMustTerms ?? []),
     ...(effectiveRewrite?.analysis.semanticSourceMustTerms ?? []),
@@ -1435,26 +1578,38 @@ export async function semanticSearch({
       ) {
         return false;
       }
-      const value = normalizeEmbeddingBranch(term.value);
-      return semanticNeedValues.some(
-        (need) =>
-          need === value ||
-          (need.length >= 4 && value.length >= 4 &&
-            (need.includes(value) || value.includes(need))),
+      return semanticNeedValues.some((need) =>
+        catalogEvidenceNeedMatches(need, term.value),
       );
+    }),
+  );
+  const singleTokenSourceIdentityGrounded = Boolean(
+    retrievalMode === "DISCOVERY" &&
+    effectiveRewrite?.context?.selectedTerms &&
+    singleTokenSourceIdentityEvidence({
+      sourceQuery: effectiveRewrite.query,
+      sourceMustTerms: effectiveRewrite.analysis.semanticSourceMustTerms ?? [],
+      catalogTerms: effectiveRewrite.context.selectedTerms,
     }),
   );
   // DISCOVERY evidence has provenance: source-overlap is strongest; an exact
   // typed taxonomy match may also ground a translated cross-language need
   // (e.g. Vietnamese "kính mắt" -> CATEGORY=Eyewear). Expansion-only hits do
   // not prove the shopper's need exists in the catalog.
+  const fallbackNeedsSemanticGuard =
+    transientLlmFallback &&
+    ["LIGHT_LLM", "FULL_LLM"].includes(effectiveRewrite?.planning?.route ?? "") &&
+    (effectiveRewrite?.planning?.unresolvedSegments?.length ?? 0) > 0;
   const hasStrongCatalogEvidence =
     retrievalMode === "DISCOVERY"
-      ? discoverySourceGroundedIds.length > 0 || translatedTaxonomyEvidence
-      : selectedStrongCatalogEvidence;
-  const hasBroadExpansionEvidence =
-    retrievalMode === "DISCOVERY" &&
-    discoveryExpansionGroundedIds.length >= 8;
+      ? discoverySourceGroundedIds.length > 0 ||
+        translatedTaxonomyEvidence ||
+        singleTokenSourceIdentityGrounded
+      : (
+          !fallbackNeedsSemanticGuard &&
+          selectedStrongCatalogEvidence &&
+          directSemanticMustCoverage
+        ) || directExpansionGroundedIds.length > 0;
   const discoveryMinRecallResults = readDiscoveryMinRecallResults();
   const effectiveMinimumScore = computeDiscoveryRecallThreshold({
     retrievalMode,
@@ -1486,14 +1641,18 @@ export async function semanticSearch({
     retrievalMode === "COMPLEMENT"
       ? noEvidenceTopScore
       : transientNoEvidenceTopScore;
-  const hasAnyDiscoveryGrounding =
-    hasStrongCatalogEvidence || discoveryExpansionGroundedIds.length > 0;
-  const effectiveNoEvidenceTopScore =
-    retrievalMode === "DISCOVERY" && !hasAnyDiscoveryGrounding
-      ? Math.max(noEvidenceTopScore, 0.53)
-      : hasBroadExpansionEvidence
-        ? Math.min(noEvidenceTopScore, 0.45)
-        : noEvidenceTopScore;
+  const effectiveNoEvidenceTopScore = computeDiscoveryNoEvidenceThreshold({
+    retrievalMode,
+    baseThreshold: noEvidenceTopScore,
+    hasStrongCatalogEvidence,
+    expansionGroundedCount: discoveryExpansionGroundedIds.length,
+  });
+  const fallbackGuardThreshold =
+    fallbackNeedsSemanticGuard &&
+    retrievalMode === "DIRECT" &&
+    cleanQuery.split(/\s+/).filter(Boolean).length >= 7
+      ? Math.min(effectiveNoEvidenceTopScore, 0.55)
+      : effectiveNoEvidenceTopScore;
   const weakNoEvidenceVector =
     !hasStrongCatalogEvidence &&
     typeof topVectorScore === "number" &&
@@ -1507,7 +1666,11 @@ export async function semanticSearch({
       ) ||
       (
         transientLlmFallback &&
-        topVectorScore < transientNoEvidenceThreshold
+        topVectorScore < (
+          fallbackNeedsSemanticGuard
+            ? fallbackGuardThreshold
+            : transientNoEvidenceThreshold
+        )
       )
     );
 

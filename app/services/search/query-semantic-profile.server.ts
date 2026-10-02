@@ -78,6 +78,41 @@ function exactSemanticTermMatches(
   );
 }
 
+export function semanticTermsCoverConstraint(
+  constraint: QueryConstraint,
+  terms: string[],
+) {
+  const valueTokens = keyOf(constraint).split(" ").filter(Boolean);
+  if (valueTokens.length === 0) return false;
+  const termTokens = new Set(
+    terms.flatMap((term) =>
+      normalizeQueryText(term).split(" ").filter(Boolean),
+    ),
+  );
+  return valueTokens.every((token) => termTokens.has(token));
+}
+
+export function semanticTermsExplainedByIdentityOrFacets(
+  identity: QueryConstraint,
+  terms: string[],
+  facets: QueryConstraint[],
+) {
+  const identityTokens = new Set(keyOf(identity).split(" ").filter(Boolean));
+  if (identityTokens.size === 0 || terms.length === 0) return false;
+  const facetTokens = new Set(
+    facets.flatMap((facet) =>
+      keyOf(facet).split(" ").filter(Boolean),
+    ),
+  );
+  const requiredTokens = terms.flatMap((term) =>
+    normalizeQueryText(term).split(" ").filter(Boolean),
+  );
+  if (requiredTokens.length === 0) return false;
+  return requiredTokens.every(
+    (token) => identityTokens.has(token) || facetTokens.has(token),
+  );
+}
+
 export function resolveCodeOwnedRetrievalMode(args: {
   rawRetrievalMode: QueryPlan["retrievalMode"];
   hasDirectTargetIdentity: boolean;
@@ -96,13 +131,33 @@ export function shouldPromoteSourceNamedDirectTarget(args: {
   groundedIdentityOrCategory: boolean;
   llmRetrievalMode?: QueryPlan["retrievalMode"];
 }) {
-  const sourceNamesExactRequiredConcept = args.sourceMustTerms.some(
-    (term) =>
-      normalizeQueryText(term) === normalizeQueryText(args.originalQuery),
+  const normalizedSource = normalizeQueryText(args.originalQuery);
+  const sourceTokens = normalizedSource.split(" ").filter((token) => token.length >= 2);
+  const mustTokens = new Set(
+    args.sourceMustTerms.flatMap((term) =>
+      normalizeQueryText(term).split(" ").filter((token) => token.length >= 2),
+    ),
   );
+  const coveredSourceTokens = sourceTokens.filter((token) => mustTokens.has(token));
+  const sourceCoverage =
+    sourceTokens.length > 0 ? coveredSourceTokens.length / sourceTokens.length : 0;
+  const sourceNamesExactRequiredConcept =
+    args.sourceMustTerms.some(
+      (term) => normalizeQueryText(term) === normalizedSource,
+    ) ||
+    (
+      sourceTokens.length >= 2 &&
+      // Source MUST terms may intentionally omit audience or preference
+      // tokens (for example Vietnamese "ví da đen nữ" -> wallet/black/leather).
+      // Requiring 80% of the entire surface query made an explicitly named
+      // product class look like DISCOVERY. Grounding still has to be proven
+      // independently by pass 2, so 70% keeps need-only discovery queries out.
+      sourceCoverage >= 0.7
+    );
+
   return (
-    args.rawRoute === "FULL_LLM" &&
-    args.llmRetrievalMode === "DIRECT" &&
+    (args.rawRoute === "FULL_LLM" || args.rawRoute === "LIGHT_LLM") &&
+    args.llmRetrievalMode !== "COMPLEMENT" &&
     sourceNamesExactRequiredConcept &&
     args.groundedIdentityOrCategory
   );
@@ -398,7 +453,9 @@ export function buildQuerySemanticProfile(args: {
     ...args.expandedPlan.compatibility,
   ];
 
-  const semanticIdentityTerms = semanticMustTerms.filter(
+  const targetSemanticMustTerms =
+    safeLlm.analysis.semanticMustTerms ?? [];
+  const semanticIdentityTerms = targetSemanticMustTerms.filter(
     (term) =>
       !expandedNonIdentityConstraints.some((constraint) =>
         semanticTermMatches(constraint, [term]),
@@ -407,7 +464,11 @@ export function buildQuerySemanticProfile(args: {
 
   const llmDirectIdentity =
     args.expandedPlan.identities.some((item) =>
-      exactSemanticTermMatches(item, semanticIdentityTerms),
+      semanticTermsExplainedByIdentityOrFacets(
+        item,
+        targetSemanticMustTerms,
+        expandedNonIdentityConstraints,
+      ),
     );
   const llmDirectCategory =
     args.expandedPlan.resolvedSegments.some((segment) =>
@@ -418,10 +479,11 @@ export function buildQuerySemanticProfile(args: {
       ),
     );
   // Cross-language named product classes may be promoted from an unresolved
-  // source query to DIRECT only with three independent signals: the source
-  // explicitly names the required concept, pass 2 grounds it to the catalog,
-  // and the LLM classifies the shopping relation as DIRECT. The LLM is only a
-  // veto/corroboration signal here; it cannot promote an ungrounded query.
+  // source query to DIRECT only when the source itself names the required
+  // concept and pass 2 independently grounds that concept to a catalog
+  // identity/category. LLM DISCOVERY is not allowed to veto this source-owned
+  // relation; COMPLEMENT still is, because a referenced item changes the
+  // target relation rather than merely translating a product class.
   const sourceGroundedDirectTarget =
     shouldPromoteSourceNamedDirectTarget({
       originalQuery: args.originalQuery,
@@ -461,7 +523,11 @@ export function buildQuerySemanticProfile(args: {
   const safeExpandedIdentities =
     retrievalMode === "DIRECT"
       ? args.expandedPlan.identities.filter((item) =>
-          exactSemanticTermMatches(item, semanticIdentityTerms),
+          semanticTermsExplainedByIdentityOrFacets(
+            item,
+            targetSemanticMustTerms,
+            expandedNonIdentityConstraints,
+          ),
         )
       : [];
   const safeExpandedIdentityValues = new Set(

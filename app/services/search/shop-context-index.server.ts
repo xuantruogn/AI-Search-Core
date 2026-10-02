@@ -79,6 +79,7 @@ export type ContextualQueryResult = QueryRewriteResult & {
     composeCodeMs: number;
     canonicalTypeCoverageComplete: boolean;
     identityCandidateProductIds: string[];
+    directExpansionGroundedProductIds: string[];
     discoverySourceGroundedProductIds: string[];
     discoveryExpansionGroundedProductIds: string[];
   };
@@ -188,6 +189,57 @@ function discoveryExpansionTypeMatch(
       ? overlap === 1
       : overlap >= 2;
   });
+}
+
+export function discoveryContextProvesSemanticNeed(
+  termTokens: string[],
+  semanticMustTerms: string[],
+) {
+  if (semanticMustTerms.length === 0) return false;
+  const termSet = new Set(
+    termTokens.filter(
+      (token) =>
+        token.length >= 2 &&
+        !GENERIC_SOURCE_CONTEXT_TOKENS.has(token),
+    ),
+  );
+  if (termSet.size === 0) return false;
+
+  const needGroups = semanticMustTerms
+    .map((value) => {
+      const rawNeedTokens = meaningfulTokens(value);
+      const needTokens = rawNeedTokens.filter(
+        (token) => !GENERIC_SOURCE_CONTEXT_TOKENS.has(token),
+      );
+      return { rawNeedTokens, needTokens };
+    })
+    .filter((group) => group.needTokens.length > 0);
+
+  const matchedGroups = needGroups.filter(({ rawNeedTokens, needTokens }) => {
+    // A single bare adjective/context token is too weak to prove an
+    // open-world need when the catalog term merely contains it ("indoor
+    // ambience" does not prove "indoor cat litter box"). If the shopper's
+    // source need was a real phrase and only generic filler was removed
+    // ("rainy day" -> "rainy"), preserving that discriminative token is enough.
+    if (needTokens.length === 1) {
+      return rawNeedTokens.length >= 2
+        ? termSet.has(needTokens[0])
+        : termSet.size === 1 && termSet.has(needTokens[0]);
+    }
+    return needTokens.every((token) => termSet.has(token));
+  });
+
+  if (matchedGroups.length === 0) return false;
+  if (needGroups.length === 1) return true;
+
+  // When the semantic need has several independent MUST concepts, one generic
+  // adjunct must not prove the whole need. "home use" cannot prove
+  // "espresso + home"; require either one matched multi-token concept or two
+  // separately matched MUST groups.
+  return (
+    matchedGroups.some((group) => group.rawNeedTokens.length >= 2) ||
+    matchedGroups.length >= 2
+  );
 }
 
 function isDefaultVariantPlaceholder(value: string) {
@@ -589,10 +641,20 @@ export function readComplementTargetFacetTokens(
   return result;
 }
 
+const IDENTITY_SINGLE_LETTER_MARKERS = new Set(["t", "v", "u", "x"]);
+
 export function normalizeIdentitySignalTokens(value: string) {
-  return meaningfulTokens(value).filter(
-    (token) => !IDENTITY_AUDIENCE_TOKENS.has(token),
-  );
+  return normalizeContextTerm(value)
+    .split(" ")
+    .filter(Boolean)
+    .filter(
+      (token) =>
+        (
+          token.length >= 2 && !VI_STOP_WORDS.has(token)
+        ) ||
+        IDENTITY_SINGLE_LETTER_MARKERS.has(token),
+    )
+    .filter((token) => !IDENTITY_AUDIENCE_TOKENS.has(token));
 }
 
 function buildProductIdentitySignals(
@@ -653,13 +715,49 @@ function strongIdentityMatch(
   if (term.normalizedValue === signal.normalized) return 1;
 
   const termTokens = [...new Set(term.tokens)];
-  const common = [...new Set(signal.tokens)].filter((token) =>
+  const signalTokens = [...new Set(signal.tokens)];
+  const common = signalTokens.filter((token) =>
     termTokens.some((termToken) => identityTokenEquivalent(token, termToken)),
   );
   if (common.length === 0) return 0;
 
-  const signalCoverage = common.length / new Set(signal.tokens).size;
-  const termCoverage = common.length / Math.max(1, new Set(term.tokens).size);
+  if (
+    signalTokens.length >= 2 &&
+    !termTokens.some((termToken) =>
+      identityTokenEquivalent(signalTokens.at(-1) ?? "", termToken),
+    )
+  ) {
+    return 0;
+  }
+
+  // For direct identity matching, a catalog type that appends another head
+  // noun after the requested identity is usually a different product class,
+  // not a more specific version of the same product. Examples: "bicycle
+  // frameset", "phone case", or "shoe laces". Prefix modifiers such as
+  // "waterproof jacket" remain valid because the requested identity is still
+  // the final head noun. This prevents components/accessories from inheriting
+  // a perfect identity score merely because they contain every query token.
+  if (signal.tokens.length > 0 && term.tokens.length > signal.tokens.length) {
+    let sequenceStart = -1;
+    for (let start = 0; start <= term.tokens.length - signal.tokens.length; start += 1) {
+      const matchesSequence = signal.tokens.every((token, index) =>
+        identityTokenEquivalent(token, term.tokens[start + index] ?? ""),
+      );
+      if (matchesSequence) {
+        sequenceStart = start;
+        break;
+      }
+    }
+    if (
+      sequenceStart >= 0 &&
+      sequenceStart + signal.tokens.length < term.tokens.length
+    ) {
+      return 0;
+    }
+  }
+
+  const signalCoverage = common.length / signalTokens.length;
+  const termCoverage = common.length / Math.max(1, termTokens.length);
   if (signal.tokens.length === 1) return 1;
   // A one-token canonical identity may match a longer raw-query fallback
   // such as "charcoal cardigan size XL", but it must not collapse an exact
@@ -696,7 +794,7 @@ function containsTokenSequence(
   return false;
 }
 
-function referenceIdentityContainmentMatch(
+export function referenceIdentityContainmentMatch(
   identityValues: string[],
   referenceSignals: string[],
 ) {
@@ -712,6 +810,21 @@ function referenceIdentityContainmentMatch(
       }
       if (containsTokenSequence(identityTokens, referenceTokens)) {
         best = Math.max(best, referenceTokens.length === 1 ? 0.9 : 0.8);
+      }
+
+      // Reference qualifiers describe the item already owned/worn, not a
+      // requirement for the target recommendation. "with a black skirt"
+      // must exclude every skirt subtype (pleated skirt, midi skirt, etc.),
+      // not only products whose identity also contains "black". Use the
+      // reference head noun as a class-level exclusion signal.
+      const referenceHead = referenceTokens.at(-1);
+      const identityHead = identityTokens.at(-1);
+      if (
+        referenceHead &&
+        identityHead &&
+        referenceHead === identityHead
+      ) {
+        best = Math.max(best, 0.95);
       }
     }
   }
@@ -1005,9 +1118,10 @@ export async function applyShopContextToQuery({
   const complementTargetFacetTokens =
     readComplementTargetFacetTokens(originalQuery, rewrite);
   const currentContextRetrievalMode = retrievalModeOf(originalQuery, rewrite);
+  const semanticExpansionValues = rewrite.analysis.semanticExpansions ?? [];
   const discoveryExpansionValues =
-    retrievalModeOf(originalQuery, rewrite) === "DISCOVERY"
-      ? (rewrite.analysis.semanticExpansions ?? [])
+    currentContextRetrievalMode === "DISCOVERY"
+      ? semanticExpansionValues
       : [];
   const semanticMustFacetTokens = new Set(
     [
@@ -1207,8 +1321,29 @@ export async function applyShopContextToQuery({
     selectedContextTerms.push(term);
     if (selectedTerms.length >= contextLimit) break;
   }
+  const allowDirectExpansionEvidence =
+    currentContextRetrievalMode === "DIRECT" &&
+    normalizedOriginalQuery.split(/\s+/).filter(Boolean).length >= 7 &&
+    (rewrite.analysis.semanticMustTerms ?? []).length >= 2;
+  const directExpansionGroundedProductIds =
+    allowDirectExpansionEvidence
+      ? [
+          ...new Set(
+            terms
+              .filter(
+                (term) =>
+                  term.kind === "CANONICAL_PRODUCT_TYPE" &&
+                  discoveryExpansionTypeMatch(
+                    term.tokens,
+                    semanticExpansionValues,
+                  ),
+              )
+              .flatMap((term) => [...term.productIds]),
+          ),
+        ].slice(0, 1_000)
+      : [];
   const discoverySourceGroundedProductIds =
-    retrievalModeOf(originalQuery, rewrite) === "DISCOVERY"
+    currentContextRetrievalMode === "DISCOVERY"
       ? [
           ...new Set(
             selectedContextTerms
@@ -1218,10 +1353,17 @@ export async function applyShopContextToQuery({
                   (token) => sourceNeedTokens.has(token),
                 );
                 if (term.kind === "USE_CASE" || term.kind === "SOFT_CONTEXT") {
-                  return sourceOverlap.some(
+                  const hasDiscriminativeSourceOverlap = sourceOverlap.some(
                     (token) =>
                       token.length >= 4 &&
                       !GENERIC_SOURCE_CONTEXT_TOKENS.has(token),
+                  );
+                  return (
+                    hasDiscriminativeSourceOverlap &&
+                    discoveryContextProvesSemanticNeed(
+                      term.tokens,
+                      rewrite.analysis.semanticMustTerms ?? [],
+                    )
                   );
                 }
                 // A single adjective (for example "comfortable") may be a
@@ -1229,7 +1371,14 @@ export async function applyShopContextToQuery({
                 // product itself satisfies an open-world need. Require a
                 // multi-token attribute overlap before granting the stronger
                 // source-grounding rerank bonus.
-                return term.kind === "ATTRIBUTE" && sourceOverlap.length >= 2;
+                return (
+                  term.kind === "ATTRIBUTE" &&
+                  sourceOverlap.length >= 2 &&
+                  discoveryContextProvesSemanticNeed(
+                    term.tokens,
+                    rewrite.analysis.semanticMustTerms ?? [],
+                  )
+                );
               })
               .flatMap((term) => [...term.productIds]),
           ),
@@ -1324,6 +1473,7 @@ export async function applyShopContextToQuery({
       composeCodeMs,
       canonicalTypeCoverageComplete,
       identityCandidateProductIds: [...matchingProductIds],
+      directExpansionGroundedProductIds,
       discoverySourceGroundedProductIds,
       discoveryExpansionGroundedProductIds,
     },
@@ -1402,6 +1552,30 @@ function sourceContainsFacet(source: string, facet: string) {
   return ` ${fold(source)} `.includes(` ${value} `);
 }
 
+function sourceSemanticTermForCanonical(
+  source: string,
+  rewrite: QueryRewriteResult,
+  canonicalValue: string,
+) {
+  const canonical = normalizeContextTerm(canonicalValue);
+  if (!canonical) return null;
+  const targetTerms = rewrite.analysis.semanticMustTerms ?? [];
+  const sourceTerms = rewrite.analysis.semanticSourceMustTerms ?? [];
+  const length = Math.min(targetTerms.length, sourceTerms.length);
+  for (let index = 0; index < length; index += 1) {
+    const target = normalizeContextTerm(targetTerms[index] ?? "");
+    const sourceTerm = sourceTerms[index] ?? "";
+    if (!target || !sourceTerm || !sourceContainsFacet(source, sourceTerm)) continue;
+    if (
+      sourceContainsFacet(target, canonical) ||
+      sourceContainsFacet(canonical, target)
+    ) {
+      return sourceTerm;
+    }
+  }
+  return null;
+}
+
 function sourceGroundedAttributeFacets(
   originalQuery: string,
   rewrite: QueryRewriteResult,
@@ -1419,7 +1593,12 @@ function sourceGroundedAttributeFacets(
     ...(rewrite.analysis.optionalPreferences ?? []),
     ...(rewrite.analysis.attributes ?? []),
   ]) {
-    if (sourceContainsFacet(source, value)) facets.add(normalizeContextTerm(value));
+    if (
+      sourceContainsFacet(source, value) ||
+      sourceSemanticTermForCanonical(source, rewrite, value)
+    ) {
+      facets.add(normalizeContextTerm(value));
+    }
   }
   return [...facets].filter(Boolean);
 }
@@ -1435,7 +1614,9 @@ export function readStrictTargetAttributes(
   }
   const marker = /\b(?:only|must|requires?|exclusively|chi|bat buoc|phai co)\b/;
   const strictNear = (phrase: string) => {
-    const normalized = normalizeContextTerm(phrase);
+    const translatedSourcePhrase =
+      sourceSemanticTermForCanonical(source, rewrite, phrase);
+    const normalized = normalizeContextTerm(translatedSourcePhrase ?? phrase);
     const at = ` ${source} `.indexOf(` ${normalized} `);
     if (at < 0) return false;
     const prefix = source.slice(0, at).split(" ").filter(Boolean).slice(-3).join(" ");
@@ -1802,6 +1983,10 @@ export async function filterResultsByExplicitGender<
           .slice(0, 2)
           .map((term) => term.value)
       : [];
+  const expansionGroundedDirectProductIds =
+    currentRetrievalMode === "DIRECT"
+      ? new Set(rewrite.context?.directExpansionGroundedProductIds ?? [])
+      : new Set<string>();
   const sourceGroundedDiscoveryProductIds =
     currentRetrievalMode === "DISCOVERY"
       ? new Set(rewrite.context?.discoverySourceGroundedProductIds ?? [])
@@ -2029,7 +2214,21 @@ export async function filterResultsByExplicitGender<
     ]);
     const exactFacetMatch = (signal: string) =>
       exactFacetValues.some((value) => sourceContainsFacet(value, signal));
-    const preferredFacetMatches = preferredAttributes.filter(exactFacetMatch).length;
+    const preferredFacetMatches = preferredAttributes.reduce((score, signal) => {
+      const normalizedSignal = normalizeContextTerm(signal);
+      if (!normalizedSignal) return score;
+      const exactValue = exactFacetValues.some(
+        (value) => normalizeContextTerm(value) === normalizedSignal,
+      );
+      if (exactValue) return score + 1;
+      const compoundValue = exactFacetValues.some((value) =>
+        sourceContainsFacet(value, signal),
+      );
+      // Exact merchant/source facet values should outrank compound variants
+      // such as Black over Navy/Black, while compound values remain useful
+      // recall rather than being discarded.
+      return score + (compoundValue ? 0.35 : 0);
+    }, 0);
     const strictFacetMatch = strictAttributes.every(exactFacetMatch);
     const explicitTokens = new Set(explicitFilterValues.flatMap((value) =>
       normalizeContextTerm(value).replace(/đ/g, "d").split(" ").filter(Boolean),
@@ -2046,6 +2245,8 @@ export async function filterResultsByExplicitGender<
       complementaryReferenceMatch,
       complementaryPreferenceMatch,
       discoveryGroundingMatch,
+      directExpansionGrounding:
+        expansionGroundedDirectProductIds.has(result.productId),
       sourceDiscoveryGrounding:
         sourceGroundedDiscoveryProductIds.has(result.productId),
       expansionDiscoveryGrounding:
@@ -2174,6 +2375,12 @@ export async function filterResultsByExplicitGender<
       // becoming accidental hard filters.
       Math.min(0.10, item.semanticMustFacetMatch * 0.10) +
       Math.min(0.12, item.complementaryPreferenceMatch * 0.12) +
+      // For long DIRECT need-style queries, an LLM expansion may resolve the
+      // broad source family to a canonical leaf that actually exists in the
+      // catalog (for example bag + wear on back + travel -> travel backpack).
+      // The source still owns the broad identity; the grounded leaf is a strong
+      // rerank signal, not a hard filter.
+      (item.directExpansionGrounding ? 0.14 : 0) +
       // Catalog-grounded category/type evidence is a soft ranking signal for
       // discovery, never a closed-world filter from expansion prose.
       Math.min(0.16, item.discoveryGroundingMatch * 0.16) +
@@ -2201,6 +2408,10 @@ export async function filterResultsByExplicitGender<
       // reliably outrank nearby shades/styles within the same product family.
       _identityTier:
         directIdentityGrounded && item.identityMatch >= 0.75 ? 1 : 0,
+      _directExpansionTier:
+        currentRetrievalMode === "DIRECT" && item.directExpansionGrounding
+          ? 1
+          : 0,
       _preferredFacetMatches: item.preferredFacetMatches,
       _sourceDiscoveryTier:
         currentRetrievalMode === "DISCOVERY" && item.sourceDiscoveryGrounding
@@ -2220,6 +2431,7 @@ export async function filterResultsByExplicitGender<
   });
   filtered.sort((left, right) =>
     right._identityTier - left._identityTier ||
+    right._directExpansionTier - left._directExpansionTier ||
     (
       directIdentityGrounded
         ? right._preferredFacetMatches - left._preferredFacetMatches
@@ -2262,6 +2474,7 @@ export async function filterResultsByExplicitGender<
   });
   return filtered.map(({
     _identityTier: _identityTierIgnored,
+    _directExpansionTier: _directExpansionTierIgnored,
     _preferredFacetMatches: _preferredFacetMatchesIgnored,
     _sourceDiscoveryTier: _sourceDiscoveryTierIgnored,
     _semanticNeedCoverage: _semanticNeedCoverageIgnored,

@@ -1065,7 +1065,7 @@ export async function prepareParallelSearchRewrite(
       gptRewrite,
     });
 
-  const preparedRewrite =
+  const mergedRewrite =
     mergeCodeAndGpt({
       codeRewrite,
 
@@ -1074,6 +1074,21 @@ export async function prepareParallelSearchRewrite(
       novelTerms:
         novelSemanticTerms,
     });
+
+  // The code/context branch starts before the LLM so it cannot see semantic
+  // leaf classes discovered later by the LLM (for example: a source query
+  // saying "bag I can wear on my back" -> "travel backpack"). Re-run only the
+  // cheap shop-context mapping after a successful merge so those new terms can
+  // be grounded to real catalog products. The catalog context itself is cached;
+  // this does not add another LLM call.
+  const preparedRewrite =
+    novelSemanticTerms.length > 0
+      ? await applyShopContextToQuery({
+          shop: args.shop,
+          originalQuery: cleanQuery,
+          rewrite: mergedRewrite,
+        })
+      : mergedRewrite;
 
   console.log(
     "[AI Search][Parallel Enrichment] merged",

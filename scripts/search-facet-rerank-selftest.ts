@@ -38,6 +38,92 @@ async function run(query: string, negativeTerms: string[] = []) {
 const ordinary = await run("black cardigan");
 assert.equal(ordinary.length, 3, "ordinary color lost near-shade recall");
 assert.equal(ordinary[0].handle, "unbalanced-cardigan-black", "exact color should lead at equal vector score");
+
+const blackTshirtFixtures = await db.aiSearchIndexedProduct.findMany({
+  where: {
+    shop,
+    handle: { in: ["black-oversized-t-shirt", "melange-tunic-navy-black"] },
+  },
+  select: { productId: true, handle: true, title: true },
+});
+assert.equal(blackTshirtFixtures.length, 2, "black T-shirt fixtures unavailable");
+const blackTshirtBase = rewrite("black");
+const blackTshirtRanking = await filterResultsByExplicitGender({
+  shop,
+  originalQuery: "black t shirt",
+  rewrite: {
+    ...blackTshirtBase,
+    query: "black t shirt",
+    planning: {
+      ...blackTshirtBase.planning!,
+      route: "CODE_SEMANTIC",
+      retrievalMode: "DIRECT",
+      semanticQuery: "t shirt",
+      resolvedSegments: [
+        { field: "PRODUCT_TYPE", text: "t shirt", canonicalValue: "T-shirt", confidence: 1 },
+        { field: "ATTRIBUTE", text: "black", canonicalValue: "Black", confidence: 1 },
+      ],
+      unresolvedSegments: [],
+    },
+    analysis: {
+      ...blackTshirtBase.analysis,
+      retrievalMode: "DIRECT",
+      productType: "T-shirt",
+      productTypes: ["T-shirt"],
+      shopLanguageProductType: "T-shirt",
+      attributes: ["Black"],
+      optionalPreferences: ["Black"],
+    },
+  } as QueryRewriteResult,
+  results: blackTshirtFixtures.map((item) => ({
+    ...item,
+    score: item.handle === "melange-tunic-navy-black" ? 0.70 : 0.60,
+  })),
+});
+assert.equal(
+  blackTshirtRanking[0]?.handle,
+  "black-oversized-t-shirt",
+  "exact Black facet must outrank compound Navy/Black within the same T-shirt identity",
+);
+
+const vietnameseBlackTshirtRanking = await filterResultsByExplicitGender({
+  shop,
+  originalQuery: "T-shirt màu đen",
+  rewrite: {
+    ...blackTshirtBase,
+    query: "black t-shirt",
+    planning: {
+      ...blackTshirtBase.planning!,
+      route: "LIGHT_LLM",
+      retrievalMode: "DIRECT",
+      semanticQuery: "black t-shirt",
+      resolvedSegments: [
+        { field: "PRODUCT_TYPE", text: "T-shirt", canonicalValue: "T-shirt", confidence: 1 },
+      ],
+      unresolvedSegments: ["mau den"],
+    },
+    analysis: {
+      ...blackTshirtBase.analysis,
+      retrievalMode: "DIRECT",
+      productType: "",
+      productTypes: ["T-shirt"],
+      shopLanguageProductType: "",
+      attributes: [],
+      optionalPreferences: ["Shirt", "Black"],
+      semanticMustTerms: ["t-shirt", "black"],
+      semanticSourceMustTerms: ["t-shirt", "màu đen"],
+    },
+  } as QueryRewriteResult,
+  results: blackTshirtFixtures.map((item) => ({
+    ...item,
+    score: item.handle === "melange-tunic-navy-black" ? 0.70 : 0.60,
+  })),
+});
+assert.equal(
+  vietnameseBlackTshirtRanking[0]?.handle,
+  "black-oversized-t-shirt",
+  "translated source-owned color must rerank using the Vietnamese source phrase",
+);
 const strict = await run("only black cardigan");
 assert.deepEqual(strict.map((item) => item.handle), ["unbalanced-cardigan-black"]);
 const excluded = await run("cardigan not black", ["black"]);
@@ -283,6 +369,56 @@ assert.deepEqual(
   exactVersionedEntity,
   [],
   "versioned entity must not degrade to another version in the same family",
+);
+
+const fixedGearFixtures = await db.aiSearchIndexedProduct.findMany({
+  where: {
+    shop,
+    handle: { in: ["the-revo-juliet", "original-fixed-gear-frameset"] },
+  },
+  select: { productId: true, handle: true, title: true },
+});
+assert.equal(fixedGearFixtures.length, 2, "fixed-gear identity fixtures unavailable");
+const fixedGearIdentity = await filterResultsByExplicitGender({
+  shop,
+  originalQuery: "fixed gear bicycle",
+  rewrite: {
+    ...rewrite("", []),
+    query: "fixed gear bicycle",
+    planning: {
+      ...rewrite("", []).planning!,
+      route: "STRUCTURED_ONLY",
+      retrievalMode: "DIRECT",
+      semanticQuery: "fixed gear bicycle",
+      resolvedSegments: [
+        {
+          field: "PRODUCT_TYPE",
+          text: "fixed gear bicycle",
+          canonicalValue: "Fixed Gear Bicycle",
+          confidence: 1,
+        },
+      ],
+      unresolvedSegments: [],
+    },
+    analysis: {
+      ...rewrite("", []).analysis,
+      retrievalMode: "DIRECT",
+      productType: "Fixed Gear Bicycle",
+      productTypes: ["Fixed Gear Bicycle"],
+      shopLanguageProductType: "Fixed Gear Bicycle",
+      attributes: [],
+      optionalPreferences: [],
+    },
+  } as QueryRewriteResult,
+  results: fixedGearFixtures.map((item) => ({ ...item, score: 0.8 })),
+});
+assert.ok(
+  fixedGearIdentity.some((item) => item.handle === "the-revo-juliet"),
+  "direct bicycle identity must keep an actual bicycle",
+);
+assert.ok(
+  !fixedGearIdentity.some((item) => item.handle === "original-fixed-gear-frameset"),
+  "direct bicycle identity must not admit a bicycle frameset/component",
 );
 
 // Accent folding in source text must not invent a gender constraint: Vietnamese

@@ -54,6 +54,7 @@ export type QueryRewriteResult = {
     composeCodeMs: number;
     canonicalTypeCoverageComplete?: boolean;
     identityCandidateProductIds?: string[];
+    directExpansionGroundedProductIds?: string[];
     discoverySourceGroundedProductIds?: string[];
     discoveryExpansionGroundedProductIds?: string[];
   };
@@ -130,7 +131,7 @@ type FastQueryAnalysis = {
 };
 
 const QUERY_REWRITE_CACHE_VERSION =
-  "semantic-normalize-v35-separated-expansion-recall";
+  "semantic-normalize-v37-route-and-taxonomy";
 const rewrittenQueryCache = new Map<string, CacheEntry<QueryRewriteResult>>();
 const pendingRewrites = new Map<string, Promise<QueryRewriteResult>>();
 
@@ -685,6 +686,7 @@ async function performRewrite({ shop, cleanQuery, searchLanguage, model, timeout
     const instructions = [
       `Detect SHOPPER_QUERY language. Target language: ${searchLanguage}.`,
       `Return detectedLanguage plus semanticQuery and expansions. semanticQuery, expansions, mustTerms, mustNotTerms and referenceTerms MUST all be in target language ${searchLanguage}; translate when needed. sourceMustTerms is the only field allowed to stay in the shopper's original language.`,
+      "Choose retrievalMode by source-query relation, not by how broad the catalog term is. Use DIRECT whenever the shopper explicitly names the target product or product class they want (a broad class such as pants, eyewear, jackets or backpacks is still DIRECT). Use DISCOVERY only when the shopper states a need, activity, occasion, recipient, environment or desired outcome without naming the target product class. Use COMPLEMENT only when the shopper asks for a product to pair/use/wear with a referenced item.",
       "For relational shopping queries equivalent to 'what should I wear with X', 'Y to wear with X', 'pair with X', or Vietnamese 'mặc gì với X', use COMPLEMENT and put ONLY the referenced item X in referenceTerms. Never put the requested target Y in referenceTerms. referenceTerms is extraction/translation evidence; do not invent additional referenced products.",
       "In COMPLEMENT mode, mustTerms and sourceMustTerms belong to the requested TARGET product only. Never copy the reference item or reference-only qualifiers into mustTerms/sourceMustTerms. Example: for 'what goes well with a navy coat', coat/navy coat/navy describe the reference and must not become target requirements; referenceTerms should identify the coat while expansions describe plausible complementary products.",
       "Return mustTerms for semantic conditions whose absence makes a product unacceptable. Required use, season, environment, surface, compatibility, and capability phrases belong in mustTerms; preferences do not. Example: 'snowboard for summer training on artificial slope' requires snowboard, summer, and artificial slope.",
@@ -692,6 +694,7 @@ async function performRewrite({ shop, cleanQuery, searchLanguage, model, timeout
       "Return mustNotTerms ONLY when the shopper explicitly excludes something with wording like without/not/exclude/không/loại trừ. Never infer an exclusion from audience, recipient, occasion, gender, style, or preference.",
       "Keep semanticQuery short and faithful. If the shopper explicitly names a product identity, semanticQuery must preserve that identity. If retrievalMode is DISCOVERY and the shopper does NOT name an exact product identity, semanticQuery must be NEED-FIRST and CATEGORY-NEUTRAL: state the required use/context/attribute without choosing one product family as the answer. Put plausible purchasable product classes only in expansions. Generic 'wear all day' must not become footwear unless the source explicitly mentions feet/shoes/footwear; generic activity/occasion needs must not become apparel unless the source explicitly names wearing/clothing/fashion. Add up to 6 high-value retrieval expansions.",
       "If the shopper names an exact product identity, every expansion must preserve that identity and may only be a direct synonym/equivalent form.",
+      "When the shopper names a broad or ambiguous product class, preserve the source breadth during translation: do not narrow it to one subtype. Prefer a neutral canonical retail class for semanticQuery, and include a common retail taxonomy synonym or broader canonical class among expansions when that helps bridge vocabulary. Do not broaden exact brands, models, SKUs, identifiers, or clearly specific product classes.",
       "If the shopper gives a broad category or need without one exact product identity, expansions SHOULD be concrete purchasable product subtypes/classes that naturally satisfy it, not mere paraphrases. Example: when target language is English, Vietnamese 'quần áo mùa đông' should expand to 'winter coat', 'sweater', 'fleece sweatshirt', 'cardigan', 'puffer jacket', 'thermal wear'. Always write retrieval fields in the configured target language, never copy the shopper language into expansions unless it is also the target language.",
       "Preserve the shopper action/domain. Queries meaning wear/dress/mặc must stay in apparel/outfit products. Use gift/giftable intent ONLY when the source explicitly says gift, present, quà, tặng or an equivalent gift action. Recipient phrasing such as 'for someone who likes X' is NOT gift intent by itself; keep it as a preference/recipient need. Do not turn a wear or preference query into gift suggestions or vice versa.",
       "For DISCOVERY requests that name an activity, occasion, environment or recipient need but do NOT explicitly name wearing/clothing/fashion or a product class, keep the primary semanticQuery cross-category and need-first. Do not invent apparel/outfit as the primary family. Individual expansions may include apparel alongside equipment, accessories or other natural product classes when relevant.",
@@ -747,7 +750,7 @@ async function performRewrite({ shop, cleanQuery, searchLanguage, model, timeout
       additionalProperties: false,
     };
     llmStartedAt = Date.now();
-    const response = await generateGeminiQueryRewrite({
+    const rewriteRequest = {
       model,
       instructions,
       input: `SHOPPER_QUERY:\n${cleanQuery}`,
@@ -755,7 +758,32 @@ async function performRewrite({ shop, cleanQuery, searchLanguage, model, timeout
       maxOutputTokens: 256,
       timeoutMs,
       complexityRoute,
-    });
+    } as const;
+    let response: Awaited<ReturnType<typeof generateGeminiQueryRewrite>>;
+    try {
+      response = await generateGeminiQueryRewrite(rewriteRequest);
+    } catch (error) {
+      const transientTimeout =
+        error instanceof Error &&
+        (
+          error.name === "APIConnectionTimeoutError" ||
+          /timed?\s*out|timeout/i.test(error.message)
+        );
+      const shouldRetryCrossLanguage =
+        transientTimeout && /[^\x00-\x7F]/.test(cleanQuery);
+      if (!shouldRetryCrossLanguage) throw error;
+      const retryTimeoutMs = Math.min(2_500, Math.max(1_500, Math.floor(timeoutMs / 2)));
+      console.warn("[AI Search] Retrying cross-language rewrite after timeout", {
+        shop,
+        query: cleanQuery,
+        model,
+        retryTimeoutMs,
+      });
+      response = await generateGeminiQueryRewrite({
+        ...rewriteRequest,
+        timeoutMs: retryTimeoutMs,
+      });
+    }
 
     recordGeminiUsageSafe({
       shop,

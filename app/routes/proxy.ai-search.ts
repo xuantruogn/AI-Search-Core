@@ -2668,24 +2668,35 @@ let resultCacheStatus: "HIT" | "MISS" = "MISS";
           ),
         );
 
-        for (const result of structured) {
-          const current = merged.get(result.productId);
+        // Once semantic retrieval proves that the catalog lacks
+        // enough evidence for the unresolved/required meaning, the structured
+        // lane must not resurrect an exact-but-wrong broad fact (for example
+        // Drome for "drone", cycling Computer for "gaming computer", or Home
+        // for "home office"). The no-evidence guard is authoritative across
+        // semantic routes; STRUCTURED_ONLY queries never enter this branch.
+        const suppressStructuredRecall =
+          semanticDiagnostics?.noEvidenceGuardTriggered === true;
 
-          if (current) {
-            // Semantic similarity already captures the unresolved part of the
-            // query. Structured overlap only confirms recall here; adding it
-            // again would double-count generic identity terms such as
-            // "jacket" and bury the more relevant "waterproof jacket".
-            continue;
+        if (!suppressStructuredRecall) {
+          for (const result of structured) {
+            const current = merged.get(result.productId);
+
+            if (current) {
+              // Semantic similarity already captures the unresolved part of the
+              // query. Structured overlap only confirms recall here; adding it
+              // again would double-count generic identity terms such as
+              // "jacket" and bury the more relevant "waterproof jacket".
+              continue;
+            }
+
+            merged.set(result.productId, {
+              ...result,
+              score: Math.min(
+                result.score,
+                semanticFloor,
+              ),
+            });
           }
-
-          merged.set(result.productId, {
-            ...result,
-            score: Math.min(
-              result.score,
-              semanticFloor,
-            ),
-          });
         }
 
         rawSearchResults = [...merged.values()]

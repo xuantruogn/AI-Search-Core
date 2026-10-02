@@ -4,6 +4,7 @@ import type {
   ShouldRevalidateFunction,
 } from "react-router";
 import {
+  Link,
   NavLink,
   Outlet,
   redirect,
@@ -13,6 +14,7 @@ import {
 } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { AppProvider } from "@shopify/shopify-app-react-router/react";
+import "../styles/merchant-app.css";
 
 import { authenticate } from "../shopify.server";
 import {
@@ -95,106 +97,52 @@ export default function App() {
     { label: "Catalog", to: "/app/catalog-sync" },
     { label: "Usage", to: "/app/usage" },
     { label: "Search Analytics", to: "/app/search-analytics" },
-    { label: "Plans & Billing", to: "/app/billing" },
+    { label: "Billing", to: "/app/billing" },
     { label: "Settings", to: "/app/settings" },
-    { label: "Product Demo", to: "/demo", external: true },
+    { label: "Storefront Demo", to: "/demo", external: true },
   ];
 
   return (
     <AppProvider embedded apiKey={apiKey}>
-      {/* THANH TAB NAVIGATION CAO CẤP */}
-      <div
-        style={{
-          position: "relative",
-          background: "#ffffff",
-          borderBottom: "1px solid #e1e3e5",
-          padding: "0 24px",
-          marginBottom: 28, // Tăng khoảng cách tách biệt hoàn toàn với khối nội dung bên dưới
-          boxShadow: "0 1px 0 rgba(0, 0, 0, 0.05)",
-        }}
-      >
+      <div className="merchant-shell-nav">
         <div
+          className="merchant-shell-progress"
           aria-hidden="true"
           style={{
-            position: "absolute",
-            top: 0,
-            left: 0,
             width: isNavigating ? "72%" : "0%",
-            height: 2,
             opacity: isNavigating ? 1 : 0,
-            background: "linear-gradient(90deg, #008060, #00a47c)",
-            transition: isNavigating
-              ? "width 0.8s ease-out, opacity 0.1s"
-              : "width 0.15s, opacity 0.2s",
-            pointerEvents: "none",
           }}
         />
-        <nav
-          aria-label="AI Search navigation"
-          style={{
-            display: "flex",
-            gap: 12, // Tăng khoảng cách giãn cách giữa các nút Tab (từ 4px lên 12px)
-            overflowX: "auto",
-            fontFamily: "-apple-system, BlinkMacSystemFont, 'San Francisco', 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif",
-          }}
-        >
-          {navItems.map((item) => {
-            if (item.external) {
-              return (
-                <a
-                  key={item.to}
-                  href={item.to}
-                  target="_top"
-                  style={{
-                    padding: "12px 18px", // Tăng vùng bấm cho thoải mái
-                    fontSize: 13,
-                    fontWeight: 500,
-                    color: "#616161",
-                    textDecoration: "none",
-                    borderBottom: "3px solid transparent",
-                    borderRadius: "8px 8px 0 0",
-                    whiteSpace: "nowrap",
-                    display: "inline-flex",
-                    alignItems: "center",
-                    gap: 4,
-                    transition: "all 0.15s ease",
-                  }}
-                >
-                  {item.label} <span style={{ fontSize: 11, opacity: 0.7 }}>↗</span>
+        <div className="merchant-shell-nav__inner">
+          <Link className="merchant-shell-brand" to="/app" aria-label="AI-Buyense dashboard">
+            <span className="merchant-shell-brand__mark" aria-hidden="true">AI</span>
+            <span>AI-Buyense</span>
+          </Link>
+          <nav className="merchant-shell-tabs" aria-label="Merchant app navigation">
+            {navItems.map((item) =>
+              item.external ? (
+                <a className="merchant-shell-tab" key={item.to} href={item.to} target="_top">
+                  {item.label} <span aria-hidden="true">&#8599;</span>
                 </a>
-              );
-            }
-
-            return (
-              <NavLink
-                key={item.to}
-                to={item.to}
-                end={item.end}
-                prefetch="intent"
-                style={({ isActive }) => ({
-                  padding: "12px 18px", // Tăng đệm trong tab giúp tab to rõ nét hơn
-                  fontSize: 13,
-                  fontWeight: isActive ? 600 : 500,
-                  color: isActive ? "#008060" : "#616161", // Tab Active dùng màu xanh lá đậm chuẩn Polaris
-                  textDecoration: "none",
-                  borderBottom: isActive ? "3px solid #008060" : "3px solid transparent",
-                  backgroundColor: isActive ? "#f1f8f5" : "transparent", // Nền xanh nhạt mịn mắt khi được chọn
-                  borderRadius: "8px 8px 0 0",
-                  transition: "all 0.15s ease-in-out",
-                  whiteSpace: "nowrap",
-                  display: "inline-flex",
-                  alignItems: "center",
-                })}
-              >
-                {item.label}
-              </NavLink>
-            );
-          })}
-        </nav>
+              ) : (
+                <NavLink
+                  className={({ isActive }) =>
+                    `merchant-shell-tab${isActive ? " merchant-shell-tab--active" : ""}`
+                  }
+                  key={item.to}
+                  to={item.to}
+                  end={item.end}
+                  prefetch="intent"
+                >
+                  {item.label}
+                </NavLink>
+              ),
+            )}
+          </nav>
+        </div>
       </div>
 
-      {/* KHỐI NỘI DUNG BÊN DƯỚI DÃN CÁCH THOẢI MÁI */}
-      <div style={{ padding: "0 8px" }}>
+      <div className="merchant-shell-content">
         <Outlet />
       </div>
     </AppProvider>

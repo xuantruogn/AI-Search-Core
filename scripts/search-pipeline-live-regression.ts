@@ -86,10 +86,15 @@ for (const [group, query] of cases.filter(([, query]) =>
     const merged = new Map<string, (typeof structured)[number]>();
     for (const result of semantic) merged.set(result.productId, result);
     const floor = Math.max(0, Math.min(0.99, (semanticDiagnostics?.vectorThreshold ?? 0.35) - 0.001));
-    for (const result of structured) {
-      if (!merged.has(result.productId)) merged.set(result.productId, {
-        ...result, score: plan.route === "STRUCTURED_ONLY" ? result.score : Math.min(result.score, floor),
-      });
+    const suppressStructuredRecall =
+      plan.route !== "STRUCTURED_ONLY" &&
+      semanticDiagnostics?.noEvidenceGuardTriggered === true;
+    if (!suppressStructuredRecall) {
+      for (const result of structured) {
+        if (!merged.has(result.productId)) merged.set(result.productId, {
+          ...result, score: plan.route === "STRUCTURED_ONLY" ? result.score : Math.min(result.score, floor),
+        });
+      }
     }
     let filterDiagnostics: ExplicitGenderFilterDiagnostics | null = null;
     const final = await filterResultsByExplicitGender({
@@ -203,3 +208,4 @@ if (process.argv.includes("--compact")) {
   console.log(JSON.stringify({ failures, reports }, null, 2));
 }
 await db.$disconnect();
+if (failures.length > 0) process.exitCode = 2;

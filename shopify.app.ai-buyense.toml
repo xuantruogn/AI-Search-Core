@@ -1,12 +1,12 @@
-# Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
+# Production configuration linked to Shopify app "Buysence"
 
-client_id = "922fd6e00a765659ee8b56ac583cf542"
-name = "AI-Buyense"
+client_id = "45bd60344ab642cfca66bdad79917deb"
+name = "Buysence"
 application_url = "https://buysenseshopify.com"
 embedded = true
 
 [build]
-automatically_update_urls_on_dev = true
+automatically_update_urls_on_dev = false
 
 [webhooks]
 api_version = "2026-10"
@@ -16,8 +16,9 @@ topics = [ "app_subscriptions/update" ]
 uri = "/webhooks/app/subscriptions_update"
 
 [access_scopes]
-# Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
 scopes = "read_products,read_themes,read_locales,write_app_proxy"
+optional_scopes = [ ]
+use_legacy_install_flow = false
 
 [auth]
 redirect_urls = [ "https://buysenseshopify.com/auth/callback" ]

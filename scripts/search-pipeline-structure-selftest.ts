@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import {
   composeContextualEmbeddingInput,
+  discoveryContextProvesSemanticNeed,
   normalizeIdentitySignalTokens,
+  referenceIdentityContainmentMatch,
   readComplementReferenceOnlyFacetTokens,
   readComplementTargetFacetTokens,
   readDiscoveryLeafTypeHints,
@@ -9,8 +11,15 @@ import {
 } from "../app/services/search/shop-context-index.server";
 import type { QueryRewriteResult } from "../app/services/search/query-rewriter.server";
 import type { QueryPlan } from "../app/services/search/query-plan.server";
+import { shouldAnalyzeUnresolvedIdentityRemainder } from "../app/services/search/query-router.server";
+import {
+  shouldForceCrossLanguageRewrite,
+  sourceProductTypeOwnsTarget,
+} from "../app/services/search/query-planner.server";
 import {
   resolveCodeOwnedRetrievalMode,
+  semanticTermsCoverConstraint,
+  semanticTermsExplainedByIdentityOrFacets,
   shouldPromoteSourceNamedDirectTarget,
   stripComplementReferenceMustTerms,
   stripReferenceScopedFacetsFromEmbedding,
@@ -18,8 +27,12 @@ import {
 import {
   buildDiscoveryEmbeddingBranches,
   buildDirectEmbeddingPlan,
+  catalogEvidenceCoversSemanticMustTerms,
+  catalogEvidenceNeedMatches,
+  computeDiscoveryNoEvidenceThreshold,
   computeDiscoveryRecallThreshold,
   fuseSemanticVectorBranches,
+  singleTokenSourceIdentityEvidence,
 } from "../app/services/search/semantic-search.server";
 import { hasStructuredAnchor } from "../app/services/search/structured-candidate-retrieval.server";
 
@@ -207,6 +220,18 @@ assert.deepEqual(normalizeIdentitySignalTokens("Sneakers"), ["sneakers"]);
 assert.deepEqual(normalizeIdentitySignalTokens("women's black leather wallet"), [
   "black", "leather", "wallet",
 ]);
+assert.equal(
+  referenceIdentityContainmentMatch(["pleated skirt"], ["a black skirt"]),
+  0.95,
+);
+assert.equal(
+  referenceIdentityContainmentMatch(["trench coat"], ["navy coat"]),
+  0.95,
+);
+assert.equal(
+  referenceIdentityContainmentMatch(["cardigan"], ["navy coat"]),
+  0,
+);
 
 for (const referenceTerms of [[], ["skirt"], ["black skirt"], ["apparel"]]) {
   assert.deepEqual(
@@ -355,7 +380,7 @@ assert.equal(shouldPromoteSourceNamedDirectTarget({
   sourceMustTerms: ["kính mắt"],
   rawRoute: "FULL_LLM",
   groundedIdentityOrCategory: true,
-  llmRetrievalMode: "DIRECT",
+  llmRetrievalMode: "DISCOVERY",
 }), true);
 assert.equal(shouldPromoteSourceNamedDirectTarget({
   originalQuery: "I need something that keeps my feet comfortable all day",
@@ -368,9 +393,289 @@ assert.equal(shouldPromoteSourceNamedDirectTarget({
   originalQuery: "đồ gia dụng",
   sourceMustTerms: ["đồ gia dụng"],
   rawRoute: "FULL_LLM",
-  groundedIdentityOrCategory: true,
+  groundedIdentityOrCategory: false,
   llmRetrievalMode: "DISCOVERY",
 }), false);
+assert.equal(shouldPromoteSourceNamedDirectTarget({
+  originalQuery: "quần đen",
+  sourceMustTerms: ["đen", "quần"],
+  rawRoute: "FULL_LLM",
+  groundedIdentityOrCategory: true,
+  llmRetrievalMode: "DIRECT",
+}), true);
+assert.equal(shouldPromoteSourceNamedDirectTarget({
+  originalQuery: "áo khoác nữ màu navy",
+  sourceMustTerms: ["nữ", "màu navy", "áo khoác"],
+  rawRoute: "LIGHT_LLM",
+  groundedIdentityOrCategory: true,
+  llmRetrievalMode: "DIRECT",
+}), true);
+assert.equal(shouldPromoteSourceNamedDirectTarget({
+  originalQuery: "ví da đen nữ",
+  sourceMustTerms: ["ví", "đen", "da"],
+  rawRoute: "FULL_LLM",
+  groundedIdentityOrCategory: true,
+  llmRetrievalMode: "DISCOVERY",
+}), true);
+assert.equal(
+  semanticTermsCoverConstraint(
+    {
+      value: "waterproof jacket",
+      mode: "MUST",
+      confidence: 1,
+      source: "DICTIONARY",
+    },
+    ["waterproof", "jacket"],
+  ),
+  true,
+);
+assert.equal(
+  semanticTermsCoverConstraint(
+    {
+      value: "camping tent",
+      mode: "MUST",
+      confidence: 1,
+      source: "DICTIONARY",
+    },
+    ["camping"],
+  ),
+  false,
+);
+assert.equal(
+  semanticTermsExplainedByIdentityOrFacets(
+    {
+      value: "waterproof jacket",
+      mode: "MUST",
+      confidence: 1,
+      source: "DICTIONARY",
+    },
+    ["waterproof", "jacket"],
+    [],
+  ),
+  true,
+);
+assert.equal(
+  semanticTermsExplainedByIdentityOrFacets(
+    {
+      value: "wallet",
+      mode: "MUST",
+      confidence: 1,
+      source: "DICTIONARY",
+    },
+    ["wallet", "black", "leather"],
+    [
+      { value: "Black", mode: "SHOULD", confidence: 1, source: "DICTIONARY" },
+      { value: "Leather", mode: "SHOULD", confidence: 1, source: "DICTIONARY" },
+    ],
+  ),
+  true,
+);
+assert.equal(
+  semanticTermsExplainedByIdentityOrFacets(
+    {
+      value: "speaker",
+      mode: "MUST",
+      confidence: 1,
+      source: "DICTIONARY",
+    },
+    ["smart", "speaker"],
+    [],
+  ),
+  false,
+);
+assert.equal(
+  semanticTermsExplainedByIdentityOrFacets(
+    {
+      value: "computer",
+      mode: "MUST",
+      confidence: 1,
+      source: "DICTIONARY",
+    },
+    ["computer", "monitor"],
+    [],
+  ),
+  false,
+);
+assert.equal(
+  singleTokenSourceIdentityEvidence({
+    sourceQuery: "mug",
+    sourceMustTerms: ["mug"],
+    catalogTerms: [
+      { kind: "CANONICAL_PRODUCT_TYPE", value: "Double Wall Mug", score: 18.35 },
+      { kind: "ALIAS", value: "insulated mug", score: 30.35 },
+    ],
+  }),
+  true,
+);
+assert.equal(
+  singleTokenSourceIdentityEvidence({
+    sourceQuery: "smart speaker",
+    sourceMustTerms: ["smart", "speaker"],
+    catalogTerms: [
+      { kind: "CANONICAL_PRODUCT_TYPE", value: "Bluetooth speaker", score: 30 },
+    ],
+  }),
+  false,
+);
+assert.equal(
+  singleTokenSourceIdentityEvidence({
+    sourceQuery: "computer monitor",
+    sourceMustTerms: ["computer", "monitor"],
+    catalogTerms: [
+      { kind: "CANONICAL_PRODUCT_TYPE", value: "wireless cycling computer", score: 30 },
+    ],
+  }),
+  false,
+);
+assert.equal(shouldPromoteSourceNamedDirectTarget({
+  originalQuery: "điện thoại iPhone 15 Pro Max",
+  sourceMustTerms: ["iPhone 15 Pro Max"],
+  rawRoute: "LIGHT_LLM",
+  groundedIdentityOrCategory: true,
+  llmRetrievalMode: "DIRECT",
+}), false);
+
+assert.deepEqual(normalizeIdentitySignalTokens("T-shirt"), ["t", "shirt"]);
+assert.deepEqual(normalizeIdentitySignalTokens("shirt"), ["shirt"]);
+assert.deepEqual(normalizeIdentitySignalTokens("V-neck T-shirt"), ["v", "neck", "t", "shirt"]);
+
+assert.equal(
+  discoveryContextProvesSemanticNeed(["mechanical", "repair"], ["mechanical keyboard"]),
+  false,
+);
+assert.equal(
+  discoveryContextProvesSemanticNeed(["camping"], ["camping"]),
+  true,
+);
+assert.equal(
+  discoveryContextProvesSemanticNeed(["warm", "weather"], ["warm weather"]),
+  true,
+);
+assert.equal(
+  discoveryContextProvesSemanticNeed(["indoor", "ambience"], ["indoor", "cat", "toilet tray"]),
+  false,
+);
+assert.equal(
+  discoveryContextProvesSemanticNeed(["home", "use"], ["espresso", "home"]),
+  false,
+);
+assert.equal(
+  discoveryContextProvesSemanticNeed(["orange", "wheels"], ["wheels", "baby"]),
+  false,
+);
+assert.equal(
+  discoveryContextProvesSemanticNeed(["rainy", "day", "outerwear"], ["rainy day"]),
+  true,
+);
+
+assert.equal(catalogEvidenceNeedMatches("mechanical keyboard", "mechanic"), false);
+assert.equal(catalogEvidenceNeedMatches("mechanical keyboard", "mechanical"), false);
+assert.equal(catalogEvidenceNeedMatches("eyewear", "Eyewear"), true);
+assert.equal(catalogEvidenceNeedMatches("portable phone charger", "phone charger"), true);
+assert.equal(
+  catalogEvidenceCoversSemanticMustTerms(
+    ["waterproof", "jacket"],
+    ["waterproof jacket"],
+  ),
+  true,
+);
+assert.equal(
+  catalogEvidenceCoversSemanticMustTerms(
+    ["powerful", "portable", "gaming"],
+    ["Computer", "Portable"],
+  ),
+  false,
+);
+
+assert.equal(computeDiscoveryNoEvidenceThreshold({
+  retrievalMode: "DIRECT",
+  baseThreshold: 0.5,
+  hasStrongCatalogEvidence: false,
+  expansionGroundedCount: 0,
+}), 0.60);
+assert.equal(computeDiscoveryNoEvidenceThreshold({
+  retrievalMode: "DISCOVERY",
+  baseThreshold: 0.5,
+  hasStrongCatalogEvidence: false,
+  expansionGroundedCount: 0,
+}), 0.55);
+assert.equal(shouldForceCrossLanguageRewrite({
+  query: "T-shirt màu đen",
+  route: "VECTOR_SEMANTIC",
+  unresolvedSegments: ["mau den"],
+}), true);
+assert.equal(
+  shouldAnalyzeUnresolvedIdentityRemainder(["smart"]),
+  true,
+);
+assert.equal(
+  shouldAnalyzeUnresolvedIdentityRemainder(["monitor"]),
+  true,
+);
+assert.equal(
+  shouldAnalyzeUnresolvedIdentityRemainder(["only"]),
+  false,
+);
+assert.equal(shouldForceCrossLanguageRewrite({
+  query: "black t shirt",
+  route: "VECTOR_SEMANTIC",
+  unresolvedSegments: ["black"],
+}), false);
+assert.equal(shouldForceCrossLanguageRewrite({
+  query: "áo khoác",
+  route: "FULL_LLM",
+  unresolvedSegments: ["ao khoac"],
+}), false);
+
+assert.equal(sourceProductTypeOwnsTarget({
+  query: "I need to print invoices and shipping labels from my home office",
+  start: 10,
+  end: 11,
+}), false);
+assert.equal(sourceProductTypeOwnsTarget({
+  query: "I need a camera for clearer video calls on my computer",
+  start: 10,
+  end: 11,
+}), false);
+assert.equal(sourceProductTypeOwnsTarget({
+  query: "I want to make cafe style espresso at home",
+  start: 8,
+  end: 9,
+}), false);
+assert.equal(sourceProductTypeOwnsTarget({
+  query: "I need to boil water quickly for tea without using a stove",
+  start: 7,
+  end: 8,
+}), false);
+assert.equal(sourceProductTypeOwnsTarget({
+  query: "I need a powerful portable computer for modern PC games",
+  start: 5,
+  end: 6,
+}), true);
+assert.equal(sourceProductTypeOwnsTarget({
+  query: "I need a waterproof jacket for hiking in winter",
+  start: 4,
+  end: 5,
+}), true);
+
+assert.equal(computeDiscoveryNoEvidenceThreshold({
+  retrievalMode: "DISCOVERY",
+  baseThreshold: 0.5,
+  hasStrongCatalogEvidence: false,
+  expansionGroundedCount: 4,
+}), 0.46);
+assert.equal(computeDiscoveryNoEvidenceThreshold({
+  retrievalMode: "DISCOVERY",
+  baseThreshold: 0.5,
+  hasStrongCatalogEvidence: false,
+  expansionGroundedCount: 8,
+}), 0.45);
+assert.equal(computeDiscoveryNoEvidenceThreshold({
+  retrievalMode: "DIRECT",
+  baseThreshold: 0.5,
+  hasStrongCatalogEvidence: false,
+  expansionGroundedCount: 12,
+}), 0.60);
 
 const complementRawPlan = {
   retrievalMode: "COMPLEMENT",

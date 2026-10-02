@@ -37,7 +37,7 @@ const MIN_TTL_MS = 60 * 1000;
 const DEFAULT_QUERY_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const MAX_RECEIPT_TTL_MS = 24 * 60 * 60 * 1000;
 const FULL_SEARCH_CACHE_PIPELINE_VERSION =
-  "full-search-cache-v46-evidence-provenance-2026-10-01";
+  "full-search-cache-v47-grounded-leaf-recall-2026-10-02";
 
 export type CachedSearchSortIntent =
   | "RELEVANCE"

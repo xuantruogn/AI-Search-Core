@@ -43,6 +43,64 @@ function isComplementaryRelationQuery(normalizedQuery: string) {
   return complementaryRelationSpan(normalizedQuery) !== null;
 }
 
+export function shouldForceCrossLanguageRewrite(args: {
+  query: string;
+  route: QueryPlan["route"];
+  unresolvedSegments: string[];
+}) {
+  return (
+    args.route === "VECTOR_SEMANTIC" &&
+    args.unresolvedSegments.length > 0 &&
+    /[^\x00-\x7F]/.test(args.query)
+  );
+}
+
+export function sourceProductTypeOwnsTarget(args: {
+  query: string;
+  start: number;
+  end: number;
+}) {
+  const tokens = normalizeQueryText(args.query).split(" ").filter(Boolean);
+  if (tokens.length === 0) return false;
+
+  // Short catalog-style queries are overwhelmingly direct noun phrases:
+  // "black cardigan", "women navy jacket", "electric kettle", etc.
+  if (tokens.length <= 6) return true;
+  if (args.start <= 0) return true;
+
+  const before = tokens.slice(0, args.start);
+  const tail = before.slice(-6).join(" ");
+
+  // A product class explicitly owned by a request noun phrase remains the
+  // target even inside a longer sentence: "I need a portable computer ...",
+  // "looking for a waterproof jacket ...", "tôi cần một chiếc balo ...".
+  if (
+    /(?:^| )(?:need|want|find|buy|get|looking for|show me|can|muon|tim|mua)(?: (?:a|an|some|the|my|your|mot|chiec|cai))?(?: [a-z0-9]+){0,4}$/.test(
+      tail,
+    )
+  ) {
+    return true;
+  }
+
+  // If the identity appears before the first relation/context boundary, it is
+  // still the requested product: "jacket for rain", "bag for commuting".
+  const contextualBoundaries = new Set([
+    "for", "with", "on", "at", "from", "using", "without", "while",
+    "when", "during", "about", "around", "because", "to",
+  ]);
+  const firstBoundary = tokens.findIndex((token) =>
+    contextualBoundaries.has(token),
+  );
+  if (firstBoundary < 0 || args.start < firstBoundary) return true;
+
+  // In a long need/action sentence, a catalog word appearing only inside the
+  // context is not automatically the target product. Examples:
+  // "print labels from my home office" (Home), "video calls on my computer"
+  // (Computer), "boil water for tea" (Tea). Leave it unresolved for the
+  // semantic pass instead of creating a false DIRECT identity.
+  return false;
+}
+
 function buildSemanticQuery(query: string, deterministic: ReturnType<typeof parseDeterministicQuery>) {
   let value = normalizeUnicodeQueryText(query);
   value = value
@@ -76,6 +134,17 @@ async function buildUncachedPlan(shop: string, query: string): Promise<QueryPlan
         deterministic.price &&
         match.entry.field === "MEASUREMENT" &&
         /^\d+(?:[.,]\d+)?$/.test(match.text.trim())
+      ) {
+        return false;
+      }
+
+      if (
+        match.entry.field === "PRODUCT_TYPE" &&
+        !sourceProductTypeOwnsTarget({
+          query,
+          start: match.start,
+          end: match.end,
+        })
       ) {
         return false;
       }
@@ -127,7 +196,35 @@ async function buildUncachedPlan(shop: string, query: string): Promise<QueryPlan
       strongestBySpan.set(key, match);
     }
   }
-  const matches = [...strongestBySpan.values()];
+  const spanWinners = [...strongestBySpan.values()];
+  const productTypeSpans = spanWinners.filter(
+    (match) => match.entry.field === "PRODUCT_TYPE",
+  );
+  const matches = spanWinners.filter((match) => {
+    if (match.entry.field !== "ATTRIBUTE") return true;
+    // Dictionary aggregation can expose identity words again as attributes.
+    // Drop identity-internal head nouns such as "shirt" inside "t shirt" and
+    // compound identity fragments such as "fixed gear" inside
+    // "fixed gear bicycle". A single leading modifier is different: when the
+    // catalog independently knows "leather" / "waterproof" as an ATTRIBUTE,
+    // keep it as a soft shopper facet so an exact leaf type does not bypass
+    // semantic recall/reranking merely because one enriched product happened
+    // to use the whole phrase as its canonical type.
+    const containingIdentity = productTypeSpans.find(
+      (identity) =>
+        match.start >= identity.start &&
+        match.end <= identity.end,
+    );
+    if (!containingIdentity) return true;
+    const attributeTokens = normalizeQueryText(match.text)
+      .split(" ")
+      .filter(Boolean);
+    return (
+      attributeTokens.length === 1 &&
+      match.start === containingIdentity.start &&
+      match.end < containingIdentity.end
+    );
+  });
   const covered = new Set(
     matches.flatMap((match) => normalizeQueryText(match.text).split(" ")),
   );
@@ -151,13 +248,29 @@ async function buildUncachedPlan(shop: string, query: string): Promise<QueryPlan
     );
   const unresolvedSegments = unresolvedTokens.length ? [unresolvedTokens.join(" ")] : [];
   const routedBase = routeQuery({ deterministic, matches, unresolvedSegments });
-  const routed = complementaryRelation
+  // If a catalog identity is resolved but the remaining source text is
+  // non-ASCII, vector-only handling can preserve the product noun while
+  // silently losing a foreign-language modifier (for example "T-shirt màu
+  // đen" in an English catalog). Route that unresolved remainder through the
+  // lightweight translator/analyzer instead of embedding untranslated prose.
+  const languageAwareRouted = shouldForceCrossLanguageRewrite({
+    query,
+    route: routedBase.route,
+    unresolvedSegments,
+  })
     ? {
         ...routedBase,
-        route: "FULL_LLM" as const,
-        reasons: [...new Set([...routedBase.reasons, "COMPLEMENTARY_RELATION"])],
+        route: "LIGHT_LLM" as const,
+        reasons: [...new Set([...routedBase.reasons, "CROSS_LANGUAGE_SEMANTIC_REMAINDER"])],
       }
     : routedBase;
+  const routed = complementaryRelation
+    ? {
+        ...languageAwareRouted,
+        route: "FULL_LLM" as const,
+        reasons: [...new Set([...languageAwareRouted.reasons, "COMPLEMENTARY_RELATION"])],
+      }
+    : languageAwareRouted;
   const modeFor = (text: string): QueryConstraint["mode"] => {
     const normalized = normalizeQueryText(text);
     if (
