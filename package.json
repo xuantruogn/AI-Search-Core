@@ -37,8 +37,6 @@
     "sim:s15-18": "npm run test:billing-simulation:s15-s18",
     "test:billing-simulation:s19-s23": "tsx --env-file=.env scripts/billing-simulation-s19-s23.ts",
     "sim:s19-23": "npm run test:billing-simulation:s19-s23",
-    "test:billing-simulation:s24-s27": "tsx --env-file=.env scripts/billing-simulation-s24-s27.ts",
-    "sim:s24-27": "npm run test:billing-simulation:s24-s27",
     "test:billing-simulation:s28-s30": "tsx --env-file=.env scripts/billing-simulation-s28-s30.ts",
     "sim:s28-30": "npm run test:billing-simulation:s28-s30"
   },
