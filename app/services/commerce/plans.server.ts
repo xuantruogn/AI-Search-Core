@@ -126,39 +126,3 @@ export function planFromHandle(
 
   return AI_SEARCH_PLAN.none;
 }
-
-export function hasExplicitDevPlanOverride() {
-  return Boolean(process.env.AI_SEARCH_DEV_PLAN?.trim());
-}
-
-
-export function getDevPlanOverride(): AiSearchPlan | null {
-
-  if (process.env.AI_SEARCH_BILLING_DEBUG === "true") {
-    console.log(
-      "[BILLING DEBUG] AI_SEARCH_DEV_PLAN =",
-      process.env.AI_SEARCH_DEV_PLAN,
-      "NODE_ENV =",
-      process.env.NODE_ENV,
-    );
-  }
-
-  const value = process.env.AI_SEARCH_DEV_PLAN?.trim();
-  const allowInProduction =
-    process.env.AI_SEARCH_ALLOW_PLAN_OVERRIDE === "true";
-
-  if (process.env.NODE_ENV === "production" && !allowInProduction) {
-    return null;
-  }
-
-  // DEV_OVERRIDE is an explicit test mode only. Local development must use
-  // real Shopify Billing unless AI_SEARCH_DEV_PLAN is deliberately set.
-  // Implicitly defaulting every non-production shop to Basic makes local DB
-  // state report ACTIVE/PAID even when Shopify has no subscription, which also
-  // prevents billing reconciliation from exercising the real provider flow.
-  if (!value) {
-    return null;
-  }
-
-  return normalizePlan(value);
-}

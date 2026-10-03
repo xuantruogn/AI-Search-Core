@@ -1,10 +1,6 @@
 import db from "../../db.server";
 import { deleteShopLeaseLocks } from "./lease-lock.server";
-import {
-  AI_SEARCH_PLAN,
-  getDevPlanOverride,
-  hasExplicitDevPlanOverride,
-} from "./plans.server";
+import { AI_SEARCH_PLAN } from "./plans.server";
 import type {
   ShopSettingsSnapshot,
   SubscriptionSnapshot,
@@ -254,57 +250,7 @@ export async function ensureShopRecord({
     `;
   }
 
-  const devPlan = getDevPlanOverride();
 
-  if (devPlan) {
-    const explicitOverride = hasExplicitDevPlanOverride();
-    const devStatus = devPlan === AI_SEARCH_PLAN.none ? "INACTIVE" : "ACTIVE";
-
-    if (explicitOverride) {
-      await db.$executeRaw`
-        UPDATE \`AiSearchSubscription\`
-        SET
-          \`plan\` = ${devPlan},
-          \`status\` = ${devStatus},
-          \`source\` = 'DEV_OVERRIDE',
-          \`lastSyncedAt\` = UTC_TIMESTAMP(3),
-          \`updatedAt\` = UTC_TIMESTAMP(3)
-        WHERE
-          \`shop\` = ${cleanShop}
-          AND (
-            \`plan\` <> ${devPlan}
-            OR \`status\` <> ${devStatus}
-            OR \`source\` <> 'DEV_OVERRIDE'
-          )
-          AND EXISTS (
-            SELECT 1 FROM \`AiSearchShop\`
-            WHERE \`shop\` = ${cleanShop} AND \`status\` = 'ACTIVE'
-          )
-      `;
-    } else {
-      await db.$executeRaw`
-        UPDATE \`AiSearchSubscription\`
-        SET
-          \`plan\` = ${devPlan},
-          \`status\` = ${devStatus},
-          \`source\` = 'DEV_OVERRIDE',
-          \`lastSyncedAt\` = UTC_TIMESTAMP(3),
-          \`updatedAt\` = UTC_TIMESTAMP(3)
-        WHERE
-          \`shop\` = ${cleanShop}
-          AND \`source\` IN ('LOCAL', 'DEV_OVERRIDE')
-          AND (
-            \`plan\` <> ${devPlan}
-            OR \`status\` <> ${devStatus}
-            OR \`source\` <> 'DEV_OVERRIDE'
-          )
-          AND EXISTS (
-            SELECT 1 FROM \`AiSearchShop\`
-            WHERE \`shop\` = ${cleanShop} AND \`status\` = 'ACTIVE'
-          )
-      `;
-    }
-  }
 }
 
 export async function ensureShopFromAdmin({
@@ -443,85 +389,6 @@ export async function updateShopSettings({
         : { searchLanguage }),
     },
   });
-}
-
-export async function markShopUninstalled(shop: string) {
-  // Never bootstrap a missing tenant during uninstall. A delayed/retried
-  // webhook after shop/redact must not recreate data that was already erased.
-  const activeBillingSubscriptions = await db.billingSubscription.findMany({
-    where: {
-      shop,
-      status: { in: ["ACTIVE", "PENDING", "FROZEN"] },
-    },
-    select: {
-      id: true,
-      shopifySubscriptionGid: true,
-    },
-  });
-
-  await db.$transaction([
-    db.$executeRaw`
-      UPDATE \`AiSearchShop\`
-      SET
-        \`status\` = 'UNINSTALLED',
-        \`uninstalledAt\` = UTC_TIMESTAMP(3),
-        \`currentPlanHandle\` = NULL,
-        \`currentSubscriptionGid\` = NULL,
-        \`pendingPlanHandle\` = NULL,
-        \`pendingSubscriptionGid\` = NULL,
-        \`pendingChangeAt\` = NULL,
-        \`updatedAt\` = UTC_TIMESTAMP(3)
-      WHERE \`shop\` = ${shop}
-    `,
-    db.$executeRaw`
-      UPDATE \`AiSearchSubscription\`
-      SET
-        \`status\` = 'INACTIVE',
-        \`updatedAt\` = UTC_TIMESTAMP(3)
-      WHERE \`shop\` = ${shop}
-    `,
-    db.billingSubscription.updateMany({
-      where: {
-        shop,
-        status: { in: ["ACTIVE", "PENDING", "FROZEN"] },
-      },
-      data: {
-        status: "CANCELLED",
-        cancelledAt: new Date(),
-        cancellationStatus: "EFFECTIVE",
-        accessStatus: "NONE",
-        reconciliationStatus: "SYNCED",
-      },
-    }),
-    db.$executeRaw`
-      UPDATE \`AiSearchSyncJob\`
-      SET
-        \`status\` = 'CANCELLED',
-        \`lastError\` = 'SHOP_UNINSTALLED',
-        \`processedAt\` = UTC_TIMESTAMP(3),
-        \`updatedAt\` = UTC_TIMESTAMP(3)
-      WHERE \`shop\` = ${shop} AND \`status\` IN ('PENDING', 'PROCESSING', 'FAILED')
-    `,
-    db.$executeRaw`
-      UPDATE \`AiSearchCatalogSyncJob\`
-      SET
-        \`status\` = 'CANCELLED',
-        \`lastError\` = 'SHOP_UNINSTALLED',
-        \`processedAt\` = UTC_TIMESTAMP(3),
-        \`updatedAt\` = UTC_TIMESTAMP(3)
-      WHERE \`shop\` = ${shop} AND \`status\` IN ('PENDING', 'PROCESSING', 'FAILED')
-    `,
-  ]);
-
-  for (const subscription of activeBillingSubscriptions) {
-    await recordBillingEvent({
-      shop,
-      subscriptionGid: subscription.shopifySubscriptionGid,
-      type: "APP_UNINSTALLED",
-      source: "WEBHOOK",
-      idempotencyKey: `app-uninstalled:${shop}:${subscription.shopifySubscriptionGid ?? subscription.id}`,
-    });
-  }
 }
 
 export async function deleteShopCommercialData(shop: string) {

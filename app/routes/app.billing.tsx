@@ -41,6 +41,16 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   const entitlement = await getShopEntitlement(session.shop);
   const subscription = await getSubscriptionSnapshot(session.shop, { ensure: false });
+
+  const hasEverApprovedSubscription = Boolean(
+    await db.billingEvent.findFirst({
+      where: {
+        shop: session.shop,
+        type: "SUBSCRIPTION_APPROVED",
+      },
+      select: { id: true },
+    }),
+  );
   const billingPlans = await db.plan.findMany({
     where: {
       isActive: true,
@@ -103,7 +113,13 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         price: Number(plan.price),
         currencyCode: plan.currencyCode,
         interval: plan.interval,
-        trialDays: plan.trialDays,
+        trialDays:
+          plan.handle.toLowerCase() === "basic" &&
+          (hasEverApprovedSubscription === false ||
+            (subscription.plan === "BASIC" &&
+              subscription.trialStatus === "ACTIVE"))
+            ? plan.trialDays
+            : 0,
         description: presentation.description,
         highlights: presentation.highlights,
         capabilityLabels: presentation.capabilityLabels,
@@ -142,11 +158,21 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
 export const action = async ({ request }: ActionFunctionArgs) => {
   const debugId = crypto.randomUUID().slice(0, 8);
-  console.log("[BILLING DEBUG] action:start", { debugId, method: request.method, url: request.url });
+  console.log("[BILLING DEBUG] action:start", {
+    debugId,
+    method: request.method,
+    url: request.url,
+  });
+
   const { admin, session } = await authenticate.admin(request);
   const form = await request.formData();
   const intent = String(form.get("intent") || "");
-  console.log("[BILLING DEBUG] action:authenticated", { debugId, shop: session.shop, intent });
+
+  console.log("[BILLING DEBUG] action:authenticated", {
+    debugId,
+    shop: session.shop,
+    intent,
+  });
 
   if (intent === "refresh") {
     try {
@@ -176,15 +202,15 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
   if (intent === "cancelRenewal") {
     try {
-      console.log("[BILLING DEBUG] cancel:start", { debugId, shop: session.shop });
-      const snapshot = await getSubscriptionSnapshot(session.shop, { ensure: false });
-      console.log("[BILLING DEBUG] cancel:snapshot", {
-        debugId, shop: session.shop, plan: snapshot.plan, planHandle: snapshot.planHandle,
-        status: snapshot.status, cancellationStatus: snapshot.cancellationStatus,
-        accessStatus: snapshot.accessStatus, commercialStatus: snapshot.commercialStatus,
-        subscriptionGid: snapshot.shopifySubscriptionId,
-        billingPeriodEnd: snapshot.billingPeriodEnd?.toISOString() ?? null,
+      console.log("[BILLING DEBUG] cancel:start", {
+        debugId,
+        shop: session.shop,
       });
+
+      const snapshot = await getSubscriptionSnapshot(session.shop, {
+        ensure: false,
+      });
+
       const subscriptionGid = snapshot.shopifySubscriptionId;
 
       if (!subscriptionGid) {
@@ -197,7 +223,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       if (snapshot.cancellationStatus === "NON_RENEWING") {
         return {
           success: true,
-          message: "This subscription is already set not to renew for the next cycle.",
+          message:
+            "This subscription is already set not to renew for the next cycle.",
         };
       }
 
@@ -208,9 +235,6 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         };
       }
 
-      // Shopify Admin Billing API: prorate=false stops the next billing cycle
-      // while preserving the merchant's already-paid current period.
-      console.log("[BILLING DEBUG] cancel:shopify:start", { debugId, shop: session.shop, subscriptionGid });
       const response = await admin.graphql(
         `#graphql
         mutation CancelAppSubscription($id: ID!, $prorate: Boolean) {
@@ -254,16 +278,13 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
         return {
           success: false,
-          message: message || "Shopify could not stop the next subscription renewal.",
+          message:
+            message ||
+            "Shopify could not stop the next subscription renewal.",
         };
       }
 
       const cancelled = payload.data?.appSubscriptionCancel?.appSubscription;
-      console.log("[BILLING DEBUG] cancel:shopify:response", {
-        debugId, shop: session.shop, subscriptionGid,
-        cancelledId: cancelled?.id ?? null, cancelledStatus: cancelled?.status ?? null,
-        graphqlErrors: graphQLErrors.length, userErrors: userErrors.length,
-      });
 
       if (!cancelled?.id) {
         return {
@@ -272,9 +293,6 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         };
       }
 
-      console.log("[BILLING DEBUG] cancel:reconcile:start", {
-        debugId, shop: session.shop, expectedSubscriptionGid: cancelled.id,
-      });
       const reconciliation = await reconcileShopifySubscriptionFromAdmin({
         shop: session.shop,
         admin,
@@ -284,9 +302,12 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         source: "API",
         observedShopifyStatus: "CANCELLED",
       });
+
       console.log("[BILLING DEBUG] cancel:reconcile:done", {
-        debugId, shop: session.shop,
-        plan: reconciliation.subscription.plan, status: reconciliation.subscription.status,
+        debugId,
+        shop: session.shop,
+        plan: reconciliation.subscription.plan,
+        status: reconciliation.subscription.status,
         cancellationStatus: reconciliation.subscription.cancellationStatus,
         accessStatus: reconciliation.subscription.accessStatus,
         commercialStatus: reconciliation.subscription.commercialStatus,
@@ -307,10 +328,14 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   }
 
   if (intent === "subscribe") {
-    const planHandle = String(form.get("planHandle") || "").trim().toLowerCase();
+    const planHandle = String(form.get("planHandle") || "")
+      .trim()
+      .toLowerCase();
 
-    const requestedReplacementBehavior =
-      String(form.get("replacementBehavior") || "APPLY_IMMEDIATELY");
+    const requestedReplacementBehavior = String(
+      form.get("replacementBehavior") || "APPLY_IMMEDIATELY",
+    );
+
     const replacementBehavior =
       requestedReplacementBehavior === "APPLY_ON_NEXT_BILLING_CYCLE"
         ? "APPLY_ON_NEXT_BILLING_CYCLE"
@@ -350,33 +375,30 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       };
     }
 
-    // Trial is a shop-level first-subscription benefit, not a per-plan-change
-    // benefit. Once this shop has ever had a Billing V2 subscription, every
-    // later replacement/change must be created without trialDays.
-    //
-    // AiSearchSubscription is bootstrapped for every shop even when there has
-    // never been a paid/trial subscription, so its mere existence is not
-    // sufficient to determine trial eligibility. A real BillingSubscription
-    // row is the authoritative local marker that billing history has started.
-    const hasBillingHistory = Boolean(
-      await db.billingSubscription.findFirst({
-        where: { shop: session.shop },
+    const hasEverApprovedSubscription = Boolean(
+      await db.billingEvent.findFirst({
+        where: {
+          shop: session.shop,
+          type: "SUBSCRIPTION_APPROVED",
+        },
         select: { id: true },
       }),
     );
 
-    const configuredTrialDays =
-      customTerms?.trialDays ?? billingPlan.trialDays ?? 0;
-    const trialDays = hasBillingHistory
-      ? 0
-      : Math.max(0, configuredTrialDays);
-    const isProduction = process.env.NODE_ENV === "production";
-    const finalPrice =
-      customTerms?.price ?? Number(billingPlan.price);
-    const billingInterval =
-      customTerms?.interval ?? billingPlan.interval;
-    const currencyCode =
-      customTerms?.currencyCode ?? billingPlan.currencyCode;
+    const isBasicPlan = billingPlan.handle.toLowerCase() === "basic";
+    const trialDays =
+      isBasicPlan && !hasEverApprovedSubscription
+        ? Math.max(0, billingPlan.trialDays ?? 0)
+        : 0;
+
+    const billingTestMode =
+      String(process.env.BILLING_TEST_MODE ?? "")
+        .trim()
+        .toLowerCase() === "true";
+
+    const finalPrice = customTerms?.price ?? Number(billingPlan.price);
+    const billingInterval = customTerms?.interval ?? billingPlan.interval;
+    const currencyCode = customTerms?.currencyCode ?? billingPlan.currencyCode;
     const planName = `AI Search ${customTerms?.name ?? billingPlan.name} Plan`;
 
     try {
@@ -390,16 +412,20 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       }
 
       const returnUrl = new URL(
-        `https://admin.shopify.com/store/${encodeURIComponent(shopHandle)}/apps/${encodeURIComponent(appIdentifier)}/app/billing`,
+        `https://admin.shopify.com/store/${encodeURIComponent(
+          shopHandle,
+        )}/apps/${encodeURIComponent(
+          appIdentifier,
+        )}/app/billing`,
       );
       returnUrl.searchParams.set("billing_callback", "1");
 
       const response = await admin.graphql(
         `#graphql
         mutation createPaymentLink(
-          $name: String!, 
-          $price: Decimal!, 
-          $returnUrl: URL!, 
+          $name: String!,
+          $price: Decimal!,
+          $returnUrl: URL!,
           $test: Boolean,
           $trialDays: Int,
           $interval: AppPricingInterval!,
@@ -423,7 +449,6 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           ) {
             userErrors { field message }
             confirmationUrl
-
             appSubscription {
               id
               status
@@ -436,31 +461,55 @@ export const action = async ({ request }: ActionFunctionArgs) => {
             name: planName,
             price: finalPrice.toFixed(2),
             returnUrl: returnUrl.toString(),
-            test: !isProduction,
+            test: billingTestMode,
             trialDays: trialDays > 0 ? trialDays : null,
             interval: billingInterval,
             currencyCode,
             replacementBehavior,
           },
-        }
+        },
       );
 
-      const responseJson = await response.json();
+      const responseJson = (await response.json()) as {
+        data?: {
+          appSubscriptionCreate?: {
+            userErrors?: Array<{ field?: string[]; message?: string }>;
+            confirmationUrl?: string | null;
+            appSubscription?: {
+              id?: string;
+              status?: string;
+              createdAt?: string;
+            } | null;
+          };
+        };
+        errors?: Array<{ message?: string }>;
+      };
+
       const subscriptionData = responseJson.data?.appSubscriptionCreate;
 
-      if (subscriptionData?.userErrors && subscriptionData.userErrors.length > 0) {
-        const errorMsg = subscriptionData.userErrors.map((e: any) => e.message).join(", ");
+      if (subscriptionData?.userErrors?.length) {
+        const errorMsg = subscriptionData.userErrors
+          .map((error) => error.message)
+          .filter(Boolean)
+          .join(", ");
+
         return {
           success: false,
           message: errorMsg.includes("public distribution")
             ? "Shopify Billing is unavailable for the currently linked app because it does not have Public distribution enabled. Link/run a Public-distribution app configuration, then retry."
-            : `Shopify Error: ${errorMsg}`,
+            : errorMsg
+              ? `Shopify Error: ${errorMsg}`
+              : "Shopify could not create the subscription.",
         };
       }
 
       const createdSubscription = subscriptionData?.appSubscription;
+
       if (!createdSubscription?.id) {
-        return { success: false, message: "Shopify did not return subscription ID." };
+        return {
+          success: false,
+          message: "Shopify did not return subscription ID.",
+        };
       }
 
       await db.aiSearchShop.update({
@@ -486,22 +535,36 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           subscriptionGid: createdSubscription.id,
           status: "DEFERRED",
           source: "CALLBACK",
-          reason: "APP_SUBSCRIPTION_REPLACEMENT_BEHAVIOR_APPLY_ON_NEXT_BILLING_CYCLE",
+          reason:
+            "APP_SUBSCRIPTION_REPLACEMENT_BEHAVIOR_APPLY_ON_NEXT_BILLING_CYCLE",
         });
       }
 
       const confirmationUrl = subscriptionData?.confirmationUrl;
+
       if (confirmationUrl) {
-        return { success: true, confirmationUrl };
+        return {
+          success: true,
+          confirmationUrl,
+        };
       }
 
-      return { success: false, message: "Failed to create payment link." };
+      return {
+        success: false,
+        message: "Failed to create payment link.",
+      };
     } catch (error) {
-      return { success: false, message: error instanceof Error ? error.message : String(error) };
+      return {
+        success: false,
+        message: error instanceof Error ? error.message : String(error),
+      };
     }
   }
 
-  return { success: false, message: "Invalid action intent" };
+  return {
+    success: false,
+    message: "Invalid action intent",
+  };
 };
 
 function limitText(value: number | null, suffix: string) {

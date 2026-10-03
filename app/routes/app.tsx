@@ -6,7 +6,6 @@ import type {
 import {
   NavLink,
   Outlet,
-  redirect,
   useLoaderData,
   useNavigation,
   useRouteError,
@@ -24,9 +23,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const debugId = crypto.randomUUID().slice(0, 8);
   const url = new URL(request.url);
   console.log("[APP TRACE] loader:start", { debugId, method: request.method, pathname: url.pathname, search: url.search, referer: request.headers.get("referer"), remixRequest: request.headers.get("x-remix-request"), secFetchMode: request.headers.get("sec-fetch-mode") });
-  // const { admin, session } = await authenticate.admin(request);
   const { admin, session, redirect } = await authenticate.admin(request);
-
   console.log("[APP DEBUG] loader:authenticated", { debugId, shop: session.shop, pathname: url.pathname });
 
   // 1. Đảm bảo record Shop tồn tại trong DB
@@ -48,7 +45,6 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const isLanguageSetupRoute = url.pathname.startsWith("/app/settings");
 
   if (!settings.searchLanguage?.trim() && !isLanguageSetupRoute) {
-    // throw redirect("/app/settings?onboarding=language");
     return redirect("/app/settings?onboarding=language");
   }
 
