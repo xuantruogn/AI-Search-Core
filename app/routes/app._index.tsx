@@ -159,7 +159,10 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
           lastError: catalogJob.lastError,
         }
       : null,
-    appEmbedUrl: getThemeAppEmbedDeepLink(session.shop),
+    appEmbedUrl: getThemeAppEmbedDeepLink(
+      session.shop,
+      themeIntegration.appEmbed.themeId,
+    ),
   };
 };
 

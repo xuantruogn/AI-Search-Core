@@ -66,6 +66,16 @@
       "use strict";
 
       var config = window.AI_SEARCH_CONFIG || {};
+
+      // Shopify Theme Editor renders the storefront inside its own preview
+      // frame. Runtime bootstrap and navigation side effects belong only to
+      // the live storefront; running them in design mode can make the editor
+      // treat the preview as a redirect to an unsupported URL.
+      if (window.Shopify && window.Shopify.designMode) {
+        window.AI_SEARCH_ENGINE = null;
+        return;
+      }
+
       var pathname = window.location.pathname || "";
       var isSearchPage = /\/search\/?$/.test(pathname);
       var currentParams = new URLSearchParams(window.location.search);

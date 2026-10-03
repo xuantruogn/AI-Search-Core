@@ -80,7 +80,16 @@ function findAppEmbedBlock(
   return { found, enabled, matchedAppHandle };
 }
 
-export function getThemeAppEmbedDeepLink(shop: string) {
+function getThemeEditorTarget(themeId?: string | null) {
+  const normalized = themeId?.trim() ?? "";
+  const match = normalized.match(/(?:^|\/)(\d+)$/);
+  return match?.[1] ?? "current";
+}
+
+export function getThemeAppEmbedDeepLink(
+  shop: string,
+  themeId?: string | null,
+) {
   const apiKey = process.env.SHOPIFY_API_KEY?.trim();
 
   if (!apiKey) return null;
@@ -94,8 +103,9 @@ export function getThemeAppEmbedDeepLink(shop: string) {
   const activateAppId = `${encodeURIComponent(apiKey)}/${encodeURIComponent(
     getAiSearchAppEmbedBlockHandle(),
   )}`;
+  const themeTarget = getThemeEditorTarget(themeId);
 
-  return `https://${cleanShop}/admin/themes/current/editor?context=apps&template=index&activateAppId=${activateAppId}`;
+  return `https://${cleanShop}/admin/themes/${themeTarget}/editor?context=apps&template=index&activateAppId=${activateAppId}`;
 }
 
 export async function getAiSearchAppEmbedStatusForTheme(
