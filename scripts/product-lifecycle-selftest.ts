@@ -104,8 +104,12 @@ assert.match(syncJobSource, /!policyReindex \|\| policyVersion === null/);
 assert.match(syncJobSource, /REINDEX_PRODUCT_SUBSCRIPTION/);
 assert.doesNotMatch(readFileSync("app/services/commerce/reconciliation.server.ts", "utf8"), /deleteProductVectorForShop/);
 const vectorSource = readFileSync("app/services/search/vector-store.server.ts", "utf8");
-assert.ok(vectorSource.includes("AND \\`searchable\\` = true"));
-assert.match(vectorSource, /match:\s*\{\s*any:\s*eligibleProductIds/);
+assert.match(vectorSource, /searchable:\s*true,[\s\S]*?hasVector:\s*true/);
+assert.match(vectorSource, /key:\s*"searchable"[\s\S]*?value:\s*true/);
+assert.match(
+  vectorSource,
+  /productId:\s*\{\s*in:\s*candidateProductIds\s*\}[\s\S]*?searchable:\s*true,[\s\S]*?hasVector:\s*true/,
+);
 assert.match(registrySource, /FOR UPDATE/);
 assert.ok(registrySource.includes("\\`blockedReason\\` IS NULL"));
 assert.ok(registrySource.includes("\\`status\\` = 'PRODUCT_SLOT_RESERVED'"));
@@ -118,8 +122,13 @@ assert.match(processorSource, /!eligible\s*\|\|/);
 assert.match(processorSource, /resource:\s*["']product-policy:reconcile["']/);
 // G: slot reservation and policy reconciliation both serialize through DB row locks.
 assert.ok((registrySource.match(/FOR UPDATE/g) ?? []).length >= 2);
-// H: eligibility is applied in Qdrant retrieval, before top-K is consumed.
-assert.match(vectorSource, /match:\s*\{\s*any:\s*eligibleProductIds/);
+// H: Qdrant applies the fast searchable flag before top-K, then DB registry
+// validation fails closed on searchable + hasVector before results are returned.
+assert.match(vectorSource, /key:\s*"searchable"[\s\S]*?value:\s*true/);
+assert.match(
+  vectorSource,
+  /productId:\s*\{\s*in:\s*candidateProductIds\s*\}[\s\S]*?searchable:\s*true,[\s\S]*?hasVector:\s*true/,
+);
 // I: only an explicit delete webhook reaches physical vector deletion.
 assert.match(webhookSource, /export async function deleteProductFromWebhook/);
 assert.match(webhookSource, /await deleteProductFromAiIndex/);

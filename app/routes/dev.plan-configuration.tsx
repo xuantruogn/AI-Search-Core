@@ -11,7 +11,7 @@ import {
   useNavigation,
 } from "react-router";
 
-import { PlanCatalogEditor } from "../components/dev-center-dashboard";
+import { DevLoader, PlanCatalogEditor } from "../components/dev-center-dashboard";
 import { handleDevDashboardAction } from "../services/admin/dev-dashboard-actions.server";
 import { getDevPlanConfigurationData } from "../services/admin/dev-plan-configuration.server";
 import { requireDevPermission } from "../services/dev-auth.server";
@@ -50,6 +50,11 @@ export default function DevPlanConfigurationRoute() {
 
   return (
     <div className="dc-shell">
+      {busy ? (
+        <DevLoader
+          label={navigation.state === "submitting" ? "Saving plan..." : "Loading Plan Configuration..."}
+        />
+      ) : null}
       <aside className="dc-sidebar">
         <div className="dc-brand">
           <span className="dc-brand-mark">B</span>

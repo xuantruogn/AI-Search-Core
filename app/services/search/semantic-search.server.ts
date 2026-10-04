@@ -11,10 +11,10 @@ import { ensureProductCollection } from "./qdrant.server";
 import { rewriteSearchQuery, type QueryRewriteResult } from "./query-rewriter.server";
 import {
   applyShopContextToQuery,
+  discoveryExpansionTypeMatch,
   normalizeIdentitySignalTokens,
 } from "./shop-context-index.server";
 
-import db from "../../db.server";
 import { listSearchableIndexedProducts } from "../commerce/indexed-products.server";
 
 function readMinimumVectorScore() {
@@ -22,6 +22,11 @@ function readMinimumVectorScore() {
     process.env.AI_SEARCH_VECTOR_SCORE_THRESHOLD || "",
   );
   return Number.isFinite(value) && value >= -1 && value <= 1 ? value : 0.35;
+}
+
+export function validTopVectorScore(scores: number[]): number | undefined {
+  const finite = scores.filter(Number.isFinite);
+  return finite.length ? Math.max(...finite) : undefined;
 }
 
 function readRelativeVectorScoreRatio() {
@@ -64,15 +69,16 @@ export function computeDiscoveryNoEvidenceThreshold(args: {
     // With no source-grounded or expansion-grounded catalog evidence, vector
     // similarity alone must clear a conservative bar. This blocks sibling
     // product classes such as a plain digital watch for an absent "smart
-    // watch" query while still allowing grounded discovery flows to use the
-    // lower recall thresholds below.
+    // watch" query.
     return Math.max(args.baseThreshold, 0.55);
   }
-  if (args.expansionGroundedCount >= 8) {
-    return Math.min(args.baseThreshold, 0.45);
-  }
-  if (args.expansionGroundedCount >= 3) {
-    return Math.min(args.baseThreshold, 0.46);
+  if (!args.hasStrongCatalogEvidence && args.expansionGroundedCount > 0) {
+    // Exact catalog-grounded expansion leaves are allowed to rescue a
+    // discovery query at a lower similarity floor because the result set is
+    // restricted to those exact grounded product IDs below. Keep this
+    // materially above the raw retrieval floor so unrelated expansion noise
+    // still fails closed.
+    return Math.min(args.baseThreshold, 0.40);
   }
   return args.baseThreshold;
 }
@@ -108,6 +114,22 @@ export function computeDiscoveryRecallThreshold(args: {
   return Math.max(
     args.retrievalMinimumScore,
     Math.min(args.baseThreshold, nthScore),
+  );
+}
+
+export function shouldRejectNoEvidenceVector(args: {
+  hasStrongCatalogEvidence: boolean;
+  topVectorScore: number | undefined;
+  normalThreshold: number;
+  transientFallback: boolean;
+  transientThreshold: number;
+}) {
+  if (args.hasStrongCatalogEvidence) return false;
+  if (typeof args.topVectorScore !== "number" || !Number.isFinite(args.topVectorScore)) {
+    return false;
+  }
+  return args.topVectorScore < (
+    args.transientFallback ? args.transientThreshold : args.normalThreshold
   );
 }
 
@@ -290,9 +312,33 @@ export function buildDiscoveryEmbeddingBranches(
     })
     .slice(0, 3);
 
+  const groundedCanonicalTypes =
+    rewrite.context?.selectedTerms
+      .filter(
+        (term) =>
+          term.kind === "CANONICAL_PRODUCT_TYPE" &&
+          term.score >= 18,
+      )
+      .map((term) =>
+        normalizeEmbeddingBranch(term.value).split(" ").filter(Boolean),
+      ) ?? [];
+  const orderedExpansions = (rewrite.analysis.semanticExpansions ?? [])
+    .map((rawExpansion, index) => ({
+      rawExpansion,
+      index,
+      grounded: groundedCanonicalTypes.some((typeTokens) =>
+        discoveryExpansionTypeMatch(typeTokens, [rawExpansion]),
+      ),
+    }))
+    .sort(
+      (left, right) =>
+        Number(right.grounded) - Number(left.grounded) ||
+        left.index - right.index,
+    );
+
   const seen = new Set<string>();
   const branches: string[] = [];
-  for (const rawExpansion of rewrite.analysis.semanticExpansions ?? []) {
+  for (const { rawExpansion } of orderedExpansions) {
     const expansion = rawExpansion.replace(/\s+/g, " ").trim();
     const normalizedExpansion = normalizeEmbeddingBranch(expansion);
     if (!normalizedExpansion || normalizedExpansion === primary) continue;
@@ -326,6 +372,64 @@ export function buildDiscoveryEmbeddingBranches(
     if (branches.length >= 4) break;
   }
   return branches;
+}
+
+export function buildComplementEmbeddingBranches(
+  rewrite: QueryRewriteResult | null | undefined,
+) {
+  if (!rewrite || retrievalModeOf(rewrite) !== "COMPLEMENT") return [];
+
+  const primary = normalizeEmbeddingBranch(
+    rewrite.planning?.semanticQuery || rewrite.analysis.intent || rewrite.query,
+  );
+  const referenceTokens = new Set(
+    (rewrite.analysis.referenceTerms ?? []).flatMap((value) =>
+      normalizeEmbeddingBranch(value).split(" ").filter(Boolean),
+    ),
+  );
+  const selectedValues = new Set(
+    (rewrite.context?.selectedTerms ?? [])
+      .filter((term) => term.score >= 18)
+      .map((term) => normalizeEmbeddingBranch(term.value))
+      .filter(Boolean),
+  );
+
+  const ordered = (rewrite.analysis.semanticExpansions ?? [])
+    .map((rawExpansion, index) => {
+      const normalized = normalizeEmbeddingBranch(rawExpansion);
+      return {
+        rawExpansion,
+        normalized,
+        index,
+        grounded: [...selectedValues].some(
+          (value) =>
+            value === normalized ||
+            catalogEvidenceNeedMatches(rawExpansion, value),
+        ),
+      };
+    })
+    .filter(({ normalized }) => {
+      if (!normalized || normalized === primary) return false;
+      const tokens = normalized.split(" ").filter(Boolean);
+      if (tokens.length === 0) return false;
+      // Do not create a branch that is merely the reference product again.
+      return !tokens.every((token) => referenceTokens.has(token));
+    })
+    .sort(
+      (left, right) =>
+        Number(right.grounded) - Number(left.grounded) ||
+        left.index - right.index,
+    );
+
+  const branches: string[] = [];
+  const seen = new Set<string>();
+  for (const item of ordered) {
+    if (seen.has(item.normalized)) continue;
+    seen.add(item.normalized);
+    branches.push(item.rawExpansion.replace(/\s+/g, " ").trim().slice(0, 220));
+    if (branches.length >= 4) break;
+  }
+  return branches.filter(Boolean);
 }
 
 export function buildDirectEmbeddingPlan(
@@ -370,6 +474,9 @@ export function buildDirectEmbeddingPlan(
   const negative = new Set(
     (rewrite.analysis.negativeTerms ?? []).map(normalizeEmbeddingBranch),
   );
+  const negativeTokens = new Set(
+    [...negative].flatMap((value) => value.split(" ").filter(Boolean)),
+  );
   const facets = rawFacetValues
     .map((value) => value.replace(/\s+/g, " ").trim())
     .filter(Boolean)
@@ -400,6 +507,7 @@ export function buildDirectEmbeddingPlan(
     .filter(Boolean)
     .filter((token) => token.length > 1)
     .filter((token) => !coveredTokens.has(token))
+    .filter((token) => !negativeTokens.has(token))
     .filter((token) => !DIRECT_RESIDUAL_STOP_WORDS.has(token));
   const residual = [...new Set(residualTokens)].join(" ");
   const residualBranch = residual
@@ -430,7 +538,12 @@ export type SearchResult = {
   productId: string;
   handle: string;
   title: string;
+  /** Final retrieval/rerank score; not a probability or raw cosine. */
   score: number;
+  /** Best raw Qdrant cosine similarity seen across retrieval branches. */
+  vectorSimilarity?: number;
+  /** Raw cosine similarity to the primary interpreted-query embedding. */
+  primaryVectorSimilarity?: number;
   minVariantPrice?: number;
   maxVariantPrice?: number;
   currencyCode?: string;
@@ -442,11 +555,20 @@ export function fuseSemanticVectorBranches(
 ) {
   const fused = new Map<
     string,
-    { result: SearchResult; score: number; branchHits: number }
+    {
+      result: SearchResult;
+      score: number;
+      branchHits: number;
+      vectorSimilarity: number;
+      primaryVectorSimilarity?: number;
+    }
   >();
 
   resultSets.forEach((results, branchIndex) => {
-    const branchWeight = branchIndex === 0 ? 1 : 0.98;
+    // Secondary vectors are recall probes, not independent ranking truth.
+    // Discount branch-only similarity so one broad expansion cannot outrank a
+    // product that actually matches the primary interpreted need.
+    const branchWeight = branchIndex === 0 ? 1 : 0.90;
     for (const result of results) {
       const weightedScore = result.score * branchWeight;
       const current = fused.get(result.productId);
@@ -455,10 +577,20 @@ export function fuseSemanticVectorBranches(
           result,
           score: weightedScore,
           branchHits: 1,
+          vectorSimilarity: result.vectorSimilarity ?? result.score,
+          primaryVectorSimilarity:
+            branchIndex === 0 ? (result.vectorSimilarity ?? result.score) : undefined,
         });
         continue;
       }
       current.branchHits += 1;
+      current.vectorSimilarity = Math.max(
+        current.vectorSimilarity,
+        result.vectorSimilarity ?? result.score,
+      );
+      if (branchIndex === 0) {
+        current.primaryVectorSimilarity = result.vectorSimilarity ?? result.score;
+      }
       if (weightedScore > current.score) {
         current.result = result;
         current.score = weightedScore;
@@ -467,8 +599,16 @@ export function fuseSemanticVectorBranches(
   });
 
   return [...fused.values()]
-    .map(({ result, score, branchHits }) => ({
+    .map(({
+      result,
+      score,
+      branchHits,
+      vectorSimilarity,
+      primaryVectorSimilarity,
+    }) => ({
       ...result,
+      vectorSimilarity,
+      primaryVectorSimilarity,
       // Tiny consensus bonus helps a product supported by both the general
       // need vector and a product-class branch without allowing broad branch
       // membership to dominate ranking.
@@ -678,9 +818,13 @@ export async function semanticSearch({
       vectorOverride;
 
     const directPlan = buildDirectEmbeddingPlan(preparedRewrite);
-    semanticBranchInputs = retrievalModeOf(preparedRewrite) === "DISCOVERY"
-      ? buildDiscoveryEmbeddingBranches(preparedRewrite)
-      : directPlan.branches;
+    const preparedMode = retrievalModeOf(preparedRewrite);
+    semanticBranchInputs =
+      preparedMode === "DISCOVERY"
+        ? buildDiscoveryEmbeddingBranches(preparedRewrite)
+        : preparedMode === "COMPLEMENT"
+          ? buildComplementEmbeddingBranches(preparedRewrite)
+          : directPlan.branches;
     if (semanticBranchInputs.length > 0) {
       void ensureCollectionReady();
       const embeddingStartedAt = Date.now();
@@ -919,9 +1063,13 @@ export async function semanticSearch({
     const directPlan = buildDirectEmbeddingPlan(rewrite);
     const primaryEmbeddingInput = directPlan.primary || rewrite.query;
     primaryEmbeddingInputForDiagnostics = primaryEmbeddingInput;
-    semanticBranchInputs = retrievalModeOf(rewrite) === "DISCOVERY"
-      ? buildDiscoveryEmbeddingBranches(rewrite)
-      : directPlan.branches;
+    const currentEmbeddingMode = retrievalModeOf(rewrite);
+    semanticBranchInputs =
+      currentEmbeddingMode === "DISCOVERY"
+        ? buildDiscoveryEmbeddingBranches(rewrite)
+        : currentEmbeddingMode === "COMPLEMENT"
+          ? buildComplementEmbeddingBranches(rewrite)
+          : directPlan.branches;
     const embeddingInputs = [
       primaryEmbeddingInput,
       ...semanticBranchInputs,
@@ -1199,23 +1347,42 @@ export async function semanticSearch({
   const discoveryMinimumScore =
     readDiscoveryVectorScore();
 
+  const identityIds = effectiveRewrite?.context?.identityCandidateProductIds ?? [];
+  const directExpansionScopeIds =
+    effectiveRewrite?.context?.directExpansionGroundedProductIds ?? [];
+  const discoverySourceIdentityIds =
+    effectiveRewrite?.context?.discoverySourceIdentityProductIds ?? [];
+  const hasExactCanonicalIdentityEvidence = Boolean(
+    effectiveRewrite?.context?.selectedTerms.some(
+      (term) =>
+        term.kind === "CANONICAL_PRODUCT_TYPE" &&
+        term.score >= 25,
+    ),
+  );
+  const exactIdentityScope =
+    retrievalMode === "DIRECT" &&
+    identityIds.length > 0 &&
+    hasExactCanonicalIdentityEvidence &&
+    effectiveRewrite?.context?.canonicalTypeCoverageComplete === true;
+
   const retrievalMinimumScore =
     transientLlmFallback
       ? Math.min(minimumScore, safeFallbackScore)
+      : exactIdentityScope
+        ? Math.min(minimumScore, discoveryMinimumScore)
       : retrievalMode === "DISCOVERY" ||
           retrievalMode === "COMPLEMENT"
         ? Math.min(minimumScore, discoveryMinimumScore)
         : minimumScore;
 
-  const identityIds = effectiveRewrite?.context?.identityCandidateProductIds ?? [];
-  const directExpansionScopeIds =
-    effectiveRewrite?.context?.directExpansionGroundedProductIds ?? [];
-  const directIdentityScopeIds =
-    retrievalMode === "DIRECT" &&
-    identityIds.length > 0 &&
-    effectiveRewrite?.context?.canonicalTypeCoverageComplete === true
+  const retrievalScopeIds =
+    exactIdentityScope
       ? [...new Set([...identityIds, ...directExpansionScopeIds])]
-      : undefined;
+      : retrievalMode === "DISCOVERY" &&
+          discoverySourceIdentityIds.length > 0 &&
+          discoverySourceIdentityIds.length <= 2_000
+        ? [...new Set(discoverySourceIdentityIds)]
+        : undefined;
 
   const onQdrantDiagnostics = (
     diagnostics: {
@@ -1249,7 +1416,7 @@ export async function semanticSearch({
           scoreThreshold:
             retrievalMinimumScore,
           productIds:
-            directIdentityScopeIds,
+            retrievalScopeIds,
           onDiagnostics:
             onQdrantDiagnostics,
         }).then((resultSets) =>
@@ -1263,7 +1430,7 @@ export async function semanticSearch({
           scoreThreshold:
             retrievalMinimumScore,
           productIds:
-            directIdentityScopeIds,
+            retrievalScopeIds,
           onDiagnostics:
             onQdrantDiagnostics,
         });
@@ -1309,10 +1476,25 @@ export async function semanticSearch({
 
   let results = retrieval.value;
 
+  // Retrieval has already passed the authoritative registry guard. Capture
+  // raw similarity before identity boosts/synthetic evidence scores are merged;
+  // ranking bonuses must not raise the relative similarity cutoff.
+  const rawTopVectorScore = validTopVectorScore(
+    results.map((result) => result.vectorSimilarity ?? result.score),
+  );
+
   const vectorCandidateCount = results.length;
+  // Broad DISCOVERY families (Clothing, Footwear, etc.) are retrieval scope,
+  // not exact product identity. Injecting/boosting every family member by
+  // +0.2 lets irrelevant siblings survive the semantic threshold. Synthetic
+  // identity evidence is therefore reserved for DIRECT retrieval.
+  const identityEvidenceIds =
+    retrievalMode === "DIRECT" && hasExactCanonicalIdentityEvidence
+      ? identityIds
+      : [];
   const evidenceCandidateIds = [
     ...new Set([
-      ...identityIds,
+      ...identityEvidenceIds,
       ...directExpansionScopeIds,
     ]),
   ];
@@ -1322,7 +1504,7 @@ export async function semanticSearch({
       shop,
       evidenceCandidateIds.filter((id) => !existing.has(id)).slice(0, limit),
     );
-    const identitySet = new Set(identityIds);
+    const identitySet = new Set(identityEvidenceIds);
     results = [
       ...results.map((result) => identitySet.has(result.productId)
         ? { ...result, score: Math.min(1, result.score + 0.2) }
@@ -1346,114 +1528,14 @@ export async function semanticSearch({
   // ============================================================
   // 3. REGISTRY GUARD
   //
-  // Qdrant khÃ´ng pháº£i source of truth cuá»‘i cÃ¹ng.
-  //
-  // Chá»‰ giá»¯ vector khi DB registry xÃ¡c nháº­n:
-  //
-  // searchable = true
-  // hasVector = true
-  //
-  // Má»¥c tiÃªu:
-  //
-  // - orphan vector khÃ´ng xuáº¥t hiá»‡n trÃªn storefront
-  // - orphan vector khÃ´ng áº£nh hÆ°á»Ÿng relative threshold
-  // - orphan vector khÃ´ng bá»‹ Ä‘Æ°a vÃ o render receipt
-  //
-  // Search-time chá»‰ FILTER, khÃ´ng DELETE.
-  //
-  // KhÃ´ng delete ngay á»Ÿ Ä‘Ã¢y vÃ¬ search cÃ³ thá»ƒ trÃºng Ä‘Ãºng khoáº£ng
-  // thá»i gian ráº¥t ngáº¯n:
-  //
-  // Qdrant upsert
-  //       â†“
-  // DB registry upsert
-  //
-  // Background reconciliation sáº½ xá»­ lÃ½ delete lÃ¢u dÃ i.
+  // vector-store.server owns the fail-closed registry check for every Qdrant
+  // response (shop + searchable + hasVector). The exact evidence rows merged
+  // above are also fetched through listSearchableIndexedProducts(), so every
+  // candidate in this union has already crossed the same DB source-of-truth
+  // boundary. Do not query the registry a second time here.
   // ============================================================
 
-  const resultProductIds =
-    [
-      ...new Set(
-        results
-          .map(
-            (
-              result,
-            ) =>
-              String(
-                result.productId ||
-                  "",
-              ).trim(),
-          )
-          .filter(
-            Boolean,
-          ),
-      ),
-    ];
-
-  let registryValidatedResults =
-    results;
-
-  if (
-    resultProductIds.length >
-    0
-  ) {
-    const validRegistryRows =
-      await listSearchableIndexedProducts(shop, resultProductIds);
-
-    const validProductIds =
-      new Set(
-        validRegistryRows.map(
-          (
-            row,
-          ) =>
-            row.productId,
-        ),
-      );
-
-    registryValidatedResults =
-      results.filter(
-        (
-          result,
-        ) =>
-          validProductIds.has(
-            result.productId,
-          ),
-      );
-
-    const orphanProductIds =
-      resultProductIds.filter(
-        (
-          productId,
-        ) =>
-          !validProductIds.has(
-            productId,
-          ),
-      );
-
-    if (
-      orphanProductIds.length >
-      0
-    ) {
-      console.warn(
-        "[AI Search] Qdrant orphan/stale vectors filtered from search",
-        {
-          shop,
-
-          qdrantCandidateCount:
-            results.length,
-
-          validCandidateCount:
-            registryValidatedResults.length,
-
-          filteredCount:
-            orphanProductIds.length,
-
-          productIds:
-            orphanProductIds,
-        },
-      );
-    }
-  }
+  const registryValidatedResults = results;
 
   console.log(
     "[AI Search][PERF] Retrieval stages",
@@ -1497,10 +1579,7 @@ export async function semanticSearch({
   const thresholdStartedAt =
     Date.now();
 
-  const topVectorScore =
-    registryValidatedResults[
-      0
-    ]?.score;
+  const topVectorScore = rawTopVectorScore;
 
   const relativeRatio =
     retrievalMode === "DIRECT"
@@ -1524,6 +1603,10 @@ export async function semanticSearch({
   const directExpansionGroundedIds =
     retrievalMode === "DIRECT"
       ? (effectiveRewrite?.context?.directExpansionGroundedProductIds ?? [])
+      : [];
+  const directSourceFacetGroundedIds =
+    retrievalMode === "DIRECT"
+      ? (effectiveRewrite?.context?.directSourceFacetGroundedProductIds ?? [])
       : [];
   const discoverySourceGroundedIds =
     retrievalMode === "DISCOVERY"
@@ -1556,10 +1639,24 @@ export async function semanticSearch({
         ),
     ) ?? [];
   const selectedStrongCatalogEvidence = selectedStrongCatalogTerms.length > 0;
+  const sourceExactTaxonomyEvidence = Boolean(
+    effectiveRewrite?.context?.selectedTerms.some((term) =>
+      ["CATEGORY", "CANONICAL_PRODUCT_TYPE", "PRODUCT_TYPE"].includes(term.kind) &&
+      term.score >= 25 &&
+      normalizeEmbeddingBranch(term.value) === normalizeEmbeddingBranch(cleanQuery),
+    ),
+  );
+  const semanticMustTermsForCatalogEvidence =
+    (effectiveRewrite?.analysis.semanticMustTerms ?? []).filter(
+      (value) =>
+        !/\b(?:price|priced|cheap|cheapest|affordable|budget|expensive|priciest|premium|luxury|luxurious|low cost|high end|most expensive)\b/i.test(
+          normalizeEmbeddingBranch(value),
+        ),
+    );
   const directSemanticMustCoverage =
     retrievalMode !== "DIRECT" ||
     catalogEvidenceCoversSemanticMustTerms(
-      effectiveRewrite?.analysis.semanticMustTerms ?? [],
+      semanticMustTermsForCatalogEvidence,
       selectedStrongCatalogTerms.map((term) => term.value),
     );
   const semanticNeedValues = [
@@ -1582,6 +1679,17 @@ export async function semanticSearch({
         catalogEvidenceNeedMatches(need, term.value),
       );
     }),
+  );
+  const complementExpansionEvidence = Boolean(
+    retrievalMode === "COMPLEMENT" &&
+    effectiveRewrite?.context?.selectedTerms.some(
+      (term) =>
+        term.score >= 25 &&
+        !isGenericCatalogEvidenceValue(term.value) &&
+        (effectiveRewrite.analysis.semanticExpansions ?? []).some((expansion) =>
+          catalogEvidenceNeedMatches(expansion, term.value),
+        ),
+    ),
   );
   const singleTokenSourceIdentityGrounded = Boolean(
     retrievalMode === "DISCOVERY" &&
@@ -1607,15 +1715,20 @@ export async function semanticSearch({
         singleTokenSourceIdentityGrounded
       : (
           !fallbackNeedsSemanticGuard &&
-          selectedStrongCatalogEvidence &&
-          directSemanticMustCoverage
-        ) || directExpansionGroundedIds.length > 0;
+          ((selectedStrongCatalogEvidence && directSemanticMustCoverage) ||
+            sourceExactTaxonomyEvidence ||
+            complementExpansionEvidence)
+        ) ||
+        directExpansionGroundedIds.length > 0 ||
+        directSourceFacetGroundedIds.length > 0;
   const discoveryMinRecallResults = readDiscoveryMinRecallResults();
   const effectiveMinimumScore = computeDiscoveryRecallThreshold({
     retrievalMode,
     baseThreshold: baseMinimumScore,
     retrievalMinimumScore,
-    candidateScores: registryValidatedResults.map((result) => result.score),
+    candidateScores: registryValidatedResults.map(
+      (result) => result.vectorSimilarity ?? result.score,
+    ),
     hasStrongCatalogEvidence,
     minRecallResults: discoveryMinRecallResults,
   });
@@ -1641,38 +1754,52 @@ export async function semanticSearch({
     retrievalMode === "COMPLEMENT"
       ? noEvidenceTopScore
       : transientNoEvidenceTopScore;
-  const effectiveNoEvidenceTopScore = computeDiscoveryNoEvidenceThreshold({
+  let effectiveNoEvidenceTopScore = computeDiscoveryNoEvidenceThreshold({
     retrievalMode,
     baseThreshold: noEvidenceTopScore,
     hasStrongCatalogEvidence,
     expansionGroundedCount: discoveryExpansionGroundedIds.length,
   });
+  const broadDiscoveryIdentityEvidence =
+    retrievalMode === "DISCOVERY" &&
+    !hasStrongCatalogEvidence &&
+    identityIds.length > 0;
+  if (broadDiscoveryIdentityEvidence) {
+    // A source-resolved broad catalog family (e.g. Clothing/Footwear) is not
+    // strong enough to bypass semantic quality checks, but it is materially
+    // better than pure open-world vector guessing. Use the normal no-evidence
+    // floor rather than the stricter 0.55 unknown-catalog floor.
+    effectiveNoEvidenceTopScore = Math.min(
+      effectiveNoEvidenceTopScore,
+      noEvidenceTopScore,
+    );
+  }
   const fallbackGuardThreshold =
     fallbackNeedsSemanticGuard &&
     retrievalMode === "DIRECT" &&
     cleanQuery.split(/\s+/).filter(Boolean).length >= 7
       ? Math.min(effectiveNoEvidenceTopScore, 0.55)
       : effectiveNoEvidenceTopScore;
-  const weakNoEvidenceVector =
+  const weakNoEvidenceVector = shouldRejectNoEvidenceVector({
+    hasStrongCatalogEvidence,
+    topVectorScore,
+    normalThreshold: effectiveNoEvidenceTopScore,
+    transientFallback: transientLlmFallback,
+    transientThreshold: fallbackNeedsSemanticGuard
+      ? fallbackGuardThreshold
+      : transientNoEvidenceThreshold,
+  });
+  const expansionOnlyRescue =
+    retrievalMode === "DISCOVERY" &&
     !hasStrongCatalogEvidence &&
+    discoveryExpansionGroundedIds.length > 0 &&
     typeof topVectorScore === "number" &&
     Number.isFinite(topVectorScore) &&
-    (
-      (
-        (llmStatus === "SUCCESS" || llmStatus === "CACHE_HIT") &&
-        effectiveRewrite?.fallbackReason === null &&
-        effectiveRewrite?.model !== null &&
-        topVectorScore < effectiveNoEvidenceTopScore
-      ) ||
-      (
-        transientLlmFallback &&
-        topVectorScore < (
-          fallbackNeedsSemanticGuard
-            ? fallbackGuardThreshold
-            : transientNoEvidenceThreshold
-        )
-      )
-    );
+    topVectorScore >= effectiveNoEvidenceTopScore &&
+    topVectorScore < noEvidenceTopScore;
+  const expansionOnlyIds = expansionOnlyRescue
+    ? new Set(discoveryExpansionGroundedIds)
+    : null;
 
   let relevantResults =
     weakNoEvidenceVector
@@ -1682,10 +1809,11 @@ export async function semanticSearch({
             result,
           ) =>
             Number.isFinite(
-              result.score,
+              result.vectorSimilarity ?? result.score,
             ) &&
-            result.score >=
-              effectiveMinimumScore,
+            (result.vectorSimilarity ?? result.score) >=
+              effectiveMinimumScore &&
+            (!expansionOnlyIds || expansionOnlyIds.has(result.productId)),
         );
 
   thresholdFilterCodeMs =
@@ -1743,6 +1871,12 @@ export async function semanticSearch({
 
               score:
                 result.score,
+
+              vectorSimilarity:
+                result.vectorSimilarity,
+
+              primaryVectorSimilarity:
+                result.primaryVectorSimilarity,
             }),
           ),
     },
@@ -1776,6 +1910,15 @@ export async function semanticSearch({
 
         score:
           result.score,
+
+        vectorSimilarity:
+          result.vectorSimilarity,
+
+        primaryVectorSimilarity:
+          result.primaryVectorSimilarity ??
+          (semanticBranchVectors.length === 0
+            ? result.vectorSimilarity
+            : undefined),
 
         minVariantPrice:
           result.minVariantPrice,

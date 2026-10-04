@@ -3519,6 +3519,8 @@
 
       await nextPaint();
 
+      if (requestId !== requestNumber || signal.aborted) return;
+
       try {
         assertMountedProductCards(
           rendered.mount,

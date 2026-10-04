@@ -1,5 +1,6 @@
 import { getOpenAiClient } from "../search/embeddings.server";
 import { recordOpenAiUsageSafe } from "../ai/provider-usage.server";
+import { normalizeSemanticValue } from "../search/semantic-normalization.server";
 
 export type ProductSemanticAnalysis = {
   sourceLanguage: string;
@@ -168,6 +169,69 @@ function parseAnalysis(outputText: string): ProductSemanticAnalysis | null {
     shopLanguageTerms,
     factualSummary,
   };
+}
+
+function sourceSupportsExactValue(sourceNormalized: string, value: string) {
+  const normalized = normalizeSemanticValue(value);
+  return Boolean(normalized && sourceNormalized.includes(normalized));
+}
+
+function dedupeStrings(values: string[]) {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const value of values) {
+    const key = normalizeSemanticValue(value);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    result.push(value);
+  }
+  return result;
+}
+
+export function groundProductSemanticAnalysis(
+  analysis: ProductSemanticAnalysis,
+  sourceDocument: string,
+): ProductSemanticAnalysis {
+  const sourceNormalized = normalizeSemanticValue(sourceDocument);
+  const supported = (values: string[]) =>
+    values.filter((value) => sourceSupportsExactValue(sourceNormalized, value));
+
+  const supportedAudiences = supported(analysis.audiences);
+  const unsupportedAudiences = analysis.audiences.filter(
+    (value) => !sourceSupportsExactValue(sourceNormalized, value),
+  );
+
+  const grounded = {
+    ...analysis,
+    brandTerms: supported(analysis.brandTerms),
+    modelTerms: supported(analysis.modelTerms),
+    identifiers: supported(analysis.identifiers),
+    audiences: supportedAudiences,
+    inferredAudiences: dedupeStrings([
+      ...analysis.inferredAudiences,
+      ...unsupportedAudiences,
+    ]),
+    compatibility: supported(analysis.compatibility),
+    exactAttributes: supported(analysis.exactAttributes),
+    measurements: supported(analysis.measurements),
+    explicitContexts: supported(analysis.explicitContexts),
+    variantAttributes: supported(analysis.variantAttributes),
+  };
+
+  // Never let a free-form model sentence become stronger evidence than the
+  // source-backed facets above. The source document itself remains the primary
+  // embedding input, so a compact grounded summary is enough.
+  grounded.factualSummary = [
+    grounded.canonicalProductType,
+    ...grounded.brandTerms.slice(0, 2),
+    ...grounded.exactAttributes.slice(0, 4),
+    ...grounded.measurements.slice(0, 3),
+  ]
+    .filter(Boolean)
+    .join("; ")
+    .slice(0, 500);
+
+  return grounded;
 }
 
 function formatList(label: string, values: string[]) {
@@ -428,6 +492,8 @@ export async function prepareProductEmbeddingInput(
       if (!analysis) {
         throw new Error("Product semantic enrichment returned invalid output");
       }
+
+      analysis = groundProductSemanticAnalysis(analysis, sourceDocument);
 
       return {
         document: composeDocument(sourceDocument, analysis, shopLanguage),

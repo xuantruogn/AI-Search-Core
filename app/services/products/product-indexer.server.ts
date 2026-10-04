@@ -10,26 +10,41 @@ import {
 } from "./product-embedding-input.server";
 import { createEmbedding } from "../search/embeddings.server";
 import {
+  collectProductContextTerms,
   ensureProductShopContext,
-  replaceProductShopContext,
+  replaceProductShopContextWithTerms,
+  replaceProductWithDeterministicShopContext,
 } from "../search/shop-context-index.server";
+import {
+  buildProductVectorSemanticPayload,
+  getSemanticProfileForProduct,
+  getSemanticProfileState,
+  PRODUCT_SEMANTIC_PROFILE_SCHEMA_VERSION,
+  PRODUCT_VECTOR_SEMANTIC_PAYLOAD_VERSION,
+} from "../search/product-semantic-profile.server";
+import {
+  bumpSearchCatalogRevision,
+  bumpSearchSemanticRevision,
+} from "../search/search-catalog-revision.server";
 import {
   getProductVectorForShop,
   migrateProductVectorPointIdIfNeeded,
-  updateProductVectorPayloadForShop,
+  updateProductVectorPayloadByPointId,
   upsertProductVector,
 } from "../search/vector-store.server";
 import { getTenantProductVectorPointId } from "../search/vector-id.server";
 import { getShopEntitlement } from "../commerce/entitlement.server";
 import {
-  replaceProductThemeSearchTransportKeys,
+  invalidateDerivedProductSearchCaches,
 } from "../theme/theme-search-transport-key.server";
 import {
   getIndexedProduct,
   markIneligibleProductMetadata,
   markIndexedProductBlocked,
+  markIndexedProductSemanticSourceChanged,
   releaseProductSlotReservation,
   reserveProductSlot,
+  stageIndexedProductVectorUpdate,
   upsertIndexedProduct,
   updateIndexedProductEnrichmentState,
 } from "../commerce/indexed-products.server";
@@ -118,23 +133,50 @@ function createProductDocumentHashForVersion(
     .digest("hex");
 }
 
-async function replaceRenderTransportKeysForProduct(
+function refreshDerivedRenderTransportForShop(
+  shop: string,
+): void {
+  invalidateDerivedProductSearchCaches(shop);
+}
+
+async function bumpProductSearchRevision(args: {
+  shop: string;
+  semanticChanged: boolean;
+  catalogChanged?: boolean;
+}) {
+  if (args.semanticChanged) {
+    await bumpSearchSemanticRevision(args.shop);
+    return;
+  }
+  if (args.catalogChanged) {
+    await bumpSearchCatalogRevision(args.shop);
+  }
+}
+
+async function ensureDeterministicProductProfile(
   shop: string,
   product: ProductForIndex,
-): Promise<void> {
-  await replaceProductThemeSearchTransportKeys({
-    shop,
+) {
+  await ensureProductShopContext({ shop, product });
+  refreshDerivedRenderTransportForShop(shop);
+}
 
-    product: {
-      productId: product.id,
-      handle: product.handle,
-      title: product.title,
-      vendor: product.vendor,
-      productType: product.productType,
-      tags: product.tags,
-      variants: product.variants,
-    },
+async function replaceStaleSemanticProfileWithCurrentSource({
+  shop,
+  product,
+  sourceDocumentHash,
+}: {
+  shop: string;
+  product: ProductForIndex;
+  sourceDocumentHash: string;
+}) {
+  await replaceProductWithDeterministicShopContext({ shop, product });
+  await markIndexedProductSemanticSourceChanged({
+    shop,
+    productId: product.id,
+    sourceDocumentHash,
   });
+  refreshDerivedRenderTransportForShop(shop);
 }
 
 export async function indexProduct({
@@ -173,28 +215,156 @@ export async function indexProduct({
   const [
     rawExistingVector,
     registryProduct,
+    semanticProfileState,
   ] = await Promise.all([
+    // Normal sync only needs payload metadata. Pulling the 768D vector for
+    // every unchanged webhook/catalog pass wastes Qdrant bandwidth and heap.
     getProductVectorForShop({
       shop,
       productId: product.id,
-      withVector: true,
+      withVector: false,
     }),
 
     getIndexedProduct(
       shop,
       product.id,
     ),
+
+    getSemanticProfileState(
+      shop,
+      product.id,
+    ),
   ]);
 
-  const existingRecord =
-    await migrateProductVectorPointIdIfNeeded({
+  let existingRecord = rawExistingVector;
+  if (
+    rawExistingVector &&
+    String(rawExistingVector.pointId) !== pointId
+  ) {
+    // Legacy point-id migration is the only path that needs the stored vector.
+    // Fetch it lazily instead of making every product sync carry vector bytes.
+    const migratableRecord = await getProductVectorForShop({
+      shop,
+      productId: product.id,
+      withVector: true,
+    });
+    existingRecord = await migrateProductVectorPointIdIfNeeded({
+      shop,
+      productId: product.id,
+      record: migratableRecord,
+    });
+  } else {
+    existingRecord = await migrateProductVectorPointIdIfNeeded({
       shop,
       productId: product.id,
       record: rawExistingVector,
     });
+  }
 
   const existingVector =
     existingRecord?.payload ?? null;
+  const semanticSourceChanged =
+    registryProduct?.sourceDocumentHash !== sourceDocumentHash;
+  const semanticProfileCurrent = Boolean(
+    semanticProfileState &&
+      semanticProfileState.schemaVersion >=
+        PRODUCT_SEMANTIC_PROFILE_SCHEMA_VERSION &&
+      registryProduct?.sourceDocumentHash === sourceDocumentHash,
+  );
+  const existingVectorMetadataNeedsRefresh = (searchable?: boolean) =>
+    Boolean(
+      existingVector && (
+        existingVector.handle !== product.handle ||
+        existingVector.title !== product.title ||
+        (typeof searchable === "boolean" && existingVector.searchable !== searchable) ||
+        (product.priceRange
+          ? (
+              existingVector.minVariantPrice !== product.priceRange.min ||
+              existingVector.maxVariantPrice !== product.priceRange.max ||
+              existingVector.currencyCode !== product.priceRange.currencyCode
+            )
+          : (
+              existingVector.minVariantPrice != null ||
+              existingVector.maxVariantPrice != null ||
+              Boolean(existingVector.currencyCode)
+            ))
+      ),
+    );
+  const syncExistingVectorMetadata = async (searchable?: boolean) => {
+    if (!existingVector || !existingVectorMetadataNeedsRefresh(searchable)) {
+      return false;
+    }
+    await updateProductVectorPayloadByPointId({
+      pointId: existingRecord!.pointId,
+      payload: {
+        handle: product.handle,
+        title: product.title,
+        ...(typeof searchable === "boolean" ? { searchable } : {}),
+        ...(product.priceRange
+          ? {
+              minVariantPrice: product.priceRange.min,
+              maxVariantPrice: product.priceRange.max,
+              currencyCode: product.priceRange.currencyCode,
+            }
+          : {
+              minVariantPrice: null,
+              maxVariantPrice: null,
+              currencyCode: "",
+            }),
+      },
+    });
+    return true;
+  };
+  const syncExistingVectorSearchable = async (searchable: boolean) => {
+    await syncExistingVectorMetadata(searchable);
+  };
+  const syncExistingVectorSemanticPayload = async () => {
+    if (!existingVector) return false;
+
+    if (
+      existingVector.semanticPayloadVersion ===
+        PRODUCT_VECTOR_SEMANTIC_PAYLOAD_VERSION &&
+      semanticProfileCurrent &&
+      !semanticSourceChanged
+    ) {
+      return false;
+    }
+
+    const profile = await getSemanticProfileForProduct(shop, product.id);
+    const terms =
+      profile?.parsed.terms ??
+      collectProductContextTerms(product, null);
+    const semanticPayload = buildProductVectorSemanticPayload(terms);
+
+    if (
+      existingVector.semanticPayloadVersion ===
+        semanticPayload.semanticPayloadVersion &&
+      existingVector.semanticPayloadHash === semanticPayload.semanticPayloadHash
+    ) {
+      return false;
+    }
+
+    await updateProductVectorPayloadByPointId({
+      pointId: existingRecord!.pointId,
+      payload: semanticPayload,
+    });
+    return true;
+  };
+  const refreshDeterministicProfile = async () => {
+    if (semanticSourceChanged) {
+      await replaceStaleSemanticProfileWithCurrentSource({
+        shop,
+        product,
+        sourceDocumentHash,
+      });
+      return true;
+    }
+    if (!semanticProfileCurrent) {
+      await ensureDeterministicProductProfile(shop, product);
+      return true;
+    }
+    return false;
+  };
 
   if (
     registryProduct &&
@@ -205,6 +375,9 @@ export async function indexProduct({
       shop, productId: product.id, handle: product.handle,
       title: product.title, documentHash,
     });
+    await refreshDeterministicProfile();
+    await syncExistingVectorSemanticPayload();
+    await syncExistingVectorSearchable(false);
     return {
       productId: product.id, handle: product.handle, title: product.title,
       action: "blocked",
@@ -284,6 +457,7 @@ export async function indexProduct({
   // not changed. Keeping a stale registry row marked INDEXED after uninstall,
   // cancellation, or billing suspension makes recovery/accounting misleading.
   if (!entitlement.active) {
+    const wasSearchable = Boolean(registryProduct?.searchable);
     await markIndexedProductBlocked({
       shop,
       productId: product.id,
@@ -294,6 +468,16 @@ export async function indexProduct({
         "SUBSCRIPTION_INACTIVE",
       hasVector: alreadyIndexed,
     });
+
+    await refreshDeterministicProfile();
+    await syncExistingVectorSemanticPayload();
+    await syncExistingVectorSearchable(false);
+    if (wasSearchable) {
+      await bumpProductSearchRevision({
+        shop,
+        semanticChanged: true,
+      });
+    }
 
     return {
       productId: product.id,
@@ -361,6 +545,9 @@ export async function indexProduct({
           hasVector: true,
         });
 
+        await refreshDeterministicProfile();
+        await syncExistingVectorSearchable(false);
+
         return {
           productId:
             product.id,
@@ -385,95 +572,73 @@ export async function indexProduct({
       }
     }
 
-    await upsertIndexedProduct({
-      shop,
-
-      productId:
-        product.id,
-
-      handle:
-        product.handle,
-
-      title:
-        product.title,
-
-      documentHash,
-    });
-
     const payloadNeedsRefresh =
-      existingVector.handle !==
-        product.handle ||
-      existingVector.title !==
-        product.title ||
-      (
-        product.priceRange !==
-          null &&
-        product.priceRange !==
-          undefined &&
-        (
-          existingVector
-            .minVariantPrice !==
-            product.priceRange.min ||
-          existingVector
-            .maxVariantPrice !==
-            product.priceRange.max ||
-          existingVector
-            .currencyCode !==
-            product.priceRange
-              .currencyCode
-        )
-      );
+      existingVectorMetadataNeedsRefresh(true);
 
-    if (
-      payloadNeedsRefresh
-    ) {
-      await updateProductVectorPayloadForShop({
-        shop,
+    const registryNeedsRefresh =
+      !registryProduct ||
+      registryProduct.handle !== product.handle ||
+      registryProduct.title !== product.title ||
+      registryProduct.status !== "INDEXED" ||
+      !Boolean(registryProduct.hasVector) ||
+      registryProduct.vectorStatus !== "READY" ||
+      !Boolean(registryProduct.searchable) ||
+      registryProduct.blockedReason !== null ||
+      registryProduct.documentHash !== documentHash;
 
-        productId:
-          product.id,
+    // Repair/upgrade the semantic source before re-publishing a previously
+    // hidden/stale vector. This is also the crash-recovery path for the
+    // two-phase vector publish below.
+    const profileRefreshed = await refreshDeterministicProfile();
+    const semanticPayloadRefreshed =
+      await syncExistingVectorSemanticPayload();
 
+    if (payloadNeedsRefresh) {
+      await updateProductVectorPayloadByPointId({
+        pointId: existingRecord!.pointId,
         payload: {
-          handle:
-            product.handle,
-
-          title:
-            product.title,
-
+          handle: product.handle,
+          title: product.title,
+          searchable: true,
           ...(product.priceRange
             ? {
-                minVariantPrice:
-                  product
-                    .priceRange
-                    .min,
-
-                maxVariantPrice:
-                  product
-                    .priceRange
-                    .max,
-
-                currencyCode:
-                  product
-                    .priceRange
-                    .currencyCode,
+                minVariantPrice: product.priceRange.min,
+                maxVariantPrice: product.priceRange.max,
+                currencyCode: product.priceRange.currencyCode,
               }
-            : {}),
+            : {
+                minVariantPrice: null,
+                maxVariantPrice: null,
+                currencyCode: "",
+              }),
         },
       });
     }
 
-    await ensureProductShopContext({
+    // Publish the DB registry only after the profile and Qdrant metadata are
+    // coherent. This is also the recovery path for a prior STAGING crash.
+    await upsertIndexedProduct({
       shop,
-      product,
+      productId: product.id,
+      handle: product.handle,
+      title: product.title,
+      documentHash,
+      vectorWritten: false,
+      touchSearchState:
+        registryNeedsRefresh ||
+        payloadNeedsRefresh ||
+        profileRefreshed ||
+        semanticPayloadRefreshed,
     });
 
-    // Render Transport Key khÃ´ng phá»¥ thuá»™c document hash.
-    // DÃ¹ embedding khÃ´ng Ä‘á»•i, SKU / barcode / vendor /
-    // productType / tags váº«n pháº£i Ä‘Æ°á»£c refresh.
-    await replaceRenderTransportKeysForProduct(
+    await bumpProductSearchRevision({
       shop,
-      product,
-    );
+      semanticChanged:
+        registryNeedsRefresh ||
+        profileRefreshed ||
+        semanticPayloadRefreshed,
+      catalogChanged: payloadNeedsRefresh,
+    });
 
     console.log(
       "[AI Search] Embedding unchanged, skipping:",
@@ -547,6 +712,8 @@ export async function indexProduct({
         hasVector:
           false,
       });
+
+      await refreshDeterministicProfile();
 
       console.log(
         "[AI Search] Product blocked by plan product limit:",
@@ -626,6 +793,20 @@ export async function indexProduct({
       hasVector: true,
     });
 
+    const profileRefreshed = await refreshDeterministicProfile();
+    const semanticPayloadRefreshed =
+      await syncExistingVectorSemanticPayload();
+    const payloadRefreshed = await syncExistingVectorMetadata(true);
+    await bumpProductSearchRevision({
+      shop,
+      semanticChanged:
+        profileRefreshed ||
+        semanticPayloadRefreshed ||
+        registryProduct?.handle !== product.handle ||
+        registryProduct?.title !== product.title,
+      catalogChanged: payloadRefreshed,
+    });
+
     console.log("[AI Search] Product vector refresh deferred; cached vector retained:", {
       shop,
       productId: product.id,
@@ -693,6 +874,25 @@ export async function indexProduct({
         alreadyIndexed,
     });
 
+    const profileRefreshed = await refreshDeterministicProfile();
+    const semanticPayloadRefreshed = alreadyIndexed
+      ? await syncExistingVectorSemanticPayload()
+      : false;
+    const payloadRefreshed = alreadyIndexed
+      ? await syncExistingVectorMetadata(true)
+      : false;
+    if (alreadyIndexed) {
+      await bumpProductSearchRevision({
+        shop,
+        semanticChanged:
+          profileRefreshed ||
+          semanticPayloadRefreshed ||
+          registryProduct?.handle !== product.handle ||
+          registryProduct?.title !== product.title,
+        catalogChanged: payloadRefreshed,
+      });
+    }
+
     console.log(
       "[AI Search] Product vector update blocked by quota:",
       {
@@ -739,6 +939,12 @@ export async function indexProduct({
 
   let vectorWriteSucceeded =
     false;
+  let preparedEmbeddingInput:
+    | Awaited<ReturnType<typeof prepareProductEmbeddingInput>>
+    | null = null;
+  let preparedSemanticTerms:
+    | ReturnType<typeof collectProductContextTerms>
+    | null = null;
 
   try {
     console.log(
@@ -746,12 +952,19 @@ export async function indexProduct({
       product.handle,
     );
 
-    const embeddingInput =
+    preparedEmbeddingInput =
       await prepareProductEmbeddingInput(
         document,
         searchLanguage,
         shop,
       );
+    const embeddingInput = preparedEmbeddingInput;
+    preparedSemanticTerms = collectProductContextTerms(
+      product,
+      embeddingInput.analysis,
+    );
+    const semanticPayload =
+      buildProductVectorSemanticPayload(preparedSemanticTerms);
 
     const logEmbeddingInput =
       process.env
@@ -860,13 +1073,17 @@ export async function indexProduct({
 
         documentHash,
 
-        searchable: true,
+        // Publish in two phases. The vector stays hidden until the registry,
+        // semantic profile and enrichment state are durable.
+        searchable: false,
 
         indexedAt:
           new Date().toISOString(),
 
         usageReservationId:
           reservation.id,
+
+        ...semanticPayload,
 
         ...(product.priceRange
           ? {
@@ -899,26 +1116,22 @@ export async function indexProduct({
       reservation,
     );
 
-    await upsertIndexedProduct({
+    // Stage the DB registry as non-searchable while the profile is being
+    // committed. This closes the old race where structured DB retrieval could
+    // observe a new registry state together with an old/missing profile.
+    await stageIndexedProductVectorUpdate({
       shop,
-
-      productId:
-        product.id,
-
-      handle:
-        product.handle,
-
-      title:
-        product.title,
-
+      productId: product.id,
+      handle: product.handle,
+      title: product.title,
       documentHash,
     });
 
-    await replaceProductShopContext({
+    await replaceProductShopContextWithTerms({
       shop,
-      product,
-      analysis:
-        embeddingInput.analysis,
+      productId: product.id,
+      analysis: embeddingInput.analysis,
+      terms: preparedSemanticTerms,
     });
 
     await updateIndexedProductEnrichmentState({
@@ -935,13 +1148,32 @@ export async function indexProduct({
           : null,
     });
 
-    // Product Ä‘Ã£ Ä‘Æ°á»£c index thÃ nh cÃ´ng.
-    // Táº¡o láº¡i cÃ¡c search transport signature dÃ¹ng cho
-    // native Section Rendering transport.
-    await replaceRenderTransportKeysForProduct(
+    // Native-render transport keys are derived from the updated semantic
+    // profile, so only the per-shop derived cache needs invalidation.
+    refreshDerivedRenderTransportForShop(shop);
+
+    // Phase 2 publish: expose Qdrant only after the authoritative DB profile
+    // is durable, then publish the DB registry. Advance the semantic revision
+    // only AFTER both stores are searchable; otherwise another process could
+    // rebuild the new revision while this product is still staged/hidden and
+    // keep an incomplete semantic cache until its safety TTL expires.
+    await updateProductVectorPayloadByPointId({
+      pointId,
+      payload: { searchable: true },
+    });
+
+    await upsertIndexedProduct({
       shop,
-      product,
-    );
+      productId: product.id,
+      handle: product.handle,
+      title: product.title,
+      documentHash,
+    });
+
+    await bumpProductSearchRevision({
+      shop,
+      semanticChanged: true,
+    });
 
     try {
       await commitProductEmbeddingUsage(
@@ -1002,44 +1234,107 @@ export async function indexProduct({
     if (
       vectorWriteSucceeded
     ) {
-      // The billable work and actual vector update already happened. Keep the
-      // reserved counters so retries cannot double-discount real usage. Make a
-      // best-effort repair of the registry; the next retry will hash-skip.
+      // The billable vector write already happened. Never expose the DB
+      // registry before the profile is repaired: structured retrieval reads the
+      // DB profile while vector retrieval reads Qdrant, so publication must
+      // remain fail-closed across both stores.
       try {
-        await upsertIndexedProduct({
+        await stageIndexedProductVectorUpdate({
           shop,
-
-          productId:
-            product.id,
-
-          handle:
-            product.handle,
-
-          title:
-            product.title,
-
+          productId: product.id,
+          handle: product.handle,
+          title: product.title,
           documentHash,
         });
-      } catch (
-        registryError
-      ) {
-        console.error(
-          "[AI Search] Post-vector registry repair failed:",
-          {
+      } catch (registryError) {
+        console.error("[AI Search] Post-vector staging repair failed:", {
+          shop,
+          productId: product.id,
+          error:
+            registryError instanceof Error
+              ? registryError.message
+              : String(registryError),
+        });
+      }
+
+      if (preparedEmbeddingInput && preparedSemanticTerms) {
+        try {
+          await replaceProductShopContextWithTerms({
             shop,
-
-            productId:
-              product.id,
-
+            productId: product.id,
+            analysis: preparedEmbeddingInput.analysis,
+            terms: preparedSemanticTerms,
+          });
+          await updateIndexedProductEnrichmentState({
+            shop,
+            productId: product.id,
+            sourceDocumentHash,
+            embeddingPipelineVersion: PRODUCT_EMBEDDING_PIPELINE_VERSION,
+            enrichmentVersion: PRODUCT_ENRICHMENT_VERSION,
+            enrichmentStatus: preparedEmbeddingInput.enrichmentStatus,
+            enrichmentLastError: preparedEmbeddingInput.enrichmentError,
+            enrichmentRetryAt:
+              preparedEmbeddingInput.enrichmentStatus === "FALLBACK"
+                ? new Date(Date.now() + ENRICHMENT_RETRY_DELAY_MS)
+                : null,
+          });
+          refreshDerivedRenderTransportForShop(shop);
+          await updateProductVectorPayloadByPointId({
+            pointId,
+            payload: { searchable: true },
+          });
+          await upsertIndexedProduct({
+            shop,
+            productId: product.id,
+            handle: product.handle,
+            title: product.title,
+            documentHash,
+          });
+        } catch (profileRepairError) {
+          // If any publication step fails, hide Qdrant again. The durable sync
+          // job will retry and the registry remains STAGING/non-searchable.
+          try {
+            await updateProductVectorPayloadByPointId({
+              pointId,
+              payload: { searchable: false },
+            });
+          } catch {
+            // Preserve the original post-processing error.
+          }
+          console.error("[AI Search] Post-vector semantic-profile repair failed:", {
+            shop,
+            productId: product.id,
             error:
-              registryError instanceof
-              Error
-                ? registryError.message
-                : String(
-                    registryError,
-                  ),
-          },
-        );
+              profileRepairError instanceof Error
+                ? profileRepairError.message
+                : String(profileRepairError),
+          });
+        }
+      } else {
+        try {
+          await updateProductVectorPayloadByPointId({
+            pointId,
+            payload: { searchable: false },
+          });
+        } catch {
+          // The next durable retry reconciles both stores.
+        }
+      }
+
+      try {
+        await bumpProductSearchRevision({
+          shop,
+          semanticChanged: true,
+        });
+      } catch (revisionError) {
+        console.error("[AI Search] Post-vector catalog revision bump failed:", {
+          shop,
+          productId: product.id,
+          error:
+            revisionError instanceof Error
+              ? revisionError.message
+              : String(revisionError),
+        });
       }
 
       try {

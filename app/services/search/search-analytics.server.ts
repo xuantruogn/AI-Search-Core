@@ -7,6 +7,10 @@ export type RankedSearchProduct = {
   handle: string;
   rank: number;
   score: number;
+  /** Best raw Qdrant cosine similarity before rule/rerank bonuses. */
+  vectorSimilarity?: number;
+  /** Raw cosine to the primary interpreted-query embedding. */
+  primaryVectorSimilarity?: number;
 };
 
 export type SearchAnalyticsDiagnostics = {
@@ -36,9 +40,43 @@ const EMPTY_CLUSTER_SIMILARITY = 0.82;
 export const ABNORMAL_QUERY_MIN_SEARCHES_EXCLUSIVE = 20;
 export const ABNORMAL_QUERY_MAX_CTR = 0.05;
 const MIN_RECURRING_SEARCHES = 1;
+const MAX_ANALYTICS_JSON_BYTES = 64 * 1024;
+const MAX_CONTEXT_JSON_BYTES = 32 * 1024;
 
 function normalizeQuery(query: string) {
   return query.replace(/\s+/g, " ").trim().toLocaleLowerCase("en-US");
+}
+
+function jsonBytes(value: string) {
+  return Buffer.byteLength(value, "utf8");
+}
+
+function boundedJson(value: unknown, maxBytes: number) {
+  if (value === null || value === undefined) return null;
+  const serialized = JSON.stringify(value);
+  if (jsonBytes(serialized) <= maxBytes) return serialized;
+
+  if (Array.isArray(value)) {
+    const compact: unknown[] = [];
+    for (const item of value) {
+      const next = JSON.stringify([...compact, item]);
+      if (jsonBytes(next) > maxBytes - 128) break;
+      compact.push(item);
+    }
+    return JSON.stringify(compact);
+  }
+
+  if (typeof value === "object") {
+    const compact: Record<string, unknown> = { _truncated: true };
+    for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+      const next = JSON.stringify({ ...compact, [key]: item });
+      if (jsonBytes(next) > maxBytes - 128) continue;
+      compact[key] = item;
+    }
+    return JSON.stringify(compact);
+  }
+
+  return JSON.stringify({ _truncated: true });
 }
 
 function hasMeaningfulString(value: unknown) {
@@ -168,11 +206,16 @@ export async function recordSearchQueryLog({
   const queryVectorJson = queryFingerprint
     ? JSON.stringify(queryFingerprint)
     : null;
-  const llmAnalysisJson = llmAnalysis ? JSON.stringify(llmAnalysis) : null;
-  const selectedContextJson = selectedContext
-    ? JSON.stringify(selectedContext)
-    : null;
-  const rankedProductsJson = JSON.stringify(compactProducts);
+  const llmAnalysisJson = boundedJson(
+    llmAnalysis,
+    MAX_ANALYTICS_JSON_BYTES,
+  );
+  const selectedContextJson = boundedJson(
+    selectedContext,
+    MAX_CONTEXT_JSON_BYTES,
+  );
+  const rankedProductsJson =
+    boundedJson(compactProducts, MAX_ANALYTICS_JSON_BYTES) ?? "[]";
   const serializationCodeMs = Date.now() - serializationStartedAt;
   const dbStartedAt = Date.now();
   const log = await db.aiSearchQueryLog.create({
@@ -414,7 +457,21 @@ export async function getMerchantSearchClusters(shop: string, days = 30) {
     where: { shop, createdAt: { gte: cutoff } },
     orderBy: { createdAt: "desc" },
     take: 2_000,
-    include: { clicks: { select: { id: true, productId: true } } },
+    select: {
+      id: true,
+      query: true,
+      normalizedQuery: true,
+      queryVectorJson: true,
+      llmAnalysisJson: true,
+      llmStatus: true,
+      rankedProductsJson: true,
+      resultCount: true,
+      topScore: true,
+      topCandidateScore: true,
+      vectorThreshold: true,
+      createdAt: true,
+      clicks: { select: { productId: true } },
+    },
   });
 
   const clusters: ClusterAccumulator[] = [];

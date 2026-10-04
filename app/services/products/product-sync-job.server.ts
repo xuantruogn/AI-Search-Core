@@ -141,6 +141,31 @@ export async function enqueueProductSyncJob({
 
   const gid = normalizeProductGid(productId);
 
+  // Shopify can emit a burst of create/update webhooks while the same product
+  // is edited. A PENDING job has not observed Shopify yet, so one job is enough:
+  // it will fetch the latest product snapshot when it runs. Never coalesce into
+  // PROCESSING work because that attempt may already have fetched an older
+  // snapshot; the later webhook must remain as a follow-up.
+  if (cleanTopic === "PRODUCTS_CREATE" || cleanTopic === "PRODUCTS_UPDATE") {
+    const pendingLiveStateJob = await db.aiSearchSyncJob.findFirst({
+      where: {
+        shop: cleanShop,
+        productId: gid,
+        topic: { in: ["PRODUCTS_CREATE", "PRODUCTS_UPDATE"] },
+        status: PRODUCT_SYNC_JOB_STATUS.pending,
+      },
+      orderBy: { id: "desc" },
+      select: { id: true },
+    });
+    if (pendingLiveStateJob) {
+      return {
+        created: false,
+        duplicate: true,
+        jobId: pendingLiveStateJob.id,
+      };
+    }
+  }
+
   if (
     cleanTopic === "REINDEX_PRODUCT" ||
     cleanTopic === "REINDEX_PRODUCT_CAPACITY" ||

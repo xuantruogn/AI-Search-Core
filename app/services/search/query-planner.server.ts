@@ -63,6 +63,19 @@ export function sourceProductTypeOwnsTarget(args: {
   const tokens = normalizeQueryText(args.query).split(" ").filter(Boolean);
   if (tokens.length === 0) return false;
 
+  // A catalog noun appearing only after a relation/context boundary is
+  // context, not automatically the requested product. Do this before the
+  // short-query fast path so phrases such as "working from home" do not turn
+  // PRODUCT_TYPE=Home into the target identity.
+  const contextualBoundaries = new Set([
+    "for", "with", "on", "at", "from", "using", "without", "while",
+    "when", "during", "about", "around", "because", "to",
+  ]);
+  const firstBoundary = tokens.findIndex((token) =>
+    contextualBoundaries.has(token),
+  );
+  if (firstBoundary >= 0 && args.start > firstBoundary) return false;
+
   // Short catalog-style queries are overwhelmingly direct noun phrases:
   // "black cardigan", "women navy jacket", "electric kettle", etc.
   if (tokens.length <= 6) return true;
@@ -84,13 +97,6 @@ export function sourceProductTypeOwnsTarget(args: {
 
   // If the identity appears before the first relation/context boundary, it is
   // still the requested product: "jacket for rain", "bag for commuting".
-  const contextualBoundaries = new Set([
-    "for", "with", "on", "at", "from", "using", "without", "while",
-    "when", "during", "about", "around", "because", "to",
-  ]);
-  const firstBoundary = tokens.findIndex((token) =>
-    contextualBoundaries.has(token),
-  );
   if (firstBoundary < 0 || args.start < firstBoundary) return true;
 
   // In a long need/action sentence, a catalog word appearing only inside the
@@ -122,9 +128,12 @@ export function isApostropheSuffixCatalogMatch(
   return raw.includes("'" + token);
 }
 
-async function buildUncachedPlan(shop: string, query: string): Promise<QueryPlan> {
+async function buildUncachedPlan(
+  shop: string,
+  query: string,
+  dictionary: Awaited<ReturnType<typeof getShopSearchDictionary>>,
+): Promise<QueryPlan> {
   const deterministic = parseDeterministicQuery(query);
-  const dictionary = await getShopSearchDictionary(shop);
   const normalizedQuery = normalizeQueryText(query);
   const complementaryRelation = isComplementaryRelationQuery(normalizedQuery);
   const complementarySpan = complementaryRelationSpan(normalizedQuery);
@@ -304,13 +313,31 @@ async function buildUncachedPlan(shop: string, query: string): Promise<QueryPlan
   }));
 
   const identityConstraints = byField("PRODUCT_TYPE");
+  const genericDiscoveryIdentities = new Set([
+    "apparel",
+    "clothing",
+    "fashion",
+    "gear",
+    "equipment",
+    "accessory",
+    "accessories",
+    "outfit",
+    "outfits",
+    "products",
+    "items",
+  ]);
+  const onlyGenericIdentity =
+    identityConstraints.length > 0 &&
+    identityConstraints.every((item) =>
+      genericDiscoveryIdentities.has(normalizeQueryText(item.value)),
+    );
   const hardIdentityIntersection =
     identityConstraints.length === 1 ||
     deterministic.relation === "ALL";
   const retrievalMode: QueryPlan["retrievalMode"] =
     complementaryRelation
       ? "COMPLEMENT"
-      : identityConstraints.length === 0 &&
+      : (identityConstraints.length === 0 || onlyGenericIdentity) &&
           (routed.route === "LIGHT_LLM" || routed.route === "FULL_LLM")
         ? "DISCOVERY"
         : "DIRECT";
@@ -396,7 +423,7 @@ export async function buildQueryPlan(shop: string, query: string): Promise<Query
   if (cached && cached.expiresAt > Date.now()) return cached.plan;
   const pending = pendingPlans.get(key);
   if (pending) return pending;
-  const task = buildUncachedPlan(shop, query);
+  const task = buildUncachedPlan(shop, query, dictionary);
   pendingPlans.set(key, task);
   try {
     const plan = await task;

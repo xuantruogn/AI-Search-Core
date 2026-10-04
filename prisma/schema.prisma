@@ -430,6 +430,8 @@ model AiSearchSyncJob {
   policyVersion Int?
 
   @@index([status, createdAt])
+  @@index([status, updatedAt], map: "idx_sync_job_status_updated")
+  @@index([status, processedAt], map: "idx_sync_job_status_processed")
   @@index([shop, productId])
 }
 
@@ -513,18 +515,22 @@ model AiSearchSubscription {
 }
 
 model AiSearchShopSettings {
-  searchLanguage            String?  @db.VarChar(32)
-  shop                      String   @id @db.VarChar(191)
-  aiSearchEnabled           Boolean  @default(true)
-  customDataModeEnabled     Boolean  @default(false)
-  fallbackEnabled           Boolean  @default(true)
+  searchLanguage            String?   @db.VarChar(32)
+  shop                      String    @id @db.VarChar(191)
+  aiSearchEnabled           Boolean   @default(true)
+  customDataModeEnabled     Boolean   @default(false)
+  fallbackEnabled           Boolean   @default(true)
   productLimitOverride      Int?
   searchLimitOverride       Int?
   vectorUpdateLimitOverride Int?
-  resultLimit               Int      @default(20)
-  createdAt                 DateTime @default(now())
-  updatedAt                 DateTime @updatedAt
-  productPolicyVersion      Int      @default(0)
+  resultLimit               Int       @default(20)
+  createdAt                 DateTime  @default(now())
+  updatedAt                 DateTime  @updatedAt
+  productPolicyVersion      Int       @default(0)
+  catalogRevision           BigInt    @default(0)
+  catalogUpdatedAt          DateTime?
+  semanticRevision          BigInt    @default(0)
+  semanticUpdatedAt         DateTime?
 
   shopRecord AiSearchShop @relation(fields: [shop], references: [shop], onDelete: Cascade)
 }
@@ -573,6 +579,7 @@ model AiSearchUsageEvent {
 
   @@index([shop, type, createdAt])
   @@index([periodId, createdAt])
+  @@index([createdAt], map: "idx_usage_event_created_at")
 }
 
 model AiSearchQueryLog {
@@ -604,6 +611,7 @@ model AiSearchQueryLog {
   @@index([shop, createdAt])
   @@index([shop, normalizedQuery, createdAt])
   @@index([shop, resultCount, createdAt])
+  @@index([createdAt], map: "idx_query_log_created_at")
 }
 
 model AiSearchQueryClick {
@@ -640,9 +648,7 @@ model AiSearchUsageReservation {
   shopRecord AiSearchShop        @relation(fields: [shop], references: [shop], onDelete: Cascade)
   period     AiSearchUsagePeriod @relation(fields: [periodId], references: [id], onDelete: Cascade)
 
-  @@index([shop, status, createdAt])
-  @@index([status, createdAt])
-  @@index([shop, status, updatedAt])
+  @@index([shop], map: "idx_usage_reservation_shop")
   @@index([status, updatedAt])
   @@index([status, resolvedAt])
   @@index([periodId, status])
@@ -673,34 +679,23 @@ model AiSearchIndexedProduct {
   createdAt                DateTime  @default(now())
   updatedAt                DateTime  @updatedAt
 
-  // Billing V2 compatibility/cache fields. Runtime search eligibility remains
-  // governed by searchable/vectorStatus above.
-  isIndexed        Boolean   @default(false)
-  isSearchable     Boolean   @default(false)
-  excludedReason   String?   @db.VarChar(64)
-  embeddingModel   String?   @db.VarChar(64)
-  embeddingVersion Int       @default(1)
-  contentHash      String?   @db.VarChar(64)
-  lastEmbeddedAt   DateTime?
-  lastSyncedAt     DateTime?
-
   shopRecord      AiSearchShop                    @relation(fields: [shop], references: [shop], onDelete: Cascade)
   semanticProfile AiSearchProductSemanticProfile?
 
   @@unique([shop, productId])
   @@index([shop, status])
-  @@index([shop, isIndexed])
-  @@index([shop, isSearchable])
-  @@index([shop, hasVector])
-  @@index([shop, searchable])
+  @@index([shop, searchable, hasVector, productId], map: "idx_indexed_product_active")
+  @@index([shop, hasVector, updatedAt, id], map: "idx_indexed_product_catalog_page")
   @@index([shop, vectorStatus])
   @@index([shop, handle])
   @@index([shop, lastCatalogSeenAt])
   @@index([shop, enrichmentStatus, enrichmentRetryAt], map: "idx_enrich_retry")
+  @@index([enrichmentStatus, enrichmentRetryAt, id], map: "idx_enrich_due_global")
+  @@index([enrichmentVersion, id], map: "idx_enrich_version_global")
 }
 
-// Background initial catalog sync. One shop can keep history, but only one
-// PENDING/PROCESSING job is created by the service at a time.
+// Background catalog sync. One shop keeps history and may have at most one
+// active PROCESSING scan plus one coalesced PENDING follow-up refresh.
 model AiSearchCatalogSyncJob {
   id                Int       @id @default(autoincrement())
   shop              String    @db.VarChar(191)
@@ -729,6 +724,7 @@ model AiSearchCatalogSyncJob {
   @@index([shop, status, createdAt])
   @@index([status, createdAt])
   @@index([status, updatedAt])
+  @@index([status, processedAt], map: "idx_catalog_job_status_processed")
 }
 
 model ShopThemeConfig {
@@ -799,7 +795,7 @@ model AiSearchProductSemanticProfile {
   id            Int      @id @default(autoincrement())
   shop          String   @db.VarChar(191)
   productId     String   @db.VarChar(64)
-  schemaVersion Int      @default(1)
+  schemaVersion Int      @default(2)
   profile       Json
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
@@ -808,56 +804,7 @@ model AiSearchProductSemanticProfile {
 
   @@unique([shop, productId])
   @@index([shop, updatedAt])
-}
-
-model AiSearchRenderTransportKey {
-  id Int @id @default(autoincrement())
-
-  shop      String @db.VarChar(191)
-  productId String @db.VarChar(64)
-
-  /**
-   * Loại signature.
-   * VARIANT_SKU
-   * VARIANT_BARCODE
-   * TITLE_ONLY
-   * TITLE_VENDOR
-   * TITLE_PRODUCT_TYPE
-   * TITLE_VENDOR_PRODUCT_TYPE
-   * TITLE_VENDOR_PRODUCT_TYPE_TAG
-   */
-  kind String @db.VarChar(64)
-
-  /**
-   * Giá trị canonical dùng để so unique giữa các product.
-   * Ví dụ:
-   * selling plans ski wax\u001fadd-get-d-test\u001faccessories
-   */
-  signature String @db.VarChar(400)
-
-  /**
-   * Shopify Storefront Search clause đã compile sẵn.
-   * Ví dụ:
-   * (title:"Selling Plans Ski Wax"
-   * AND vendor:"add-get-d-test"
-   * AND product_type:"accessories")
-   */
-  clause String @db.Text
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  @@unique([shop, productId, kind, signature])
-  /**
-   * Runtime dùng index này để hỏi:
-   * signature X thuộc bao nhiêu product?
-   * Nếu đúng 1 owner => safe transport key.
-   */
-  @@index([shop, kind, signature])
-  /**
-   * Lấy toàn bộ candidate key của một AI product.
-   */
-  @@index([shop, productId])
+  @@index([schemaVersion, id], map: "idx_semantic_profile_version_id")
 }
 
 model AiSearchQuotaGrant {
@@ -892,6 +839,7 @@ model AiSearchAdminAuditLog {
 
   @@index([targetShop, createdAt])
   @@index([actorShop, createdAt])
+  @@index([createdAt], map: "idx_admin_audit_created_at")
 }
 
 model AiSearchApiUsageEvent {
@@ -917,6 +865,29 @@ model AiSearchApiUsageEvent {
   @@index([shop, createdAt])
   @@index([provider, createdAt])
   @@index([model, createdAt])
+  @@index([createdAt], map: "idx_api_usage_created_at")
+}
+
+model AiSearchApiUsageDaily {
+  id                  Int      @id @default(autoincrement())
+  day                 DateTime @db.Date
+  shop                String   @db.VarChar(191)
+  provider            String   @db.VarChar(64)
+  operation           String   @db.VarChar(64)
+  model               String   @db.VarChar(191)
+  requestCount        Int      @default(0)
+  inputTokens         BigInt   @default(0)
+  cachedInputTokens   BigInt   @default(0)
+  outputTokens        BigInt   @default(0)
+  totalTokens         BigInt   @default(0)
+  estimatedCostMicros BigInt   @default(0)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  @@unique([day, shop, provider, operation, model], map: "uq_api_usage_daily")
+  @@index([shop, day], map: "idx_api_usage_daily_shop_day")
+  @@index([provider, day], map: "idx_api_usage_daily_provider_day")
+  @@index([day], map: "idx_api_usage_daily_day")
 }
 
 model DevUser {
@@ -969,6 +940,7 @@ model DevLoginChallenge {
   user DevUser @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId, expiresAt])
+  @@index([expiresAt], map: "idx_dev_login_challenge_expires")
 }
 
 model DevAuthThrottle {
@@ -980,6 +952,7 @@ model DevAuthThrottle {
   updatedAt    DateTime  @updatedAt
 
   @@index([kind, blockedUntil])
+  @@index([updatedAt], map: "idx_dev_auth_throttle_updated")
 }
 
 model DevAuditLog {

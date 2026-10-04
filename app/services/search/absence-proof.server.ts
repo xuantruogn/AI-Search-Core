@@ -3,9 +3,15 @@ import { PRODUCT_ENRICHMENT_VERSION } from "../products/product-embedding-input.
 import type { QueryConstraint, QueryPlan } from "./query-plan.server";
 import { normalizeQueryText } from "./deterministic-query-parser.server";
 import {
+  countSemanticProductsForKind,
   findSemanticProductIds,
-  loadShopSemanticRows,
+  semanticPayloadToken,
 } from "./product-semantic-profile.server";
+import {
+  countProductsBySemanticKind,
+  countProductsMatchingSemanticGroups,
+  getSemanticPayloadCoverage,
+} from "./vector-store.server";
 
 export type AbsenceProofStatus =
   | "CERTAIN_NO_RESULT"
@@ -98,29 +104,33 @@ async function exactMatches(args: {
   });
 }
 
-async function canonicalCoverage(shop: string, searchableIds: string[]) {
-  if (!searchableIds.length) return true;
-
-  const rows = await loadShopSemanticRows(shop);
-  const covered = new Set(
-    rows
-      .filter((row) => row.kind === "CANONICAL_PRODUCT_TYPE")
-      .map((row) => row.productId),
+async function canonicalCoverage(shop: string, searchableCount: number) {
+  if (searchableCount === 0) return true;
+  const covered = await countSemanticProductsForKind(
+    shop,
+    "CANONICAL_PRODUCT_TYPE",
   );
-  return searchableIds.every((productId) => covered.has(productId));
+  return covered === searchableCount;
 }
-async function enrichmentCoverage(shop: string, productIds: string[]) {
-  if (!productIds.length) return true;
+
+async function enrichmentCoverage(
+  shop: string,
+  productIds: string[] | null,
+  searchableCount: number,
+) {
+  const expected = productIds?.length ?? searchableCount;
+  if (expected === 0) return true;
   const count = await db.aiSearchIndexedProduct.count({
     where: {
       shop,
-      productId: { in: productIds },
+      ...(productIds ? { productId: { in: productIds } } : {}),
       searchable: true,
+      hasVector: true,
       enrichmentStatus: "ENRICHED",
       enrichmentVersion: PRODUCT_ENRICHMENT_VERSION,
     },
   });
-  return count === productIds.length;
+  return count === expected;
 }
 
 export async function proveNoResult(args: {
@@ -129,12 +139,28 @@ export async function proveNoResult(args: {
   phase: "RAW" | "FINAL";
 }): Promise<AbsenceProof> {
   const startedAt = Date.now();
-  const indexed = await db.aiSearchIndexedProduct.findMany({
+  const identities = must(args.plan.identities);
+  const closedWorldConstraints = proofConstraints(args.plan);
+
+  // Most searches contain no closed-world fact that can safely prove absence.
+  // Exit before touching the catalog/profile cache instead of scanning it twice
+  // (RAW + FINAL) for every ordinary semantic query.
+  if (identities.length === 0 && closedWorldConstraints.length === 0) {
+    return {
+      status: "UNKNOWN",
+      phase: args.phase,
+      reason: "NO_CLOSED_WORLD_CONSTRAINT",
+      durationMs: Date.now() - startedAt,
+      candidateCount: null,
+      coverageComplete: false,
+      evidence: [],
+    };
+  }
+
+  const searchableCount = await db.aiSearchIndexedProduct.count({
     where: { shop: args.shop, searchable: true, hasVector: true },
-    select: { productId: true },
   });
-  const searchableIds = indexed.map((row) => row.productId);
-  if (!searchableIds.length) {
+  if (searchableCount === 0) {
     return {
       status: "CERTAIN_NO_RESULT",
       phase: args.phase,
@@ -146,13 +172,136 @@ export async function proveNoResult(args: {
     };
   }
 
-  let candidates = new Set(searchableIds);
   const evidence: string[] = [];
-  const identities = must(args.plan.identities);
-  const identityCoverageComplete = await canonicalCoverage(args.shop, searchableIds);
+
+  let semanticPayloadCoverageComplete = false;
+  try {
+    const payloadCoverage = await getSemanticPayloadCoverage(args.shop);
+    semanticPayloadCoverageComplete =
+      payloadCoverage.complete &&
+      payloadCoverage.registryCount === searchableCount;
+  } catch {
+    // The JSON semantic profile remains the authoritative fallback. Absence
+    // proof must degrade to UNKNOWN/fallback work rather than fail search.
+  }
+
+  const identityCoverageComplete = identities.length
+    ? semanticPayloadCoverageComplete
+      ? (await countProductsBySemanticKind({
+          shop: args.shop,
+          kind: "CANONICAL_PRODUCT_TYPE",
+        })) === searchableCount
+      : await canonicalCoverage(args.shop, searchableCount)
+    : true;
+  const currentEnrichmentComplete = identities.length
+    ? await enrichmentCoverage(args.shop, null, searchableCount)
+    : true;
   const identityProofComplete =
     identityCoverageComplete &&
+    currentEnrichmentComplete &&
     identities.every((identity) => identity.confidence >= 0.99);
+
+  // When every searchable vector carries the current semantic payload, Qdrant
+  // can prove intersections directly with indexed keyword filters. This avoids
+  // materializing the shop's entire JSON semantic catalog just to answer an
+  // exact closed-world question. Any Qdrant failure falls through to the
+  // authoritative JSON path below.
+  if (semanticPayloadCoverageComplete) {
+    try {
+      const groups: string[][] = [];
+      let candidateCount = searchableCount;
+      let globalEnrichmentComplete: boolean | null =
+        identities.length > 0 ? currentEnrichmentComplete : null;
+
+      for (const identity of identities) {
+        const value = normalized(identity);
+        groups.push(
+          ["CANONICAL_PRODUCT_TYPE", "PRODUCT_TYPE", "ALIAS", "CATEGORY"]
+            .map((kind) => semanticPayloadToken(kind, value))
+            .filter(Boolean),
+        );
+        candidateCount = await countProductsMatchingSemanticGroups({
+          shop: args.shop,
+          groups,
+        });
+        evidence.push(`identity:${value}=${candidateCount}`);
+        if (candidateCount === 0) {
+          return {
+            status: identityProofComplete ? "CERTAIN_NO_RESULT" : "UNKNOWN",
+            phase: args.phase,
+            reason: identityProofComplete
+              ? "IDENTITY_INTERSECTION_EMPTY"
+              : "IDENTITY_COVERAGE_INCOMPLETE",
+            durationMs: Date.now() - startedAt,
+            candidateCount: 0,
+            coverageComplete: identityProofComplete,
+            evidence,
+          };
+        }
+      }
+
+      for (const item of closedWorldConstraints) {
+        let coverageComplete = true;
+        if (item.requiresEnrichment) {
+          if (globalEnrichmentComplete === null) {
+            globalEnrichmentComplete = await enrichmentCoverage(
+              args.shop,
+              null,
+              searchableCount,
+            );
+          }
+          coverageComplete = globalEnrichmentComplete;
+        }
+
+        const value = normalized(item.constraint);
+        groups.push(
+          item.kinds
+            .map((kind) => semanticPayloadToken(kind, value))
+            .filter(Boolean),
+        );
+        candidateCount = await countProductsMatchingSemanticGroups({
+          shop: args.shop,
+          groups,
+        });
+        evidence.push(`${item.label}:${value}=${candidateCount}`);
+
+        if (candidateCount === 0) {
+          return {
+            status: coverageComplete ? "CERTAIN_NO_RESULT" : "UNKNOWN",
+            phase: args.phase,
+            reason: coverageComplete
+              ? `${item.label.toUpperCase()}_INTERSECTION_EMPTY`
+              : `${item.label.toUpperCase()}_COVERAGE_INCOMPLETE`,
+            durationMs: Date.now() - startedAt,
+            candidateCount: 0,
+            coverageComplete,
+            evidence,
+          };
+        }
+      }
+
+      return {
+        status: groups.length > 0 ? "HAS_CANDIDATES" : "UNKNOWN",
+        phase: args.phase,
+        reason: groups.length > 0
+          ? "PROVEN_CANDIDATE_SET_NON_EMPTY"
+          : "NO_CLOSED_WORLD_CONSTRAINT",
+        durationMs: Date.now() - startedAt,
+        candidateCount: groups.length > 0 ? candidateCount : null,
+        coverageComplete:
+          identities.length > 0 ? identityProofComplete : true,
+        evidence,
+      };
+    } catch (error) {
+      evidence.length = 0;
+      console.warn("[AI Search][ABSENCE PROOF] semantic payload fallback", {
+        shop: args.shop,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  let candidates: Set<string> | null = null;
 
   for (const identity of identities) {
     const matches = await exactMatches({
@@ -160,34 +309,35 @@ export async function proveNoResult(args: {
       kinds: ["CANONICAL_PRODUCT_TYPE", "PRODUCT_TYPE", "ALIAS", "CATEGORY"],
       value: normalized(identity),
     });
-    candidates = intersect(candidates, matches);
+    candidates = candidates ? intersect(candidates, matches) : matches;
     evidence.push(`identity:${normalized(identity)}=${matches.size}`);
-  }
-  if (identities.length && candidates.size === 0) {
-    return {
-      status: identityProofComplete ? "CERTAIN_NO_RESULT" : "UNKNOWN",
-      phase: args.phase,
-      reason: identityProofComplete
-        ? "IDENTITY_INTERSECTION_EMPTY"
-        : "IDENTITY_COVERAGE_INCOMPLETE",
-      durationMs: Date.now() - startedAt,
-      candidateCount: 0,
-      coverageComplete: identityProofComplete,
-      evidence,
-    };
+    if (candidates.size === 0) {
+      return {
+        status: identityProofComplete ? "CERTAIN_NO_RESULT" : "UNKNOWN",
+        phase: args.phase,
+        reason: identityProofComplete
+          ? "IDENTITY_INTERSECTION_EMPTY"
+          : "IDENTITY_COVERAGE_INCOMPLETE",
+        durationMs: Date.now() - startedAt,
+        candidateCount: 0,
+        coverageComplete: identityProofComplete,
+        evidence,
+      };
+    }
   }
 
-  for (const item of proofConstraints(args.plan)) {
-    const candidateIds = [...candidates];
+  for (const item of closedWorldConstraints) {
+    const candidateIds = candidates ? [...candidates] : null;
     const coverageComplete = item.requiresEnrichment
-      ? await enrichmentCoverage(args.shop, candidateIds)
-      : identityCoverageComplete;
+      ? await enrichmentCoverage(args.shop, candidateIds, searchableCount)
+      : true;
     const matches = await exactMatches({
       shop: args.shop,
       kinds: item.kinds,
       value: normalized(item.constraint),
     });
     evidence.push(`${item.label}:${normalized(item.constraint)}=${matches.size}`);
+
     if (matches.size === 0) {
       return {
         status: coverageComplete ? "CERTAIN_NO_RESULT" : "UNKNOWN",
@@ -201,12 +351,15 @@ export async function proveNoResult(args: {
         evidence,
       };
     }
-    candidates = intersect(candidates, matches);
+
+    candidates = candidates ? intersect(candidates, matches) : matches;
     if (candidates.size === 0) {
       return {
         status: coverageComplete ? "CERTAIN_NO_RESULT" : "UNKNOWN",
         phase: args.phase,
-        reason: coverageComplete ? "MUST_INTERSECTION_EMPTY" : "MUST_COVERAGE_INCOMPLETE",
+        reason: coverageComplete
+          ? "MUST_INTERSECTION_EMPTY"
+          : "MUST_COVERAGE_INCOMPLETE",
         durationMs: Date.now() - startedAt,
         candidateCount: 0,
         coverageComplete,
@@ -214,15 +367,17 @@ export async function proveNoResult(args: {
       };
     }
   }
+
   return {
-    status: candidates.size < searchableIds.length ? "HAS_CANDIDATES" : "UNKNOWN",
+    status: candidates ? "HAS_CANDIDATES" : "UNKNOWN",
     phase: args.phase,
-    reason: candidates.size < searchableIds.length
+    reason: candidates
       ? "PROVEN_CANDIDATE_SET_NON_EMPTY"
       : "NO_CLOSED_WORLD_CONSTRAINT",
     durationMs: Date.now() - startedAt,
-    candidateCount: candidates.size,
-    coverageComplete: identityCoverageComplete,
+    candidateCount: candidates?.size ?? null,
+    coverageComplete:
+      identities.length > 0 ? identityProofComplete : true,
     evidence,
   };
 }

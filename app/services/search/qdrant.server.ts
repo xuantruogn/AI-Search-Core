@@ -84,7 +84,7 @@ function payloadIndexDataType(value: unknown): string | null {
 }
 
 async function ensureKeywordPayloadIndex(
-  fieldName: "shop" | "productId",
+  fieldName: "shop" | "productId" | "semanticTerms" | "semanticKinds",
   existingSchema: unknown,
 ) {
   if (existingSchema) {
@@ -115,6 +115,58 @@ async function ensureKeywordPayloadIndex(
     if (!refreshed.payload_schema?.[fieldName]) throw error;
   }
 
+  console.log(`[AI Search] Qdrant payload index ready: ${fieldName}`);
+}
+
+async function ensureIntegerPayloadIndex(
+  fieldName: "semanticPayloadVersion",
+  existingSchema: unknown,
+) {
+  if (existingSchema) {
+    const dataType = payloadIndexDataType(existingSchema);
+    if (dataType === "integer") return;
+    throw new Error(
+      `Qdrant payload index ${fieldName} has incompatible type ${dataType ?? "unknown"}; expected integer`,
+    );
+  }
+
+  const qdrant = getQdrantClient();
+  console.log(`[AI Search] Creating Qdrant payload index: ${fieldName}`);
+  try {
+    await qdrant.createPayloadIndex(QDRANT_COLLECTION, {
+      field_name: fieldName,
+      field_schema: "integer",
+    });
+  } catch (error) {
+    const refreshed = await qdrant.getCollection(QDRANT_COLLECTION);
+    if (!refreshed.payload_schema?.[fieldName]) throw error;
+  }
+  console.log(`[AI Search] Qdrant payload index ready: ${fieldName}`);
+}
+
+async function ensureBooleanPayloadIndex(
+  fieldName: "searchable" | "semanticPayloadComplete",
+  existingSchema: unknown,
+) {
+  if (existingSchema) {
+    const dataType = payloadIndexDataType(existingSchema);
+    if (dataType === "bool" || dataType === "boolean") return;
+    throw new Error(
+      `Qdrant payload index ${fieldName} has incompatible type ${dataType ?? "unknown"}; expected bool`,
+    );
+  }
+
+  const qdrant = getQdrantClient();
+  console.log(`[AI Search] Creating Qdrant payload index: ${fieldName}`);
+  try {
+    await qdrant.createPayloadIndex(QDRANT_COLLECTION, {
+      field_name: fieldName,
+      field_schema: "bool",
+    });
+  } catch (error) {
+    const refreshed = await qdrant.getCollection(QDRANT_COLLECTION);
+    if (!refreshed.payload_schema?.[fieldName]) throw error;
+  }
   console.log(`[AI Search] Qdrant payload index ready: ${fieldName}`);
 }
 
@@ -155,6 +207,17 @@ async function ensureProductCollectionFresh() {
   await Promise.all([
     ensureKeywordPayloadIndex("shop", payloadSchema.shop),
     ensureKeywordPayloadIndex("productId", payloadSchema.productId),
+    ensureKeywordPayloadIndex("semanticTerms", payloadSchema.semanticTerms),
+    ensureKeywordPayloadIndex("semanticKinds", payloadSchema.semanticKinds),
+    ensureIntegerPayloadIndex(
+      "semanticPayloadVersion",
+      payloadSchema.semanticPayloadVersion,
+    ),
+    ensureBooleanPayloadIndex("searchable", payloadSchema.searchable),
+    ensureBooleanPayloadIndex(
+      "semanticPayloadComplete",
+      payloadSchema.semanticPayloadComplete,
+    ),
   ]);
   ensuredAt = Date.now();
 

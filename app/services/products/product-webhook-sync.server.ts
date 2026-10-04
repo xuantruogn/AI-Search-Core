@@ -4,7 +4,10 @@ import {
   type ProductIndexReason,
 } from "./product-indexer.server";
 
-import { deleteProductVectorForShop } from "../search/vector-store.server";
+import {
+  deleteProductVectorForShop,
+  updateProductVectorSearchabilityForShop,
+} from "../search/vector-store.server";
 import { ensureProductCollection } from "../search/qdrant.server";
 
 import { normalizeProductGid } from "./product-id.server";
@@ -23,8 +26,9 @@ import { enqueueCatalogRefresh } from "../catalog/catalog-sync-job.server";
 import { kickCatalogSyncQueue } from "../catalog/catalog-sync-queue.server";
 
 import {
-  deleteProductThemeSearchTransportKeys,
+  invalidateDerivedProductSearchCaches,
 } from "../theme/theme-search-transport-key.server";
+import { bumpSearchSemanticRevision } from "../search/search-catalog-revision.server";
 
 export { normalizeProductGid } from "./product-id.server";
 
@@ -133,9 +137,9 @@ async function recordProductSyncOutcome({
  * Draft, archived, unpublished, or temporarily missing storefront products
  * retain their cached vector and are marked non-searchable elsewhere.
  *
- * Important:
- * AiSearchRenderTransportKey currently has no Prisma relation/cascade to
- * AiSearchIndexedProduct, so its rows must be deleted explicitly here.
+ * Native-render transport keys are derived from the semantic profile and are
+ * never persisted separately. The cleanup helper only invalidates the
+ * per-shop derived transport cache after a hard delete.
  */
 async function deleteProductFromAiIndex({
   shop,
@@ -144,56 +148,33 @@ async function deleteProductFromAiIndex({
   shop: string;
   productId: string;
 }) {
-  // ----------------------------------------------------------
-  // 1. Remove semantic-search vector.
-  // ----------------------------------------------------------
+  // Fail closed before touching Qdrant. If the vector delete or a later DB
+  // operation fails, the registry already prevents this product from being
+  // returned by search.
+  await markIndexedProductUnpublished(shop, productId);
+  invalidateDerivedProductSearchCaches(shop, productId);
+  await bumpSearchSemanticRevision(shop);
 
+  await updateProductVectorSearchabilityForShop({
+    shop,
+    productIds: [productId],
+    searchable: false,
+  });
+
+  // Hard delete is authoritative only for products/delete. Once the point is
+  // non-searchable on both sources of truth, remove Qdrant and then the registry
+  // row (semantic profile cascades from IndexedProduct).
   await deleteProductVectorForShop({
     shop,
     productId,
   });
-
-  // ----------------------------------------------------------
-  // 2. Remove indexed-product registry.
-  //
-  // Context terms that are related to AiSearchIndexedProduct can
-  // continue using their existing cascade/lifecycle behavior.
-  // ----------------------------------------------------------
 
   await removeIndexedProduct(
     shop,
     productId,
   );
 
-  // ----------------------------------------------------------
-  // 3. Remove native-render transport signatures.
-  //
-  // This MUST be explicit because AiSearchRenderTransportKey
-  // currently has no relation/cascade to AiSearchIndexedProduct.
-  //
-  // Otherwise a deleted product could remain an "owner" of a
-  // signature and incorrectly make another product appear
-  // non-unique during transport-key resolution.
-  // ----------------------------------------------------------
-
-  const deletedTransportKeys =
-    await deleteProductThemeSearchTransportKeys({
-      shop,
-      productId,
-    });
-
-  if (
-    deletedTransportKeys > 0
-  ) {
-    console.log(
-      "[AI Search] Product render transport keys deleted:",
-      {
-        shop,
-        productId,
-        deletedTransportKeys,
-      },
-    );
-  }
+  invalidateDerivedProductSearchCaches(shop, productId);
 
   // ----------------------------------------------------------
   // 4. Commercial/usage lifecycle.
@@ -308,8 +289,16 @@ export async function syncProductFromWebhook({
     );
 
   if (!product) {
-    await markIndexedProductUnpublished(shop, gid);
-    await deleteProductThemeSearchTransportKeys({ shop, productId: gid });
+    const unpublishedRows = await markIndexedProductUnpublished(shop, gid);
+    await updateProductVectorSearchabilityForShop({
+      shop,
+      productIds: [gid],
+      searchable: false,
+    });
+    invalidateDerivedProductSearchCaches(shop, gid);
+    if (unpublishedRows > 0) {
+      await bumpSearchSemanticRevision(shop);
+    }
 
     console.log(
       "[AI Search] Product removed from AI Search:",

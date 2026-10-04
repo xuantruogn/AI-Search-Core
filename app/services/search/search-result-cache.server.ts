@@ -5,11 +5,14 @@ import {
   QUERY_PARSER_VERSION,
   QUERY_ROUTER_VERSION,
 } from "./query-plan.server";
+import { getSearchCatalogRevisionCached } from "./search-catalog-revision.server";
 
 export interface CachedRankedProduct {
   productId: string;
   handle: string;
   score: number;
+  vectorSimilarity?: number;
+  primaryVectorSimilarity?: number;
 }
 
 export interface CachedSearchResult {
@@ -37,7 +40,7 @@ const MIN_TTL_MS = 60 * 1000;
 const DEFAULT_QUERY_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const MAX_RECEIPT_TTL_MS = 24 * 60 * 60 * 1000;
 const FULL_SEARCH_CACHE_PIPELINE_VERSION =
-  "full-search-cache-v47-grounded-leaf-recall-2026-10-02";
+  "full-search-cache-v61-sparse-context-cutoff-2026-10-04";
 
 export type CachedSearchSortIntent =
   | "RELEVANCE"
@@ -56,8 +59,7 @@ export interface SearchQueryCacheMetadata {
   shopifyShopId: string | null;
   searchLanguage: string | null;
   productPolicyVersion: number;
-  productCount: number;
-  searchableCount: number;
+  catalogRevision: string;
   catalogUpdatedAt: string | null;
   settingsUpdatedAt: string | null;
   requestVariant: string;
@@ -100,6 +102,16 @@ function normalizeRankedProducts(products: CachedRankedProduct[]) {
       productId,
       handle,
       score: Number.isFinite(product.score) ? product.score : 0,
+      vectorSimilarity:
+        typeof product.vectorSimilarity === "number" &&
+        Number.isFinite(product.vectorSimilarity)
+          ? product.vectorSimilarity
+          : undefined,
+      primaryVectorSimilarity:
+        typeof product.primaryVectorSimilarity === "number" &&
+        Number.isFinite(product.primaryVectorSimilarity)
+          ? product.primaryVectorSimilarity
+          : undefined,
     });
   }
   return result;
@@ -145,12 +157,12 @@ function currentSearchPipelineSignature() {
     QUERY_PARSER_VERSION,
     QUERY_ROUTER_VERSION,
     process.env.AI_SEARCH_CANDIDATE_LIMIT?.trim() || "500",
-    process.env.AI_SEARCH_QDRANT_HEADROOM_RATIO?.trim() || "1.5",
+    process.env.AI_SEARCH_QDRANT_HEADROOM_RATIO?.trim() || "1",
     process.env.AI_SEARCH_VECTOR_SCORE_THRESHOLD?.trim() || "0.35",
     process.env.AI_SEARCH_VECTOR_RELATIVE_SCORE_RATIO?.trim() || "default",
     process.env.AI_SEARCH_DISCOVERY_VECTOR_RELATIVE_SCORE_RATIO?.trim() || "0.88",
     process.env.AI_SEARCH_DISCOVERY_MIN_RECALL_RESULTS?.trim() || "8",
-    process.env.AI_SEARCH_NO_EVIDENCE_MIN_TOP_SCORE?.trim() || "0.45",
+    process.env.AI_SEARCH_NO_EVIDENCE_MIN_TOP_SCORE?.trim() || "0.50",
   ].join("|");
 }
 
@@ -161,44 +173,18 @@ export async function buildSearchQueryCacheIdentity(args: {
   searchLanguage?: string | null;
 }): Promise<SearchQueryCacheIdentity> {
   const shopDomain = normalizeShop(args.shop);
-  const [shopRecord, settings, productAggregate, searchableCount] =
-    await Promise.all([
-      db.aiSearchShop.findUnique({
-        where: { shop: shopDomain },
-        select: { shopifyShopId: true },
-      }),
-      db.aiSearchShopSettings.findUnique({
-        where: { shop: shopDomain },
-        select: {
-          searchLanguage: true,
-          productPolicyVersion: true,
-          updatedAt: true,
-        },
-      }),
-      db.aiSearchIndexedProduct.aggregate({
-        where: { shop: shopDomain },
-        _count: { _all: true },
-        _max: { updatedAt: true },
-      }),
-      db.aiSearchIndexedProduct.count({
-        where: {
-          shop: shopDomain,
-          searchable: true,
-          hasVector: true,
-        },
-      }),
-    ]);
+  const settings = await getSearchCatalogRevisionCached(shopDomain);
 
-  const shopifyShopId = shopRecord?.shopifyShopId?.trim() || null;
+  const shopifyShopId = settings?.shopifyShopId ?? null;
   const tenantId = shopifyShopId
     ? "shopify:" + shopifyShopId
     : "domain:" + shopDomain;
   const searchLanguage =
-    args.searchLanguage?.trim() || settings?.searchLanguage?.trim() || null;
+    args.searchLanguage?.trim() || settings?.searchLanguage || null;
   const productPolicyVersion = settings?.productPolicyVersion ?? 0;
-  const productCount = productAggregate._count._all;
-  const catalogUpdatedAt = asIso(productAggregate._max.updatedAt);
-  const settingsUpdatedAt = asIso(settings?.updatedAt);
+  const catalogRevision = settings?.catalogRevision ?? "0";
+  const catalogUpdatedAt = asIso(settings?.catalogUpdatedAt);
+  const settingsUpdatedAt = asIso(settings?.settingsUpdatedAt);
   const requestVariant = args.requestVariant?.trim() || "";
   const pipelineVersion = currentSearchPipelineSignature();
   const normalizedQuery = normalizeSearchQuery(args.query);
@@ -209,8 +195,7 @@ export async function buildSearchQueryCacheIdentity(args: {
     normalizedQuery,
     searchLanguage,
     productPolicyVersion,
-    productCount,
-    searchableCount,
+    catalogRevision,
     catalogUpdatedAt,
     settingsUpdatedAt,
     requestVariant,
@@ -232,8 +217,7 @@ export async function buildSearchQueryCacheIdentity(args: {
       shopifyShopId,
       searchLanguage,
       productPolicyVersion,
-      productCount,
-      searchableCount,
+      catalogRevision,
       catalogUpdatedAt,
       settingsUpdatedAt,
       requestVariant,
@@ -489,6 +473,28 @@ export async function deleteSearchResult(shop: string, receiptId: string) {
   });
 }
 
-export async function clearExpiredSearchResults(now = new Date()) {
-  return db.aiSearchResultReceipt.deleteMany({ where: { expiresAt: { lte: now } } });
+export async function clearExpiredSearchResults(
+  now = new Date(),
+  options?: { batchSize?: number; maxBatches?: number },
+) {
+  const batchSize = Math.max(
+    100,
+    Math.min(Math.trunc(options?.batchSize ?? 5_000), 50_000),
+  );
+  const maxBatches = Math.max(
+    1,
+    Math.min(Math.trunc(options?.maxBatches ?? 20), 100),
+  );
+
+  let count = 0;
+  for (let batch = 0; batch < maxBatches; batch += 1) {
+    const deleted = await db.$executeRaw`
+      DELETE FROM \`AiSearchResultReceipt\`
+      WHERE \`expiresAt\` <= ${now}
+      LIMIT ${batchSize}
+    `;
+    count += deleted;
+    if (deleted < batchSize) break;
+  }
+  return { count };
 }

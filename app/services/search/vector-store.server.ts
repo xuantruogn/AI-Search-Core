@@ -6,6 +6,43 @@ import {
   QDRANT_COLLECTION,
 } from "./qdrant.server";
 import { getTenantProductVectorPointId } from "./vector-id.server";
+import {
+  buildProductVectorSemanticPayload,
+  parseStoredSemanticProfile,
+  PRODUCT_VECTOR_SEMANTIC_PAYLOAD_VERSION,
+} from "./product-semantic-profile.server";
+import { getSearchCatalogRevisionCached } from "./search-catalog-revision.server";
+
+type SemanticPayloadCoverage = {
+  registryCount: number;
+  indexedCount: number;
+  complete: boolean;
+};
+
+type SemanticCoverageCacheEntry = {
+  expiresAt: number;
+  revision: string;
+  coverage: SemanticPayloadCoverage;
+  kindCounts: Map<string, number>;
+};
+
+const SEMANTIC_COVERAGE_CACHE_TTL_MS = 60_000;
+const semanticCoverageCache = new Map<string, SemanticCoverageCacheEntry>();
+
+function cacheSemanticCoverage(
+  shop: string,
+  entry: SemanticCoverageCacheEntry,
+) {
+  semanticCoverageCache.delete(shop);
+  semanticCoverageCache.set(shop, entry);
+  while (semanticCoverageCache.size > 100) {
+    const oldest = semanticCoverageCache.keys().next().value as
+      | string
+      | undefined;
+    if (!oldest) break;
+    semanticCoverageCache.delete(oldest);
+  }
+}
 
 export type ProductVectorPayload = {
   shop: string;
@@ -20,6 +57,11 @@ export type ProductVectorPayload = {
   maxVariantPrice?: number;
   currencyCode?: string;
   searchable?: boolean;
+  semanticPayloadVersion?: number;
+  semanticPayloadHash?: string;
+  semanticPayloadComplete?: boolean;
+  semanticKinds?: string[];
+  semanticTerms?: string[];
 };
 
 export type UpsertProductVectorInput = {
@@ -45,6 +87,10 @@ export type SearchProductVectorsInput = {
 
 export type ProductVectorSearchResult = {
   score: number;
+  /** Raw Qdrant cosine similarity before any branch weighting or reranking. */
+  vectorSimilarity?: number;
+  /** Raw cosine to the primary query vector when this candidate hit that branch. */
+  primaryVectorSimilarity?: number;
   productId: string;
   handle: string;
   title: string;
@@ -129,6 +175,35 @@ function parseProductVectorPayload(
     currencyCode:
       typeof payload.currencyCode === "string" && payload.currencyCode
         ? payload.currencyCode.toUpperCase()
+        : undefined,
+    searchable:
+      typeof payload.searchable === "boolean"
+        ? payload.searchable
+        : undefined,
+    semanticPayloadVersion:
+      typeof payload.semanticPayloadVersion === "number" &&
+      Number.isFinite(payload.semanticPayloadVersion)
+        ? payload.semanticPayloadVersion
+        : undefined,
+    semanticPayloadHash:
+      typeof payload.semanticPayloadHash === "string"
+        ? payload.semanticPayloadHash
+        : undefined,
+    semanticPayloadComplete:
+      typeof payload.semanticPayloadComplete === "boolean"
+        ? payload.semanticPayloadComplete
+        : undefined,
+    semanticKinds:
+      Array.isArray(payload.semanticKinds)
+        ? payload.semanticKinds.filter(
+            (value): value is string => typeof value === "string",
+          )
+        : undefined,
+    semanticTerms:
+      Array.isArray(payload.semanticTerms)
+        ? payload.semanticTerms.filter(
+            (value): value is string => typeof value === "string",
+          )
         : undefined,
   } satisfies ProductVectorPayload;
 }
@@ -265,6 +340,21 @@ export async function migrateProductVectorPointIdIfNeeded({
   };
 }
 
+export async function updateProductVectorPayloadByPointId({
+  pointId,
+  payload,
+}: {
+  pointId: number | string;
+  payload: Record<string, unknown>;
+}) {
+  const qdrant = getQdrantClient();
+  await qdrant.setPayload(QDRANT_COLLECTION, {
+    payload,
+    points: [pointId],
+    wait: true,
+  });
+}
+
 export async function updateProductVectorPayloadForShop({
   shop,
   productId,
@@ -272,7 +362,7 @@ export async function updateProductVectorPayloadForShop({
 }: {
   shop: string;
   productId: string;
-  payload: Record<string, string | number>;
+  payload: Record<string, unknown>;
 }) {
   const record = await getProductVectorForShop({ shop, productId });
   if (!record) return false;
@@ -287,6 +377,401 @@ export async function updateProductVectorPayloadForShop({
     wait: true,
   });
   return true;
+}
+
+export async function updateProductVectorSearchabilityForShop({
+  shop,
+  productIds,
+  searchable,
+}: {
+  shop: string;
+  productIds: string[];
+  searchable: boolean;
+}) {
+  const ids = [...new Set(productIds.map((value) => value.trim()).filter(Boolean))];
+  if (ids.length === 0) return 0;
+
+  const qdrant = getQdrantClient();
+  let updatedBatches = 0;
+  for (let offset = 0; offset < ids.length; offset += 500) {
+    const batch = ids.slice(offset, offset + 500);
+    await qdrant.setPayload(QDRANT_COLLECTION, {
+      payload: { searchable },
+      filter: {
+        must: [
+          { key: "shop", match: { value: shop } },
+          { key: "productId", match: { any: batch } },
+        ],
+      },
+      wait: true,
+    });
+    updatedBatches += 1;
+  }
+  return updatedBatches;
+}
+
+export type SemanticPayloadCandidate = {
+  productId: string;
+  handle: string;
+  title: string;
+};
+
+export async function findProductsBySemanticPayload({
+  shop,
+  semanticTerms,
+  requiredGroups = [],
+  limit = 2_000,
+}: {
+  shop: string;
+  semanticTerms: string[];
+  requiredGroups?: string[][];
+  limit?: number;
+}): Promise<SemanticPayloadCandidate[]> {
+  const terms = [...new Set(
+    semanticTerms.map((value) => value.trim()).filter(Boolean),
+  )];
+  const groups = requiredGroups
+    .map((group) => [
+      ...new Set(group.map((value) => value.trim()).filter(Boolean)),
+    ])
+    .filter((group) => group.length > 0);
+  if (!shop.trim() || (terms.length === 0 && groups.length === 0)) return [];
+
+  await ensureProductCollection();
+
+  const safeLimit = Math.max(1, Math.min(Math.trunc(limit), 5_000));
+  const qdrant = getQdrantClient();
+  const results: SemanticPayloadCandidate[] = [];
+  const seen = new Set<string>();
+  let offset: number | string | undefined;
+
+  while (results.length < safeLimit) {
+    const pageLimit = Math.min(500, safeLimit - results.length);
+    const page = await qdrant.scroll(QDRANT_COLLECTION, {
+      filter: {
+        must: [
+          { key: "shop", match: { value: shop } },
+          { key: "searchable", match: { value: true } },
+          {
+            key: "semanticPayloadVersion",
+            match: { value: PRODUCT_VECTOR_SEMANTIC_PAYLOAD_VERSION },
+          },
+          { key: "semanticPayloadComplete", match: { value: true } },
+          ...groups.map((group) => ({
+            key: "semanticTerms",
+            match: { any: group },
+          })),
+          ...(groups.length === 0 && terms.length > 0
+            ? [{ key: "semanticTerms", match: { any: terms } }]
+            : []),
+        ],
+      },
+      limit: pageLimit,
+      ...(offset !== undefined ? { offset } : {}),
+      with_payload: [
+        "shop",
+        "productId",
+        "handle",
+        "title",
+        "semanticPayloadVersion",
+      ],
+      with_vector: false,
+    });
+
+    for (const point of page.points) {
+      const payload = parseProductVectorPayload(
+        point.payload as Record<string, unknown> | null | undefined,
+      );
+      if (
+        !payload ||
+        payload.shop !== shop ||
+        payload.searchable === false ||
+        payload.semanticPayloadVersion !==
+          PRODUCT_VECTOR_SEMANTIC_PAYLOAD_VERSION ||
+        seen.has(payload.productId)
+      ) {
+        continue;
+      }
+      seen.add(payload.productId);
+      results.push({
+        productId: payload.productId,
+        handle: payload.handle,
+        title: payload.title,
+      });
+      if (results.length >= safeLimit) break;
+    }
+
+    const nextOffset = page.next_page_offset;
+    if (nextOffset == null || page.points.length === 0) break;
+    if (offset !== undefined && String(nextOffset) === String(offset)) break;
+    offset = nextOffset as number | string;
+  }
+
+  return results;
+}
+
+export async function getSemanticPayloadCoverage(shop: string) {
+  const normalizedShop = shop.trim().toLowerCase();
+  if (!normalizedShop) {
+    return { registryCount: 0, indexedCount: 0, complete: false };
+  }
+
+  const revisionSnapshot =
+    await getSearchCatalogRevisionCached(normalizedShop);
+  const revision = revisionSnapshot?.catalogRevision ?? "0";
+  const cached = semanticCoverageCache.get(normalizedShop);
+  if (
+    cached &&
+    cached.revision === revision &&
+    cached.expiresAt > Date.now()
+  ) {
+    cacheSemanticCoverage(normalizedShop, cached);
+    return cached.coverage;
+  }
+
+  await ensureProductCollection();
+  const qdrant = getQdrantClient();
+  const [registryCount, indexed] = await Promise.all([
+    db.aiSearchIndexedProduct.count({
+      where: {
+        shop: normalizedShop,
+        searchable: true,
+        hasVector: true,
+      },
+    }),
+    qdrant.count(QDRANT_COLLECTION, {
+      filter: {
+        must: [
+          { key: "shop", match: { value: normalizedShop } },
+          { key: "searchable", match: { value: true } },
+          {
+            key: "semanticPayloadVersion",
+            match: { value: PRODUCT_VECTOR_SEMANTIC_PAYLOAD_VERSION },
+          },
+          { key: "semanticPayloadComplete", match: { value: true } },
+        ],
+      },
+      exact: true,
+    }),
+  ]);
+
+  const indexedCount = Number(indexed.count ?? 0);
+  const coverage = {
+    registryCount,
+    indexedCount,
+    complete: registryCount > 0 && indexedCount === registryCount,
+  };
+  cacheSemanticCoverage(normalizedShop, {
+    expiresAt: Date.now() + SEMANTIC_COVERAGE_CACHE_TTL_MS,
+    revision,
+    coverage,
+    kindCounts: new Map(),
+  });
+  return coverage;
+}
+
+export async function countProductsMatchingSemanticGroups({
+  shop,
+  groups,
+}: {
+  shop: string;
+  groups: string[][];
+}) {
+  const normalizedShop = shop.trim().toLowerCase();
+  const normalizedGroups = groups
+    .map((group) => [...new Set(group.map((value) => value.trim()).filter(Boolean))])
+    .filter((group) => group.length > 0);
+  if (!normalizedShop || normalizedGroups.length === 0) return 0;
+
+  await ensureProductCollection();
+  const qdrant = getQdrantClient();
+  const result = await qdrant.count(QDRANT_COLLECTION, {
+    filter: {
+      must: [
+        { key: "shop", match: { value: normalizedShop } },
+        { key: "searchable", match: { value: true } },
+        {
+          key: "semanticPayloadVersion",
+          match: { value: PRODUCT_VECTOR_SEMANTIC_PAYLOAD_VERSION },
+        },
+        { key: "semanticPayloadComplete", match: { value: true } },
+        ...normalizedGroups.map((group) => ({
+          key: "semanticTerms",
+          match: { any: group },
+        })),
+      ],
+    },
+    exact: true,
+  });
+  return Number(result.count ?? 0);
+}
+
+export async function countProductsBySemanticKind({
+  shop,
+  kind,
+}: {
+  shop: string;
+  kind: string;
+}) {
+  const normalizedShop = shop.trim().toLowerCase();
+  const normalizedKind = kind.trim().toUpperCase();
+  if (!normalizedShop || !normalizedKind) return 0;
+
+  await getSemanticPayloadCoverage(normalizedShop);
+  const cached = semanticCoverageCache.get(normalizedShop);
+  const cachedCount = cached?.kindCounts.get(normalizedKind);
+  if (cachedCount !== undefined) return cachedCount;
+
+  await ensureProductCollection();
+  const qdrant = getQdrantClient();
+  const result = await qdrant.count(QDRANT_COLLECTION, {
+    filter: {
+      must: [
+        { key: "shop", match: { value: normalizedShop } },
+        { key: "searchable", match: { value: true } },
+        {
+          key: "semanticPayloadVersion",
+          match: { value: PRODUCT_VECTOR_SEMANTIC_PAYLOAD_VERSION },
+        },
+        { key: "semanticPayloadComplete", match: { value: true } },
+        { key: "semanticKinds", match: { value: normalizedKind } },
+      ],
+    },
+    exact: true,
+  });
+  const count = Number(result.count ?? 0);
+  if (cached) {
+    cached.kindCounts.set(normalizedKind, count);
+    cacheSemanticCoverage(normalizedShop, cached);
+  }
+  return count;
+}
+
+export async function backfillSemanticVectorPayloads({
+  limit = 1_000,
+  concurrency = 10,
+}: {
+  limit?: number;
+  concurrency?: number;
+} = {}) {
+  await ensureProductCollection();
+
+  const safeLimit = Math.max(1, Math.min(Math.trunc(limit), 5_000));
+  const safeConcurrency = Math.max(1, Math.min(Math.trunc(concurrency), 25));
+  const qdrant = getQdrantClient();
+
+  // Drive the backfill from the authoritative registry instead of scanning the
+  // shared Qdrant collection globally. Old vectors from a deleted/redacted
+  // shop can otherwise occupy every backfill page and starve live shops.
+  const shops = await db.aiSearchIndexedProduct.groupBy({
+    by: ["shop"],
+    where: { searchable: true, hasVector: true },
+    orderBy: { shop: "asc" },
+  });
+
+  let scanned = 0;
+  let updated = 0;
+  let missingProfiles = 0;
+
+  for (const { shop } of shops) {
+    if (scanned >= safeLimit) break;
+
+    const page = await qdrant.scroll(QDRANT_COLLECTION, {
+      filter: {
+        must: [
+          { key: "shop", match: { value: shop } },
+          { key: "searchable", match: { value: true } },
+        ],
+        must_not: [
+          {
+            key: "semanticPayloadVersion",
+            match: { value: PRODUCT_VECTOR_SEMANTIC_PAYLOAD_VERSION },
+          },
+        ],
+      },
+      limit: Math.min(500, safeLimit - scanned),
+      with_payload: [
+        "shop",
+        "productId",
+        "handle",
+        "title",
+        "searchable",
+        "semanticPayloadVersion",
+      ],
+      with_vector: false,
+    });
+
+    const candidates = page.points
+      .map((point) => {
+        const payload = parseProductVectorPayload(
+          point.payload as Record<string, unknown> | null | undefined,
+        );
+        return payload && payload.shop === shop
+          ? {
+              pointId: point.id,
+              productId: payload.productId,
+            }
+          : null;
+      })
+      .filter((value): value is NonNullable<typeof value> => Boolean(value));
+
+    scanned += page.points.length;
+    if (candidates.length === 0) continue;
+
+    const profiles = await db.aiSearchProductSemanticProfile.findMany({
+      where: {
+        shop,
+        productId: { in: candidates.map((candidate) => candidate.productId) },
+        productRecord: {
+          is: { searchable: true, hasVector: true },
+        },
+      },
+      select: {
+        productId: true,
+        profile: true,
+      },
+    });
+
+    const profileByProduct = new Map(
+      profiles.map((profile) => [
+        profile.productId,
+        buildProductVectorSemanticPayload(
+          parseStoredSemanticProfile(profile.profile).terms,
+        ),
+      ]),
+    );
+
+    for (
+      let offset = 0;
+      offset < candidates.length;
+      offset += safeConcurrency
+    ) {
+      const batch = candidates.slice(offset, offset + safeConcurrency);
+      const outcomes = await Promise.all(
+        batch.map(async (candidate) => {
+          const semanticPayload = profileByProduct.get(candidate.productId);
+          if (!semanticPayload) return false;
+          await updateProductVectorPayloadByPointId({
+            pointId: candidate.pointId,
+            payload: semanticPayload,
+          });
+          return true;
+        }),
+      );
+      const updatedInBatch = outcomes.filter(Boolean).length;
+      updated += updatedInBatch;
+      missingProfiles += outcomes.filter((value) => !value).length;
+      if (updatedInBatch > 0) {
+        // Coverage is revision-keyed because semantic changes bump the catalog
+        // revision, but a payload-only backfill intentionally does not. Drop
+        // the local coverage cache so the new optimization becomes usable
+        // immediately instead of waiting for its TTL.
+        semanticCoverageCache.delete(shop);
+      }
+    }
+  }
+
+  return { scanned, updated, missingProfiles };
 }
 
 // =====================================================
@@ -651,17 +1136,10 @@ export async function searchProductVectors({
 }: SearchProductVectorsInput): Promise<ProductVectorSearchResult[]> {
   const totalStartedAt = Date.now();
   const qdrant = getQdrantClient();
-  const eligibleRows = await db.$queryRaw<Array<{ productId: string }>>`
-    SELECT \`productId\` FROM \`AiSearchIndexedProduct\`
-    WHERE \`shop\` = ${shop} AND \`searchable\` = true AND \`hasVector\` = true
-  `;
   const requestedProductIds = productIds?.length
-    ? new Set(productIds)
+    ? [...new Set(productIds.map((value) => value.trim()).filter(Boolean))]
     : null;
-  const eligibleProductIds = eligibleRows
-    .map((row) => row.productId)
-    .filter((productId) => !requestedProductIds || requestedProductIds.has(productId));
-  if (eligibleProductIds.length === 0) {
+  if (productIds && requestedProductIds?.length === 0) {
     onDiagnostics?.({
       requestMs: 0, responseMappingCodeMs: 0,
       totalMs: Date.now() - totalStartedAt, passCount: 0, finalCandidateWindow: 0,
@@ -671,7 +1149,7 @@ export async function searchProductVectors({
   const requestedLimit = Number.isFinite(limit)
     ? Math.max(1, Math.min(Math.trunc(limit), 1000))
     : 20;
-  const safeLimit = Math.min(requestedLimit, eligibleProductIds.length);
+  const safeLimit = requestedLimit;
 
   // During the one-time Phase-1 -> V2 point-ID migration, a product can
   // temporarily have both a legacy numeric point and the new tenant UUID.
@@ -685,7 +1163,7 @@ export async function searchProductVectors({
     configuredHeadroom >= 1 &&
     configuredHeadroom <= 2
       ? configuredHeadroom
-      : 1.5;
+      : 1;
   const candidateLimit = Math.min(
     1000,
     Math.max(safeLimit, Math.ceil(safeLimit * headroomRatio)),
@@ -703,9 +1181,17 @@ export async function searchProductVectors({
             },
           },
           {
-            key: "productId",
-            match: { any: eligibleProductIds },
+            key: "searchable",
+            match: {
+              value: true,
+            },
           },
+          ...(requestedProductIds
+            ? [{
+                key: "productId",
+                match: { any: requestedProductIds },
+              }]
+            : []),
         ],
       },
       score_threshold: scoreThreshold,
@@ -717,6 +1203,31 @@ export async function searchProductVectors({
       with_vector: false,
     });
   const requestMs = Date.now() - startedAt;
+  const candidateProductIds = [
+    ...new Set(
+      response.points
+        .map((point) =>
+          typeof point.payload?.productId === "string"
+            ? point.payload.productId
+            : "",
+        )
+        .filter(Boolean),
+    ),
+  ];
+  const registryRows = candidateProductIds.length
+    ? await db.aiSearchIndexedProduct.findMany({
+        where: {
+          shop,
+          productId: { in: candidateProductIds },
+          searchable: true,
+          hasVector: true,
+        },
+        select: { productId: true },
+      })
+    : [];
+  const validRegistryIds = new Set(
+    registryRows.map((row) => row.productId),
+  );
 
   console.log("[AI Search][PERF] Qdrant query", {
     shop, durationMs: requestMs,
@@ -750,13 +1261,20 @@ export async function searchProductVectors({
     const handle = typeof payload.handle === "string" ? payload.handle : null;
     const title = typeof payload.title === "string" ? payload.title : null;
 
-    if (!productId || !handle || !title || seenProducts.has(productId)) {
+    if (
+      !productId ||
+      !handle ||
+      !title ||
+      !validRegistryIds.has(productId) ||
+      seenProducts.has(productId)
+    ) {
       continue;
     }
 
     seenProducts.add(productId);
     results.push({
       score: point.score,
+      vectorSimilarity: point.score,
       productId,
       handle,
       title,
@@ -813,17 +1331,10 @@ export async function searchProductVectorsBatch({
   if (vectors.length === 0) return [];
 
   const qdrant = getQdrantClient();
-  const eligibleRows = await db.$queryRaw<Array<{ productId: string }>>`
-    SELECT \`productId\` FROM \`AiSearchIndexedProduct\`
-    WHERE \`shop\` = ${shop} AND \`searchable\` = true AND \`hasVector\` = true
-  `;
   const requestedProductIds = productIds?.length
-    ? new Set(productIds)
+    ? [...new Set(productIds.map((value) => value.trim()).filter(Boolean))]
     : null;
-  const eligibleProductIds = eligibleRows
-    .map((row) => row.productId)
-    .filter((productId) => !requestedProductIds || requestedProductIds.has(productId));
-  if (eligibleProductIds.length === 0) {
+  if (productIds && requestedProductIds?.length === 0) {
     onDiagnostics?.({
       requestMs: 0,
       responseMappingCodeMs: 0,
@@ -842,13 +1353,13 @@ export async function searchProductVectorsBatch({
     configuredHeadroom >= 1 &&
     configuredHeadroom <= 2
       ? configuredHeadroom
-      : 1.5;
+      : 1;
   const safeLimits = vectors.map((_, index) => {
     const requested = limits?.[index] ?? 20;
     const normalizedRequested = Number.isFinite(requested)
       ? Math.max(1, Math.min(Math.trunc(requested), 1000))
       : 20;
-    return Math.min(normalizedRequested, eligibleProductIds.length);
+    return normalizedRequested;
   });
   const candidateLimits = safeLimits.map((safeLimit) =>
     Math.min(
@@ -859,7 +1370,10 @@ export async function searchProductVectorsBatch({
   const filter = {
     must: [
       { key: "shop", match: { value: shop } },
-      { key: "productId", match: { any: eligibleProductIds } },
+      { key: "searchable", match: { value: true } },
+      ...(requestedProductIds
+        ? [{ key: "productId", match: { any: requestedProductIds } }]
+        : []),
     ],
   };
 
@@ -878,6 +1392,33 @@ export async function searchProductVectorsBatch({
     })),
   });
   const requestMs = Date.now() - startedAt;
+  const candidateProductIds = [
+    ...new Set(
+      responses.flatMap((response) =>
+        response.points
+          .map((point) =>
+            typeof point.payload?.productId === "string"
+              ? point.payload.productId
+              : "",
+          )
+          .filter(Boolean),
+      ),
+    ),
+  ];
+  const registryRows = candidateProductIds.length
+    ? await db.aiSearchIndexedProduct.findMany({
+        where: {
+          shop,
+          productId: { in: candidateProductIds },
+          searchable: true,
+          hasVector: true,
+        },
+        select: { productId: true },
+      })
+    : [];
+  const validRegistryIds = new Set(
+    registryRows.map((row) => row.productId),
+  );
   const mappingStartedAt = Date.now();
 
   const resultSets = responses.map((response, responseIndex) => {
@@ -890,12 +1431,19 @@ export async function searchProductVectorsBatch({
         typeof payload.productId === "string" ? payload.productId : null;
       const handle = typeof payload.handle === "string" ? payload.handle : null;
       const title = typeof payload.title === "string" ? payload.title : null;
-      if (!productId || !handle || !title || seenProducts.has(productId)) {
+      if (
+        !productId ||
+        !handle ||
+        !title ||
+        !validRegistryIds.has(productId) ||
+        seenProducts.has(productId)
+      ) {
         continue;
       }
       seenProducts.add(productId);
       results.push({
         score: point.score,
+        vectorSimilarity: point.score,
         productId,
         handle,
         title,

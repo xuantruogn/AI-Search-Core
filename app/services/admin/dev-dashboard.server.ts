@@ -18,6 +18,9 @@ import {
 type ShopRow = {
   shop: string;
   lifecycleStatus: string;
+  currentPlanHandle: string | null;
+  pendingPlanHandle: string | null;
+  pendingChangeAt: Date | string | null;
   legacyPlan: string | null;
   legacySubscriptionStatus: string | null;
   legacyBillingPeriodStart: Date | string | null;
@@ -141,6 +144,9 @@ export async function getDevDashboardData(search = "") {
       SELECT
         s.\`shop\`,
         s.\`status\` AS \`lifecycleStatus\`,
+        s.\`currentPlanHandle\`,
+        s.\`pendingPlanHandle\`,
+        s.\`pendingChangeAt\`,
         sub.\`plan\` AS \`legacyPlan\`,
         sub.\`status\` AS \`legacySubscriptionStatus\`,
         sub.\`billingPeriodStart\` AS \`legacyBillingPeriodStart\`,
@@ -195,47 +201,69 @@ export async function getDevDashboardData(search = "") {
     `,
     db.$queryRaw<ApiByShopRow[]>`
       SELECT
-        \`shop\`,
-        COALESCE(SUM(\`inputTokens\`), 0) AS \`inputTokens\`,
-        COALESCE(SUM(\`outputTokens\`), 0) AS \`outputTokens\`,
-        COALESCE(SUM(\`totalTokens\`), 0) AS \`totalTokens\`,
-        COALESCE(SUM(\`estimatedCostMicros\`), 0) AS \`costMicros\`
-      FROM \`AiSearchApiUsageEvent\`
-      WHERE \`createdAt\` >= ${from} AND \`shop\` IS NOT NULL
-      GROUP BY \`shop\`
+        u.\`shop\`,
+        COALESCE(SUM(u.\`inputTokens\`), 0) AS \`inputTokens\`,
+        COALESCE(SUM(u.\`outputTokens\`), 0) AS \`outputTokens\`,
+        COALESCE(SUM(u.\`totalTokens\`), 0) AS \`totalTokens\`,
+        COALESCE(SUM(u.\`estimatedCostMicros\`), 0) AS \`costMicros\`
+      FROM (
+        SELECT
+          \`shop\`, \`inputTokens\`, \`outputTokens\`,
+          \`totalTokens\`, \`estimatedCostMicros\`
+        FROM \`AiSearchApiUsageEvent\`
+        WHERE \`createdAt\` >= ${from} AND \`shop\` IS NOT NULL
+        UNION ALL
+        SELECT
+          \`shop\`, \`inputTokens\`, \`outputTokens\`,
+          \`totalTokens\`, \`estimatedCostMicros\`
+        FROM \`AiSearchApiUsageDaily\`
+        WHERE \`day\` >= DATE(${from}) AND \`shop\` <> '__UNSCOPED__'
+      ) AS u
+      GROUP BY u.\`shop\`
     `,
     db.$queryRaw<ProviderSummaryRow[]>`
       SELECT
-        COALESCE(SUM(\`inputTokens\`), 0) AS \`inputTokens\`,
-        COALESCE(SUM(\`outputTokens\`), 0) AS \`outputTokens\`,
-        COALESCE(SUM(\`totalTokens\`), 0) AS \`totalTokens\`,
+        COALESCE(SUM(u.\`inputTokens\`), 0) AS \`inputTokens\`,
+        COALESCE(SUM(u.\`outputTokens\`), 0) AS \`outputTokens\`,
+        COALESCE(SUM(u.\`totalTokens\`), 0) AS \`totalTokens\`,
         COALESCE(SUM(
           CASE
-            WHEN \`operation\` IN ('QUERY_EMBEDDING', 'PRODUCT_EMBEDDING', 'EMBEDDING')
-            THEN \`inputTokens\` ELSE 0
+            WHEN u.\`operation\` IN ('QUERY_EMBEDDING', 'PRODUCT_EMBEDDING', 'EMBEDDING')
+            THEN u.\`inputTokens\` ELSE 0
           END
         ), 0) AS \`embeddingTokens\`,
         COALESCE(SUM(
           CASE
-            WHEN \`operation\` IN ('QUERY_REWRITE', 'PRODUCT_ENRICHMENT')
-            THEN \`totalTokens\` ELSE 0
+            WHEN u.\`operation\` IN ('QUERY_REWRITE', 'PRODUCT_ENRICHMENT')
+            THEN u.\`totalTokens\` ELSE 0
           END
         ), 0) AS \`llmTokens\`,
-        COALESCE(SUM(\`estimatedCostMicros\`), 0) AS \`costMicros\`,
+        COALESCE(SUM(u.\`estimatedCostMicros\`), 0) AS \`costMicros\`,
         COALESCE(SUM(
           CASE
-            WHEN \`operation\` IN ('QUERY_REWRITE', 'QUERY_EMBEDDING')
-            THEN \`estimatedCostMicros\` ELSE 0
+            WHEN u.\`operation\` IN ('QUERY_REWRITE', 'QUERY_EMBEDDING')
+            THEN u.\`estimatedCostMicros\` ELSE 0
           END
         ), 0) AS \`searchCostMicros\`,
         COALESCE(SUM(
           CASE
-            WHEN \`operation\` IN ('PRODUCT_ENRICHMENT', 'PRODUCT_EMBEDDING')
-            THEN \`estimatedCostMicros\` ELSE 0
+            WHEN u.\`operation\` IN ('PRODUCT_ENRICHMENT', 'PRODUCT_EMBEDDING')
+            THEN u.\`estimatedCostMicros\` ELSE 0
           END
         ), 0) AS \`indexingCostMicros\`
-      FROM \`AiSearchApiUsageEvent\`
-      WHERE \`createdAt\` >= ${from}
+      FROM (
+        SELECT
+          \`operation\`, \`inputTokens\`, \`outputTokens\`,
+          \`totalTokens\`, \`estimatedCostMicros\`
+        FROM \`AiSearchApiUsageEvent\`
+        WHERE \`createdAt\` >= ${from}
+        UNION ALL
+        SELECT
+          \`operation\`, \`inputTokens\`, \`outputTokens\`,
+          \`totalTokens\`, \`estimatedCostMicros\`
+        FROM \`AiSearchApiUsageDaily\`
+        WHERE \`day\` >= DATE(${from})
+      ) AS u
     `,
     db.aiSearchQuotaGrant.findMany({
       orderBy: { createdAt: "desc" },
@@ -340,6 +368,9 @@ export async function getDevDashboardData(search = "") {
     return {
       shop: row.shop,
       lifecycleStatus: row.lifecycleStatus,
+      currentPlanHandle: row.currentPlanHandle,
+      pendingPlanHandle: row.pendingPlanHandle,
+      pendingChangeAt: row.pendingChangeAt,
       legacyPlan: row.legacyPlan,
       legacySubscriptionStatus: row.legacySubscriptionStatus,
       legacyBillingPeriodStart: row.legacyBillingPeriodStart,
@@ -598,7 +629,8 @@ export async function getDevDashboardData(search = "") {
       : devOverridePlan;
 
     const isShopSpecificCustomPlan =
-      billing?.plan?.handle?.trim().toLowerCase() === "custom";
+      billing?.plan?.handle?.trim().toLowerCase() === "custom" ||
+      (devOverrideActive && devOverridePlan === AI_SEARCH_PLAN.custom);
     const planLabel =
       isShopSpecificCustomPlan && customConfig?.customName
         ? customConfig.customName
@@ -649,14 +681,19 @@ export async function getDevDashboardData(search = "") {
         ? null
         : n(billing.priceSnapshot);
     const customTermsDiffer = Boolean(
-      billing &&
-        customConfig &&
-        isShopSpecificCustomPlan &&
-        hasPendingCustomPrice({
-          subscriptionStatus,
-          billedPrice,
-          configuredPrice: customPrice,
-        }),
+      customConfig &&
+        (
+          shop.pendingPlanHandle?.trim().toLowerCase() === "custom" ||
+          (
+            billing &&
+            isShopSpecificCustomPlan &&
+            hasPendingCustomPrice({
+              subscriptionStatus,
+              billedPrice,
+              configuredPrice: customPrice,
+            })
+          )
+        ),
     );
 
     return {
@@ -1026,6 +1063,12 @@ export async function setCustomPlanTerms({
   });
   if (!target) throw new Error("Target shop not found");
 
+  const legacySubscription = await db.aiSearchSubscription.findUnique({
+    where: { shop: targetShop },
+    select: { source: true },
+  });
+  const isLocalDevOverride = legacySubscription?.source === "DEV_OVERRIDE";
+
   const customPlan = await db.plan.upsert({
     where: { handle: "custom" },
     create: {
@@ -1136,6 +1179,36 @@ export async function setCustomPlanTerms({
         isActive: true,
       },
     });
+
+    if (isLocalDevOverride) {
+      await tx.aiSearchSubscription.update({
+        where: { shop: targetShop },
+        data: {
+          plan: AI_SEARCH_PLAN.custom,
+          status: "ACTIVE",
+          planHandle: "custom",
+          source: "DEV_OVERRIDE",
+          lastSyncedAt: new Date(),
+        },
+      });
+
+      await tx.aiSearchShop.update({
+        where: { shop: targetShop },
+        data: {
+          currentPlanHandle: "custom",
+          pendingPlanHandle: null,
+          pendingChangeAt: null,
+        },
+      });
+    } else {
+      await tx.aiSearchShop.update({
+        where: { shop: targetShop },
+        data: {
+          pendingPlanHandle: "custom",
+          pendingChangeAt: new Date(),
+        },
+      });
+    }
 
     await tx.aiSearchAdminAuditLog.create({
       data: {

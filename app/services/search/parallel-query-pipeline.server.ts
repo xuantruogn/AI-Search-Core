@@ -65,11 +65,30 @@ export async function prepareParallelQueryPipeline(args: {
   );
   const rawPlan = await rawPlanPromise;
   const rawPlanMs = Date.now() - rawPlanStartedAt;
+
+  const requiresLlm =
+    rawPlan.route === "LIGHT_LLM" ||
+    rawPlan.route === "FULL_LLM";
+
+  // Start interpretation as soon as the deterministic plan is known. The
+  // closed-world absence proof and LLM do independent work, so serializing them
+  // adds latency to every LIGHT/FULL query. If the proof wins with a certain
+  // empty result, the in-flight LLM is simply ignored.
+  const llmStartedAt = requiresLlm ? Date.now() : 0;
+  const llmPromise = requiresLlm
+    ? rewriteSearchQuery({
+        shop: args.shop,
+        query: args.query,
+        searchLanguage: args.searchLanguage,
+      })
+    : null;
+
   const rawProofWaitStartedAt = Date.now();
   const rawProof = await rawProofPromise;
   const waitForRawProofMs = Date.now() - rawProofWaitStartedAt;
 
   if (rawProof.status === "CERTAIN_NO_RESULT") {
+    void llmPromise?.catch(() => undefined);
     return {
       rawPlan,
       profile: null,
@@ -84,10 +103,6 @@ export async function prepareParallelQueryPipeline(args: {
       },
     };
   }
-
-  const requiresLlm =
-    rawPlan.route === "LIGHT_LLM" ||
-    rawPlan.route === "FULL_LLM";
 
   if (!requiresLlm) {
     const rewrite = queryPlanToLegacyRewrite(rawPlan, args.query);
@@ -117,12 +132,7 @@ export async function prepareParallelQueryPipeline(args: {
     };
   }
 
-  const llmStartedAt = Date.now();
-  const llm = await rewriteSearchQuery({
-    shop: args.shop,
-    query: args.query,
-    searchLanguage: args.searchLanguage,
-  });
+  const llm = await llmPromise!;
   const expandedPlan = llm.fallbackReason
     ? rawPlan
     : await buildQueryPlan(args.shop, llm.query);

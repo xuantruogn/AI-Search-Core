@@ -202,6 +202,11 @@ export async function generateGeminiQueryRewrite({
     thinkingConfig: isGemini3
       ? { thinkingLevel: readThinkingLevel() }
       : { thinkingBudget },
+    // Query planning is a structured classification/extraction task. Keep
+    // generation deterministic so identical shopper queries do not randomly
+    // change expansions/MUST terms across otherwise identical searches.
+    temperature: 0,
+    seed: readNonNegativeInteger("GEMINI_QUERY_SEED", 17),
   };
 
   const controller = new AbortController();

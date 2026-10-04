@@ -49,6 +49,7 @@ import {
 import { loadStoredThemeMapV4 } from "../services/theme/theme-map-v4-store.server";
 import { rebuildThemeMapV4ForTheme } from "../services/theme/theme-map-v4-lifecycle.server";
 import { getShopEntitlement } from "../services/commerce/entitlement.server";
+import { listSearchableIndexedProducts } from "../services/commerce/indexed-products.server";
 import { reconcileShopCommercialState } from "../services/commerce/reconciliation.server";
 import { refreshShopifyAppPricingIfStale } from "../services/billing/shopify-app-pricing.server";
 import {
@@ -497,7 +498,46 @@ type CandidateProduct = {
   handle: string;
   rank: number;
   score: number;
+  /** Best raw Qdrant cosine similarity before reranking. */
+  vectorSimilarity?: number;
+  /** Raw cosine against the primary query embedding, excluding expansion branches. */
+  primaryVectorSimilarity?: number;
 };
+
+async function filterCandidatesAgainstRegistry(
+  shop: string,
+  products: CandidateProduct[],
+) {
+  if (products.length === 0) return products;
+
+  const gids = products.map((product) =>
+    /^gid:\/\/shopify\/Product\//.test(product.id)
+      ? product.id
+      : `gid://shopify/Product/${product.id}`,
+  );
+  const registryRows = await listSearchableIndexedProducts(shop, gids);
+  const byNumericId = new Map(
+    registryRows.map((row) => [
+      row.productId.match(/(\d+)$/)?.[1] ?? row.productId,
+      row,
+    ]),
+  );
+
+  const filtered = products.flatMap((product) => {
+    const lookupId = product.id.match(/(\d+)$/)?.[1] ?? product.id;
+    const row = byNumericId.get(lookupId);
+    if (!row) return [];
+    return [{
+      ...product,
+      handle: row.handle,
+    }];
+  });
+
+  return filtered.map((product, index) => ({
+    ...product,
+    rank: index + 1,
+  }));
+}
 
 type PaginationResult = {
   totalProducts: number;
@@ -2246,6 +2286,7 @@ let resultCacheStatus: "HIT" | "MISS" = "MISS";
       Date.now();
 
     let allProducts: CandidateProduct[] = [];
+    let registryValidated = false;
     let searchLogId: string | null = null;
     let sortIntent: CachedSearchSortIntent = "RELEVANCE";
     let priceConstraint: ReturnType<typeof parsePriceConstraint> = null;
@@ -2293,8 +2334,15 @@ let resultCacheStatus: "HIT" | "MISS" = "MISS";
               handle: product.handle,
               rank: index + 1,
               score: product.score,
+              vectorSimilarity: product.vectorSimilarity,
+              primaryVectorSimilarity: product.primaryVectorSimilarity,
             }),
           );
+          allProducts = await filterCandidatesAgainstRegistry(
+            session.shop,
+            allProducts,
+          );
+          registryValidated = true;
 
           const cacheAnalyticsStartedAt = Date.now();
           if (requestedPage === 1) {
@@ -2319,6 +2367,8 @@ let resultCacheStatus: "HIT" | "MISS" = "MISS";
                   handle: product.handle,
                   rank: product.rank,
                   score: product.score,
+                  vectorSimilarity: product.vectorSimilarity,
+                  primaryVectorSimilarity: product.primaryVectorSimilarity,
                 })),
                 diagnostics: {
                   candidateCount: Number(cachedQueryResult.metadata.diagnosticSummary?.candidateCount) || allProducts.length,
@@ -2419,7 +2469,7 @@ let resultCacheStatus: "HIT" | "MISS" = "MISS";
                 candidateCount: 0,
                 topCandidateScore: null,
                 vectorThreshold: Number.parseFloat(
-                  process.env.AI_SEARCH_VECTOR_SCORE_THRESHOLD || "0.25",
+                  process.env.AI_SEARCH_VECTOR_SCORE_THRESHOLD || "0.35",
                 ),
                 embeddingCacheHit: false,
                 llmStatus: "NO_RESULT_PROOF",
@@ -2882,10 +2932,22 @@ let resultCacheStatus: "HIT" | "MISS" = "MISS";
 
                 score:
                   result.score,
+
+                vectorSimilarity:
+                  result.vectorSimilarity,
+
+                primaryVectorSimilarity:
+                  result.primaryVectorSimilarity,
               },
             ];
           },
         );
+
+      allProducts = await filterCandidatesAgainstRegistry(
+        session.shop,
+        allProducts,
+      );
+      registryValidated = true;
 
       const resultMappingCodeMs =
         Date.now() -
@@ -2936,7 +2998,7 @@ let resultCacheStatus: "HIT" | "MISS" = "MISS";
               candidateCount: 0,
               topCandidateScore: null,
               vectorThreshold: Number.parseFloat(
-                process.env.AI_SEARCH_VECTOR_SCORE_THRESHOLD || "0.25",
+                process.env.AI_SEARCH_VECTOR_SCORE_THRESHOLD || "0.35",
               ),
               embeddingCacheHit: false,
               llmStatus: "NO_RESULT_PROOF",
@@ -3021,6 +3083,12 @@ let resultCacheStatus: "HIT" | "MISS" = "MISS";
 
                       score:
                         product.score,
+
+                      vectorSimilarity:
+                        product.vectorSimilarity,
+
+                      primaryVectorSimilarity:
+                        product.primaryVectorSimilarity,
                     }),
                   ),
 
@@ -3647,6 +3715,14 @@ let resultCacheStatus: "HIT" | "MISS" = "MISS";
         },
       );
 
+      }
+
+      if (!registryValidated) {
+        allProducts = await filterCandidatesAgainstRegistry(
+          session.shop,
+          allProducts,
+        );
+        registryValidated = true;
       }
 
       if (isCustomDataMode) {

@@ -12,6 +12,16 @@ import {
 
 export type FilterMode = "all" | "total" | "good" | "abnormal";
 
+const MAX_ANALYTICS_EVENTS = (() => {
+  const raw = Number.parseInt(
+    process.env.AI_SEARCH_ANALYTICS_MAX_EVENTS || "",
+    10,
+  );
+  return Number.isSafeInteger(raw) && raw >= 1_000
+    ? Math.min(raw, 100_000)
+    : 20_000;
+})();
+
 export interface ClickedProductDetail {
   productId: string;
   title: string;
@@ -61,16 +71,48 @@ async function getShopAnalyticsData(shop: string, requestedDays: number = 30) {
       shop,
       createdAt: { gte: startDate },
     },
-    include: {
-      clicks: true,
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    take: MAX_ANALYTICS_EVENTS,
+    select: {
+      id: true,
+      query: true,
+      normalizedQuery: true,
+      resultCount: true,
+      llmAnalysisJson: true,
+      llmStatus: true,
+      createdAt: true,
+      clicks: {
+        select: { productId: true },
+      },
     },
-    orderBy: { createdAt: "asc" },
   });
 
-  const indexedProducts = await prisma.aiSearchIndexedProduct.findMany({
-    where: { shop },
-    select: { productId: true, title: true, handle: true },
-  });
+  // Work on the newest bounded window and restore chronological order for
+  // chart aggregation. Detailed history remains available through the paged
+  // history endpoint instead of loading an unbounded log set into one request.
+  queryLogs.reverse();
+
+  const clickedProductIds = [
+    ...new Set(
+      queryLogs.flatMap((log) => log.clicks.map((click) => click.productId)),
+    ),
+  ];
+  const indexedProducts: Array<{
+    productId: string;
+    title: string;
+    handle: string;
+  }> = [];
+  for (let offset = 0; offset < clickedProductIds.length; offset += 500) {
+    indexedProducts.push(
+      ...(await prisma.aiSearchIndexedProduct.findMany({
+        where: {
+          shop,
+          productId: { in: clickedProductIds.slice(offset, offset + 500) },
+        },
+        select: { productId: true, title: true, handle: true },
+      })),
+    );
+  }
 
   const productMap = new Map<string, { title: string; handle: string }>();
   indexedProducts.forEach((p) => {

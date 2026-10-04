@@ -55,6 +55,8 @@ export type QueryRewriteResult = {
     canonicalTypeCoverageComplete?: boolean;
     identityCandidateProductIds?: string[];
     directExpansionGroundedProductIds?: string[];
+    directSourceFacetGroundedProductIds?: string[];
+    discoverySourceIdentityProductIds?: string[];
     discoverySourceGroundedProductIds?: string[];
     discoveryExpansionGroundedProductIds?: string[];
   };
@@ -769,11 +771,11 @@ async function performRewrite({ shop, cleanQuery, searchLanguage, model, timeout
           error.name === "APIConnectionTimeoutError" ||
           /timed?\s*out|timeout/i.test(error.message)
         );
-      const shouldRetryCrossLanguage =
-        transientTimeout && /[^\x00-\x7F]/.test(cleanQuery);
-      if (!shouldRetryCrossLanguage) throw error;
-      const retryTimeoutMs = Math.min(2_500, Math.max(1_500, Math.floor(timeoutMs / 2)));
-      console.warn("[AI Search] Retrying cross-language rewrite after timeout", {
+      const shouldRetryTransient = transientTimeout;
+      if (!shouldRetryTransient) throw error;
+      const retryTimeoutMs =
+        complexityRoute === "SIMPLE" ? 2_000 : 2_500;
+      console.warn("[AI Search] Retrying query rewrite after timeout", {
         shop,
         query: cleanQuery,
         model,

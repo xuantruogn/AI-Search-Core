@@ -25,6 +25,7 @@ import {
   stripReferenceScopedFacetsFromEmbedding,
 } from "../app/services/search/query-semantic-profile.server";
 import {
+  buildComplementEmbeddingBranches,
   buildDiscoveryEmbeddingBranches,
   buildDirectEmbeddingPlan,
   catalogEvidenceCoversSemanticMustTerms,
@@ -187,6 +188,33 @@ assert.deepEqual(
   },
 );
 
+const noHoodJacket = {
+  ...rewrite("DIRECT", "jacket ; hood"),
+  query: "jacket ; hood",
+  planning: {
+    route: "LIGHT_LLM",
+    retrievalMode: "DIRECT",
+    semanticQuery: "jacket ; hood",
+    semanticResolution: "LIGHT_LLM",
+    semanticResolutionConfidence: 1,
+    resolvedSegments: [],
+    unresolvedSegments: [],
+  },
+  analysis: {
+    ...rewrite("DIRECT", "jacket ; hood").analysis,
+    shopLanguageProductType: "jacket",
+    productType: "jacket",
+    productTypes: ["jacket"],
+    brands: [], models: [], requiredAttributes: [],
+    optionalPreferences: [], attributes: [], audience: [],
+    useCases: [], negativeTerms: ["hood"],
+  },
+} as QueryRewriteResult;
+assert.deepEqual(
+  buildDirectEmbeddingPlan(noHoodJacket),
+  { primary: "jacket", branches: [] },
+);
+
 assert.deepEqual(
   buildDiscoveryEmbeddingBranches(winterDiscoveryRewrite),
   [
@@ -194,6 +222,56 @@ assert.deepEqual(
     "sweater ; winter",
     "fleece sweatshirt ; winter",
   ],
+);
+
+const groundedBranchPriority = {
+  ...winterDiscoveryRewrite,
+  context: {
+    selectedTerms: [
+      { kind: "CANONICAL_PRODUCT_TYPE", value: "headlamp", score: 30, productCount: 1 },
+    ],
+  },
+  analysis: {
+    ...winterDiscoveryRewrite.analysis,
+    intent: "gift for someone who loves hiking",
+    semanticExpansions: [
+      "gift for someone who loves hiking",
+      "trekking poles",
+      "camping stove",
+      "hydration pack",
+      "hiking socks",
+      "headlamp",
+    ],
+    semanticMustTerms: ["hiking"],
+  },
+} as unknown as QueryRewriteResult;
+assert.ok(
+  buildDiscoveryEmbeddingBranches(groundedBranchPriority)[0]?.startsWith("headlamp"),
+  "catalog-grounded expansion should be scheduled before ungrounded LLM branches",
+);
+const complementRewrite = {
+  ...rewrite("COMPLEMENT", "clothing to wear with coat"),
+  context: {
+    selectedTerms: [
+      { kind: "TAG", value: "Trousers", score: 31, productCount: 17 },
+    ],
+  },
+  analysis: {
+    ...rewrite("COMPLEMENT", "clothing to wear with coat").analysis,
+    referenceTerms: ["navy coat"],
+    semanticExpansions: [
+      "clothing to wear with navy coat",
+      "scarf",
+      "sweater",
+      "trousers",
+      "gloves",
+    ],
+  },
+} as unknown as QueryRewriteResult;
+assert.equal(
+  buildComplementEmbeddingBranches(complementRewrite)[0],
+  "trousers",
+  "catalog-grounded complement should be scheduled before generic complement branches",
 );
 
 const fusedBranches = fuseSemanticVectorBranches(
@@ -663,13 +741,13 @@ assert.equal(computeDiscoveryNoEvidenceThreshold({
   baseThreshold: 0.5,
   hasStrongCatalogEvidence: false,
   expansionGroundedCount: 4,
-}), 0.46);
+}), 0.40);
 assert.equal(computeDiscoveryNoEvidenceThreshold({
   retrievalMode: "DISCOVERY",
   baseThreshold: 0.5,
   hasStrongCatalogEvidence: false,
   expansionGroundedCount: 8,
-}), 0.45);
+}), 0.40);
 assert.equal(computeDiscoveryNoEvidenceThreshold({
   retrievalMode: "DIRECT",
   baseThreshold: 0.5,

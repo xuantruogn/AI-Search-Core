@@ -20,6 +20,14 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       where: { shop },
       orderBy: { createdAt: "desc" },
       take: 50,
+      select: {
+        id: true,
+        type: true,
+        success: true,
+        quantity: true,
+        productId: true,
+        createdAt: true,
+      },
     }),
   ]);
 

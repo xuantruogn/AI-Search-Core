@@ -4,6 +4,9 @@ import { reconcileIndexedProductEligibility } from "../commerce/indexed-products
 import { withDistributedLease } from "../commerce/lease-lock.server";
 import { enqueueProductSyncJob } from "./product-sync-job.server";
 import { kickProductSyncQueue } from "./product-sync-queue.server";
+import { updateProductVectorSearchabilityForShop } from "../search/vector-store.server";
+import { bumpSearchSemanticRevision } from "../search/search-catalog-revision.server";
+import { invalidateDerivedProductSearchCaches } from "../theme/theme-search-transport-key.server";
 
 async function queueReindexRows(
   shop: string,
@@ -108,6 +111,35 @@ export async function recoverBlockedProducts(
         subscriptionRecoveryReindex: subscriptionRecoveryIds.size,
         quotaControlledReindex: quotaControlledReindex.length,
       });
+
+      // Qdrant owns the first eligibility filter so vector search never has to
+      // ship the shop's entire active product-ID list on every request. Keep
+      // this payload in lockstep with the authoritative DB policy decision.
+      const activeSetChanged =
+        plan.deactivate.length > 0 || plan.reactivateReady.length > 0;
+      try {
+        await Promise.all([
+          updateProductVectorSearchabilityForShop({
+            shop,
+            productIds: plan.deactivate,
+            searchable: false,
+          }),
+          updateProductVectorSearchabilityForShop({
+            shop,
+            productIds: plan.reactivateReady,
+            searchable: true,
+          }),
+        ]);
+      } finally {
+        if (activeSetChanged) {
+          // DB eligibility is authoritative. Even if Qdrant update fails, bump
+          // the semantic revision so every process drops stale product/context
+          // caches; registry validation then fails closed until Qdrant catches up.
+          invalidateDerivedProductSearchCaches(shop);
+          await bumpSearchSemanticRevision(shop);
+        }
+      }
+
       const queued = await queueReindexRows(
         shop,
         plan.policyVersion,

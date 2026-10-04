@@ -56,6 +56,20 @@ function retryDelay(attempts: number) {
   return Math.min(RETRY_BASE_MS * 2 ** Math.max(0, attempts - 1), RETRY_MAX_MS);
 }
 
+const CATALOG_REASON_PRIORITY: Record<string, number> = {
+  INITIAL: 10,
+  STOREFRONT_RECONCILE: 20,
+  SLOT_REFILL: 30,
+  PLAN_RECONCILE: 40,
+  RECONCILE: 50,
+  MANUAL_REFRESH: 60,
+  LANGUAGE_CHANGE: 100,
+};
+
+function catalogReasonPriority(reason: string) {
+  return CATALOG_REASON_PRIORITY[reason] ?? 50;
+}
+
 function claimable(job: CatalogJobRow, now: Date) {
   if (job.attempts >= MAX_ATTEMPTS) return false;
   if (job.status === CATALOG_SYNC_STATUS.pending) return true;
@@ -88,20 +102,50 @@ async function enqueueCatalogSyncUnlocked({
   force: boolean;
   reason: string;
 }) {
-  const active = await db.$queryRaw<Array<{ id: number }>>`
-    SELECT \`id\`
+  const pending = await db.$queryRaw<Array<{ id: number; reason: string }>>`
+    SELECT \`id\`, \`reason\`
     FROM \`AiSearchCatalogSyncJob\`
-    WHERE
-      \`shop\` = ${shop}
-      AND (
-        \`status\` IN ('PENDING', 'PROCESSING')
-        OR (\`status\` = 'FAILED' AND \`attempts\` < ${MAX_ATTEMPTS})
-      )
+    WHERE \`shop\` = ${shop} AND \`status\` = 'PENDING'
     ORDER BY \`id\` DESC
     LIMIT 1
   `;
 
-  if (active[0]) return active[0].id;
+  if (pending[0]) {
+    if (
+      force &&
+      catalogReasonPriority(reason) > catalogReasonPriority(pending[0].reason)
+    ) {
+      await db.$executeRaw`
+        UPDATE \`AiSearchCatalogSyncJob\`
+        SET \`reason\` = ${reason}, \`updatedAt\` = UTC_TIMESTAMP(3)
+        WHERE \`id\` = ${pending[0].id} AND \`status\` = 'PENDING'
+      `;
+    }
+    return pending[0].id;
+  }
+
+  const processing = await db.$queryRaw<Array<{ id: number }>>`
+    SELECT \`id\`
+    FROM \`AiSearchCatalogSyncJob\`
+    WHERE \`shop\` = ${shop} AND \`status\` = 'PROCESSING'
+    ORDER BY \`id\` DESC
+    LIMIT 1
+  `;
+  if (processing[0] && !force) return processing[0].id;
+
+  if (!force) {
+    const retrying = await db.$queryRaw<Array<{ id: number }>>`
+      SELECT \`id\`
+      FROM \`AiSearchCatalogSyncJob\`
+      WHERE
+        \`shop\` = ${shop}
+        AND \`status\` = 'FAILED'
+        AND \`attempts\` < ${MAX_ATTEMPTS}
+      ORDER BY \`id\` DESC
+      LIMIT 1
+    `;
+    if (retrying[0]) return retrying[0].id;
+  }
 
   const entitlement = await getShopEntitlement(shop);
 
@@ -173,10 +217,19 @@ export function enqueueCatalogRefresh(shop: string, reason = "RECONCILE") {
 async function candidates() {
   const [pending, processing, failed] = await Promise.all([
     db.$queryRaw<CatalogJobRow[]>`
-      SELECT *
-      FROM \`AiSearchCatalogSyncJob\`
-      WHERE \`attempts\` < ${MAX_ATTEMPTS} AND \`status\` = 'PENDING'
-      ORDER BY \`createdAt\` ASC, \`id\` ASC
+      SELECT pendingJob.*
+      FROM \`AiSearchCatalogSyncJob\` pendingJob
+      WHERE
+        pendingJob.\`attempts\` < ${MAX_ATTEMPTS}
+        AND pendingJob.\`status\` = 'PENDING'
+        AND NOT EXISTS (
+          SELECT 1
+          FROM \`AiSearchCatalogSyncJob\` activeJob
+          WHERE
+            activeJob.\`shop\` = pendingJob.\`shop\`
+            AND activeJob.\`status\` = 'PROCESSING'
+        )
+      ORDER BY pendingJob.\`createdAt\` ASC, pendingJob.\`id\` ASC
       LIMIT 20
     `,
     db.$queryRaw<CatalogJobRow[]>`
@@ -187,10 +240,19 @@ async function candidates() {
       LIMIT 20
     `,
     db.$queryRaw<CatalogJobRow[]>`
-      SELECT *
-      FROM \`AiSearchCatalogSyncJob\`
-      WHERE \`attempts\` < ${MAX_ATTEMPTS} AND \`status\` = 'FAILED'
-      ORDER BY \`processedAt\` ASC, \`id\` ASC
+      SELECT failedJob.*
+      FROM \`AiSearchCatalogSyncJob\` failedJob
+      WHERE
+        failedJob.\`attempts\` < ${MAX_ATTEMPTS}
+        AND failedJob.\`status\` = 'FAILED'
+        AND NOT EXISTS (
+          SELECT 1
+          FROM \`AiSearchCatalogSyncJob\` activeJob
+          WHERE
+            activeJob.\`shop\` = failedJob.\`shop\`
+            AND activeJob.\`status\` IN ('PENDING', 'PROCESSING')
+        )
+      ORDER BY failedJob.\`processedAt\` ASC, failedJob.\`id\` ASC
       LIMIT 50
     `,
   ]);

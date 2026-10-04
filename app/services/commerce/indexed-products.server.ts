@@ -289,6 +289,29 @@ export async function updateIndexedProductEnrichmentState({
   `;
 }
 
+export async function markIndexedProductSemanticSourceChanged({
+  shop,
+  productId,
+  sourceDocumentHash,
+}: {
+  shop: string;
+  productId: string;
+  sourceDocumentHash: string;
+}) {
+  return db.$executeRaw`
+    UPDATE \`AiSearchIndexedProduct\`
+    SET
+      \`sourceDocumentHash\` = ${sourceDocumentHash},
+      \`enrichmentVersion\` = NULL,
+      \`enrichmentStatus\` = 'BASE_ONLY',
+      \`enrichmentLastError\` = NULL,
+      \`enrichmentRetryAt\` = NULL,
+      \`enrichmentUpdatedAt\` = UTC_TIMESTAMP(3),
+      \`updatedAt\` = UTC_TIMESTAMP(3)
+    WHERE \`shop\` = ${shop} AND \`productId\` = ${productId}
+  `;
+}
+
 export async function getEnrichmentCoverageStats(shop: string) {
   const rows = await db.$queryRaw<Array<{
     fallbackProducts: bigint | number;
@@ -406,7 +429,13 @@ export async function releaseProductSlotReservation(
   `;
 }
 
-export async function upsertIndexedProduct({
+/**
+ * Stage a freshly written vector without exposing the product through DB-backed
+ * structured search yet. Qdrant is also written with searchable=false first.
+ * The product is published only after the semantic profile and enrichment
+ * state are durable.
+ */
+export async function stageIndexedProductVectorUpdate({
   shop,
   productId,
   handle,
@@ -418,6 +447,47 @@ export async function upsertIndexedProduct({
   handle: string;
   title: string;
   documentHash: string;
+}) {
+  await db.$executeRaw`
+    INSERT INTO \`AiSearchIndexedProduct\` (
+      \`shop\`, \`productId\`, \`handle\`, \`title\`, \`status\`, \`hasVector\`,
+      \`documentHash\`, \`vectorStatus\`, \`searchable\`, \`blockedReason\`,
+      \`lastSeenAt\`, \`createdAt\`, \`updatedAt\`
+    ) VALUES (
+      ${shop}, ${productId}, ${handle}, ${title}, 'INDEXED', true,
+      ${documentHash}, 'STAGING', false, NULL,
+      UTC_TIMESTAMP(3), UTC_TIMESTAMP(3), UTC_TIMESTAMP(3)
+    )
+    ON DUPLICATE KEY UPDATE
+      \`handle\` = ${handle},
+      \`title\` = ${title},
+      \`status\` = 'INDEXED',
+      \`hasVector\` = true,
+      \`vectorStatus\` = 'STAGING',
+      \`searchable\` = false,
+      \`blockedReason\` = NULL,
+      \`documentHash\` = ${documentHash},
+      \`lastSeenAt\` = UTC_TIMESTAMP(3),
+      \`updatedAt\` = UTC_TIMESTAMP(3)
+  `;
+}
+
+export async function upsertIndexedProduct({
+  shop,
+  productId,
+  handle,
+  title,
+  documentHash,
+  vectorWritten = true,
+  touchSearchState = true,
+}: {
+  shop: string;
+  productId: string;
+  handle: string;
+  title: string;
+  documentHash: string;
+  vectorWritten?: boolean;
+  touchSearchState?: boolean;
 }) {
   await db.$executeRaw`
     INSERT INTO \`AiSearchIndexedProduct\` (
@@ -438,9 +508,15 @@ export async function upsertIndexedProduct({
       \`searchable\` = true,
       \`blockedReason\` = NULL,
       \`documentHash\` = ${documentHash},
-      \`lastIndexedAt\` = UTC_TIMESTAMP(3),
+      \`lastIndexedAt\` = CASE
+        WHEN ${vectorWritten} THEN UTC_TIMESTAMP(3)
+        ELSE \`lastIndexedAt\`
+      END,
       \`lastSeenAt\` = UTC_TIMESTAMP(3),
-      \`updatedAt\` = UTC_TIMESTAMP(3)
+      \`updatedAt\` = CASE
+        WHEN ${touchSearchState} THEN UTC_TIMESTAMP(3)
+        ELSE \`updatedAt\`
+      END
   `;
 }
 
@@ -572,12 +648,13 @@ export async function markIndexedProductCatalogSeen({
   // Revalidation paths may only know that Shopify still considers the product
   // ACTIVE. Do not overwrite handle/title with stale registry values while a
   // concurrent webhook may have just written fresher product metadata.
+  // These are liveness timestamps only. Do not invalidate the search-result
+  // cache when no search-visible product state changed.
   return db.$executeRaw`
     UPDATE \`AiSearchIndexedProduct\`
     SET
       \`lastSeenAt\` = UTC_TIMESTAMP(3),
-      \`lastCatalogSeenAt\` = UTC_TIMESTAMP(3),
-      \`updatedAt\` = UTC_TIMESTAMP(3)
+      \`lastCatalogSeenAt\` = UTC_TIMESTAMP(3)
     WHERE \`shop\` = ${shop} AND \`productId\` = ${productId}
   `;
 }
@@ -598,11 +675,15 @@ export async function touchIndexedProductCatalogSeen({
   return db.$executeRaw`
     UPDATE \`AiSearchIndexedProduct\`
     SET
+      \`updatedAt\` = CASE
+        WHEN \`handle\` <> ${handle} OR \`title\` <> ${title}
+          THEN UTC_TIMESTAMP(3)
+        ELSE \`updatedAt\`
+      END,
       \`handle\` = ${handle},
       \`title\` = ${title},
       \`lastSeenAt\` = UTC_TIMESTAMP(3),
-      \`lastCatalogSeenAt\` = UTC_TIMESTAMP(3),
-      \`updatedAt\` = UTC_TIMESTAMP(3)
+      \`lastCatalogSeenAt\` = UTC_TIMESTAMP(3)
     WHERE \`shop\` = ${shop} AND \`productId\` = ${productId}
   `;
 }
@@ -626,10 +707,14 @@ export async function touchIndexedProductLiveSeen({
   return db.$executeRaw`
     UPDATE \`AiSearchIndexedProduct\`
     SET
+      \`updatedAt\` = CASE
+        WHEN \`handle\` <> ${handle} OR \`title\` <> ${title}
+          THEN UTC_TIMESTAMP(3)
+        ELSE \`updatedAt\`
+      END,
       \`handle\` = ${handle},
       \`title\` = ${title},
-      \`lastSeenAt\` = UTC_TIMESTAMP(3),
-      \`updatedAt\` = UTC_TIMESTAMP(3)
+      \`lastSeenAt\` = UTC_TIMESTAMP(3)
     WHERE \`shop\` = ${shop} AND \`productId\` = ${productId}
   `;
 }
@@ -646,7 +731,14 @@ export async function markIndexedProductUnpublished(shop: string, productId: str
     UPDATE \`AiSearchIndexedProduct\`
     SET \`searchable\` = false, \`blockedReason\` = 'UNPUBLISHED',
         \`status\` = 'UNPUBLISHED', \`updatedAt\` = UTC_TIMESTAMP(3)
-    WHERE \`shop\` = ${shop} AND \`productId\` = ${productId}
+    WHERE
+      \`shop\` = ${shop}
+      AND \`productId\` = ${productId}
+      AND NOT (
+        \`searchable\` = false
+        AND \`blockedReason\` = 'UNPUBLISHED'
+        AND \`status\` = 'UNPUBLISHED'
+      )
   `;
 }
 

@@ -11,6 +11,9 @@ import {
   getShopLocalesWithFallback,
   isSupportedFallbackLocale,
 } from "../services/commerce/shop-locales.server";
+import { enqueueCatalogRefresh } from "../services/catalog/catalog-sync-job.server";
+import { kickCatalogSyncQueue } from "../services/catalog/catalog-sync-queue.server";
+import { invalidateSearchCatalogRevisionCache } from "../services/search/search-catalog-revision.server";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { admin, session } = await authenticate.admin(request);
@@ -142,6 +145,11 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     10,
   );
 
+  const previousSettings = await getShopSettings(session.shop);
+  const previousLanguage = previousSettings.searchLanguage?.trim() || null;
+  const languageChanged =
+    previousLanguage?.toLowerCase() !== searchLanguage.toLowerCase();
+
   await updateShopSettings({
     shop: session.shop,
     aiSearchEnabled,
@@ -149,6 +157,20 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     searchLanguage,
     resultLimit: Number.isFinite(resultLimit) ? resultLimit : 20,
   });
+  invalidateSearchCatalogRevisionCache(session.shop);
+
+  // Product embeddings and semantic profiles are language-dependent. Changing
+  // the merchant search language without rebuilding them leaves query analysis
+  // and the catalog in different semantic spaces. Queue this even on first
+  // language selection: the catalog queue coalesces with an existing initial
+  // sync, while legacy shops that already have vectors are safely rebuilt.
+  if (languageChanged) {
+    const refreshJobId = await enqueueCatalogRefresh(
+      session.shop,
+      "LANGUAGE_CHANGE",
+    );
+    if (refreshJobId) kickCatalogSyncQueue();
+  }
 
   if (onboardingLanguage) {
     throw redirect("/app");

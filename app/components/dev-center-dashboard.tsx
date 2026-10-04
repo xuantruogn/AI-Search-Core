@@ -62,6 +62,11 @@ export function DevCenterDashboard({
 
   return (
     <div className="dc-shell">
+      {busy ? (
+        <DevLoader
+          label={navigation.state === "submitting" ? "Saving changes..." : "Loading Dev Center..."}
+        />
+      ) : null}
       <aside className="dc-sidebar">
         <div className="dc-brand">
           <span className="dc-brand-mark">B</span>
@@ -184,7 +189,15 @@ export function DevCenterDashboard({
                             ? "Dev override · no Shopify billing"
                             : commercialPrice(shop)}
                         </small>
-                        {shop.commercial.customTerms?.pendingCommercialChange ? <em className="dc-pending">Pending commercial change</em> : null}
+                        {shop.pendingPlanHandle ? (
+                          <em className="dc-pending">
+                            Pending plan: {shop.pendingPlanHandle.toLowerCase() === "custom"
+                              ? shop.customConfig?.name ?? "Custom"
+                              : shop.pendingPlanHandle}
+                          </em>
+                        ) : shop.commercial.customTerms?.pendingCommercialChange ? (
+                          <em className="dc-pending">Pending commercial change</em>
+                        ) : null}
                       </td>
                       <td>
                         <StatusBadge tone={shop.state.aiOperational ? "success" : shop.state.aiConfigured ? "warning" : "danger"}>
@@ -516,6 +529,16 @@ function ShopDrawer({ shop, grants, csrfToken, query, canQuotaWrite, canPlanWrit
           <DrawerSection title="Commercial">
             <div className="dc-detail-grid">
               <Stat label="Current plan" value={shop.commercial.planLabel} />
+              <Stat
+                label="Pending plan"
+                value={
+                  shop.pendingPlanHandle
+                    ? shop.pendingPlanHandle.toLowerCase() === "custom"
+                      ? shop.customConfig?.name ?? "Custom"
+                      : shop.pendingPlanHandle
+                    : "—"
+                }
+              />
               <Stat label="Subscription" value={shop.subscriptionStatus} />
               <Stat label="Active billed price" value={shop.commercial.priceSnapshot === null ? "—" : `${formatMoney(shop.commercial.priceSnapshot, shop.commercial.currency ?? "USD")}${shop.commercial.interval === "ANNUAL" ? " / year" : " / month"}`} />
               <Stat label="Billing cycle ends" value={formatDate(shop.commercial.periodEnd)} />
@@ -679,6 +702,20 @@ function ShopDrawer({ shop, grants, csrfToken, query, canQuotaWrite, canPlanWrit
           </details>
         </div>
       </aside>
+    </div>
+  );
+}
+
+export function DevLoader({ label = "Loading..." }: { label?: string }) {
+  return (
+    <div className="dc-loader-overlay" role="status" aria-live="polite" aria-busy="true">
+      <div className="dc-loader-card">
+        <span className="dc-loader-spinner" aria-hidden="true" />
+        <div>
+          <strong>{label}</strong>
+          <small>Please keep this page open.</small>
+        </div>
+      </div>
     </div>
   );
 }

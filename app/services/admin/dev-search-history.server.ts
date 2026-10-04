@@ -11,11 +11,34 @@ function positiveInt(value: string | null, fallback: number) {
 }
 
 function normalizePageSize(value: string | null) {
-  if (value === "all") return "all" as const;
   const parsed = positiveInt(value, DEFAULT_PAGE_SIZE);
   return PAGE_SIZES.includes(parsed as (typeof PAGE_SIZES)[number])
     ? parsed
     : DEFAULT_PAGE_SIZE;
+}
+
+function readTopVectorSimilarity(rankedProductsJson: string) {
+  try {
+    const parsed = JSON.parse(rankedProductsJson) as unknown;
+    if (!Array.isArray(parsed) || parsed.length === 0) {
+      return { vectorSimilarity: null, primaryVectorSimilarity: null };
+    }
+    const first = parsed[0] as Record<string, unknown>;
+    return {
+      vectorSimilarity:
+        typeof first.vectorSimilarity === "number" &&
+        Number.isFinite(first.vectorSimilarity)
+          ? first.vectorSimilarity
+          : null,
+      primaryVectorSimilarity:
+        typeof first.primaryVectorSimilarity === "number" &&
+        Number.isFinite(first.primaryVectorSimilarity)
+          ? first.primaryVectorSimilarity
+          : null,
+    };
+  } catch {
+    return { vectorSimilarity: null, primaryVectorSimilarity: null };
+  }
 }
 
 export async function getDevSearchHistoryData(searchParams: URLSearchParams) {
@@ -51,17 +74,16 @@ export async function getDevSearchHistoryData(searchParams: URLSearchParams) {
     db.aiSearchQueryLog.count({ where }),
   ]);
 
-  const totalPages =
-    pageSize === "all" ? 1 : Math.max(1, Math.ceil(total / pageSize));
-  const page = pageSize === "all" ? 1 : Math.min(requestedPage, totalPages);
-  const skip = pageSize === "all" ? undefined : (page - 1) * pageSize;
-  const take = pageSize === "all" ? undefined : pageSize;
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const page = Math.min(requestedPage, totalPages);
+  const skip = (page - 1) * pageSize;
+  const take = pageSize;
 
   const logs = await db.aiSearchQueryLog.findMany({
     where,
     orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-    ...(skip === undefined ? {} : { skip }),
-    ...(take === undefined ? {} : { take }),
+    skip,
+    take,
     select: {
       id: true,
       shop: true,
@@ -98,20 +120,20 @@ export async function getDevSearchHistoryData(searchParams: URLSearchParams) {
       pageSize,
       total,
       totalPages,
-      from: total === 0 ? 0 : pageSize === "all" ? 1 : skip! + 1,
-      to:
-        total === 0
-          ? 0
-          : pageSize === "all"
-            ? total
-            : Math.min(total, skip! + logs.length),
+      from: total === 0 ? 0 : skip + 1,
+      to: total === 0 ? 0 : Math.min(total, skip + logs.length),
     },
     shops: shopRows.map((row) => row.shop),
     llmStatuses: statusRows.map((row) => row.llmStatus),
-    logs: logs.map((log) => ({
-      ...log,
-      createdAt: log.createdAt.toISOString(),
-    })),
+    logs: logs.map((log) => {
+      const vector = readTopVectorSimilarity(log.rankedProductsJson);
+      return {
+        ...log,
+        topVectorSimilarity: vector.vectorSimilarity,
+        topPrimaryVectorSimilarity: vector.primaryVectorSimilarity,
+        createdAt: log.createdAt.toISOString(),
+      };
+    }),
   };
 }
 

@@ -53,6 +53,10 @@ type ShopifyProductNode = {
         value: string;
       }>;
     }>;
+    pageInfo?: {
+      hasNextPage: boolean;
+      endCursor: string | null;
+    };
   };
 };
 
@@ -88,6 +92,105 @@ export type ProductPage = {
   hasNextPage: boolean;
   endCursor: string | null;
 };
+
+type ShopifyVariantNode = ShopifyProductNode["variants"]["nodes"][number];
+
+function maxVariantsPerProduct() {
+  const parsed = Number.parseInt(
+    process.env.AI_SEARCH_MAX_VARIANTS_PER_PRODUCT || "",
+    10,
+  );
+  return Number.isSafeInteger(parsed) && parsed >= 250
+    ? Math.min(parsed, 10_000)
+    : 5_000;
+}
+
+async function hydrateAllProductVariants(
+  admin: AdminGraphqlClient,
+  product: ShopifyProductNode,
+): Promise<ShopifyProductNode> {
+  if (!product.variants.pageInfo?.hasNextPage) return product;
+
+  const nodes: ShopifyVariantNode[] = [...product.variants.nodes];
+  let after = product.variants.pageInfo.endCursor;
+  const maxVariants = maxVariantsPerProduct();
+
+  while (after && nodes.length < maxVariants) {
+    const response = await admin.graphql(
+      `#graphql
+        query AiSearchProductVariants($id: ID!, $after: String) {
+          product(id: $id) {
+            id
+            variants(first: 250, after: $after) {
+              nodes {
+                title
+                sku
+                barcode
+                selectedOptions {
+                  name
+                  value
+                }
+              }
+              pageInfo {
+                hasNextPage
+                endCursor
+              }
+            }
+          }
+        }
+      `,
+      { variables: { id: product.id, after } },
+    );
+    const json = (await response.json()) as {
+      data?: {
+        product?: {
+          variants?: {
+            nodes?: ShopifyVariantNode[];
+            pageInfo?: { hasNextPage: boolean; endCursor: string | null };
+          };
+        } | null;
+      };
+      errors?: Array<{ message?: string }>;
+    };
+
+    if (!response.ok || json.errors?.length || !json.data?.product?.variants) {
+      const detail = json.errors?.map((error) => error.message).filter(Boolean).join("; ");
+      throw new Error(
+        detail
+          ? `Shopify product variants query failed: ${detail}`
+          : `Shopify product variants query failed with HTTP ${response.status}`,
+      );
+    }
+
+    const connection = json.data.product.variants;
+    nodes.push(...(connection.nodes ?? []));
+    if (!connection.pageInfo?.hasNextPage) {
+      after = null;
+      break;
+    }
+    if (!connection.pageInfo.endCursor || connection.pageInfo.endCursor === after) {
+      throw new Error("Shopify variants pagination did not advance");
+    }
+    after = connection.pageInfo.endCursor;
+  }
+
+  if (nodes.length >= maxVariants && after) {
+    throw new Error(
+      `Product ${product.id} exceeds AI_SEARCH_MAX_VARIANTS_PER_PRODUCT=${maxVariants}; refusing a partial semantic index`,
+    );
+  }
+
+  return {
+    ...product,
+    variants: {
+      nodes,
+      pageInfo: {
+        hasNextPage: false,
+        endCursor: null,
+      },
+    },
+  };
+}
 
 // =====================================================
 // MAP SHOPIFY PRODUCT
@@ -254,7 +357,7 @@ export async function fetchProductsForIndex(
                 }
               }
 
-              variants(first: 100) {
+              variants(first: 250) {
                 nodes {
                   title
                   sku
@@ -263,6 +366,10 @@ export async function fetchProductsForIndex(
                     name
                     value
                   }
+                }
+                pageInfo {
+                  hasNextPage
+                  endCursor
                 }
               }
             }
@@ -318,21 +425,19 @@ export async function fetchProductsForIndex(
   // the same local visibility predicate used by webhook/search revalidation as
   // a second safety fence. This also protects against a future/scheduled
   // `publishedAt` value being treated as live before its effective time.
-  const products =
-    connection.nodes
-      .filter(
-        (product) =>
-          isSearchableOnlineStoreProduct({
-            status:
-              product.status,
-
-            publishedAt:
-              product.publishedAt,
-          }),
-      )
-      .map(
-        mapShopifyProduct,
-      );
+  const searchableNodes =
+    connection.nodes.filter((product) =>
+      isSearchableOnlineStoreProduct({
+        status: product.status,
+        publishedAt: product.publishedAt,
+      }),
+    );
+  const hydratedNodes = await Promise.all(
+    searchableNodes.map((product) =>
+      hydrateAllProductVariants(admin, product),
+    ),
+  );
+  const products = hydratedNodes.map(mapShopifyProduct);
 
   return {
     products,
@@ -563,7 +668,7 @@ export async function fetchProductForIndexById(
               }
             }
 
-            variants(first: 100) {
+            variants(first: 250) {
               nodes {
                 title
                 sku
@@ -572,6 +677,10 @@ export async function fetchProductForIndexById(
                   name
                   value
                 }
+              }
+              pageInfo {
+                hasNextPage
+                endCursor
               }
             }
           }
@@ -647,9 +756,8 @@ export async function fetchProductForIndexById(
     return null;
   }
 
-  return mapShopifyProduct(
-    product,
-  );
+  const hydratedProduct = await hydrateAllProductVariants(admin, product);
+  return mapShopifyProduct(hydratedProduct);
 }
 
 export type SearchableProductSnapshot = {

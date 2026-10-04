@@ -15,11 +15,13 @@ import {
 import {
   deleteProductVectorForShop,
   reconcileOrphanProductVectorsForShop,
+  updateProductVectorSearchabilityForShop,
 } from "../search/vector-store.server";
 
 import {
-  deleteProductThemeSearchTransportKeys,
+  invalidateDerivedProductSearchCaches,
 } from "../theme/theme-search-transport-key.server";
+import { bumpSearchSemanticRevision } from "../search/search-catalog-revision.server";
 
 import { recordUsageEvent } from "../commerce/usage.server";
 import { getShopEntitlement } from "../commerce/entitlement.server";
@@ -123,9 +125,6 @@ async function cleanupStaleRegistryEntries({
   let revalidatedSearchable =
     0;
 
-  let transportKeysRemoved =
-    0;
-
   for (;;) {
     const stale =
       await listStaleIndexedProducts(
@@ -158,6 +157,8 @@ async function cleanupStaleRegistryEntries({
             product.productId,
         ),
       );
+
+    let batchSearchStateChanged = false;
 
     for (
       const product
@@ -195,11 +196,16 @@ async function cleanupStaleRegistryEntries({
       }
 
       if (shopifyPresence === "NOT_SEARCHABLE") {
-        await markIndexedProductUnpublished(shop, product.productId);
-        transportKeysRemoved += await deleteProductThemeSearchTransportKeys({
+        const changed = await markIndexedProductUnpublished(shop, product.productId);
+        await updateProductVectorSearchabilityForShop({
           shop,
-          productId: product.productId,
+          productIds: [product.productId],
+          searchable: false,
         });
+        invalidateDerivedProductSearchCaches(shop, product.productId);
+        if (changed > 0) {
+          batchSearchStateChanged = true;
+        }
         await markIndexedProductCatalogSeen({ shop, productId: product.productId });
         continue;
       }
@@ -215,45 +221,39 @@ async function cleanupStaleRegistryEntries({
       // - unpublished
       // - missing
       //
-      // Cleanup order rất quan trọng:
+      // Cleanup order:
       //
-      // 1. Qdrant vector
-      // 2. Render Transport Keys
-      // 3. IndexedProduct registry
+      // 1. Remove Qdrant vector.
+      // 2. Remove IndexedProduct registry (semantic profile cascades).
+      // 3. Invalidate semantic/derived transport caches.
       //
-      // Registry được xóa CUỐI.
-      //
-      // Nếu bước 1 hoặc 2 lỗi, registry stale vẫn còn để lần sau
-      // cleanup retry. Nếu xóa registry trước thì có thể để lại
-      // orphan Transport Key vĩnh viễn.
+      // Transport candidates are derived in memory and are not persisted.
       // --------------------------------------------------------
 
-      if (
-        product.hasVector
-      ) {
+      // Fail closed first so a partial cleanup cannot leave a searchable
+      // registry row pointing at a missing/stale vector.
+      await markIndexedProductUnpublished(shop, product.productId);
+      invalidateDerivedProductSearchCaches(shop, product.productId);
+      batchSearchStateChanged = true;
+
+      if (product.hasVector) {
+        await updateProductVectorSearchabilityForShop({
+          shop,
+          productIds: [product.productId],
+          searchable: false,
+        });
         await deleteProductVectorForShop({
           shop,
-
-          productId:
-            product.productId,
+          productId: product.productId,
         });
       }
-
-      const deletedTransportKeys =
-        await deleteProductThemeSearchTransportKeys({
-          shop,
-
-          productId:
-            product.productId,
-        });
-
-      transportKeysRemoved +=
-        deletedTransportKeys;
 
       await removeIndexedProduct(
         shop,
         product.productId,
       );
+
+      invalidateDerivedProductSearchCaches(shop, product.productId);
 
       // --------------------------------------------------------
       // Usage / operational telemetry
@@ -276,8 +276,6 @@ async function cleanupStaleRegistryEntries({
             product.status,
 
           shopifyPresence,
-
-          deletedTransportKeys,
         },
       });
 
@@ -295,10 +293,12 @@ async function cleanupStaleRegistryEntries({
             product.status,
 
           shopifyPresence,
-
-          deletedTransportKeys,
         },
       );
+    }
+
+    if (batchSearchStateChanged) {
+      await bumpSearchSemanticRevision(shop);
     }
   }
 
@@ -306,8 +306,6 @@ async function cleanupStaleRegistryEntries({
     removed,
 
     revalidatedSearchable,
-
-    transportKeysRemoved,
   };
 }
 
@@ -719,9 +717,6 @@ async function processOne() {
             let staleRevalidatedSearchable =
               0;
 
-            let staleTransportKeysRemoved =
-              0;
-
             let orphanVectorsScanned =
               0;
 
@@ -768,9 +763,6 @@ async function processOne() {
 
               staleRevalidatedSearchable =
                 staleCleanup.revalidatedSearchable;
-
-              staleTransportKeysRemoved =
-                staleCleanup.transportKeysRemoved;
 
               try {
                 const orphanCleanup =
@@ -878,8 +870,6 @@ async function processOne() {
                 staleRemoved,
 
                 staleRevalidatedSearchable,
-
-                staleTransportKeysRemoved,
 
                 orphanVectorsScanned,
 

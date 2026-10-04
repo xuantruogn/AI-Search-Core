@@ -7,9 +7,15 @@ import {
   fetchSearchableProductSnapshotsByIds,
 } from "../products/product-sync.server";
 import {
+  markIndexedProductUnpublished,
   removeIndexedProduct,
   touchIndexedProductLiveSeen,
 } from "../commerce/indexed-products.server";
+import { invalidateDerivedProductSearchCaches } from "../theme/theme-search-transport-key.server";
+import {
+  bumpSearchCatalogRevision,
+  bumpSearchSemanticRevision,
+} from "./search-catalog-revision.server";
 
 type AdminGraphqlClient = {
   graphql: (
@@ -108,14 +114,25 @@ export async function revalidateSearchResults({
     if (validated.length >= safeLimit) break;
   }
 
+  if (repairedMetadata > 0) {
+    // Handle/title repair changes storefront output/cache identity, but the
+    // semantic profile remains authoritative until the durable product-sync
+    // job rebuilds it. Do not force a semantic-cache rebuild with stale facts.
+    await bumpSearchCatalogRevision(shop);
+  }
+
   // Stale result cleanup is correctness maintenance, not paid AI work. It is
   // intentionally best-effort so one temporary Qdrant/DB failure cannot hide
   // the remaining valid search results.
   await Promise.all(
     staleProductIds.map(async (productId) => {
       try {
+        await markIndexedProductUnpublished(shop, productId);
+        invalidateDerivedProductSearchCaches(shop, productId);
+        await bumpSearchSemanticRevision(shop);
         await deleteProductVectorForShop({ shop, productId });
         await removeIndexedProduct(shop, productId);
+        invalidateDerivedProductSearchCaches(shop, productId);
       } catch (error) {
         console.error("[AI Search] Search-time stale product cleanup failed:", {
           shop,

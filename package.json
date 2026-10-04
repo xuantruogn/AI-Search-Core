@@ -24,6 +24,8 @@
     "test:v4:corpus": "tsx scripts/theme-map-v4-corpus-selftest.ts",
     "test:query-plan": "tsx scripts/query-plan-shadow-selftest.ts",
     "test:product-lifecycle": "tsx --env-file=.env scripts/product-lifecycle-selftest.ts",
+    "test:data-architecture": "tsx --env-file=.env scripts/data-architecture-selftest.ts",
+    "test:compact-profile": "tsx scripts/compact-profile-integration-selftest.ts",
     "test:dev-dashboard": "tsx scripts/dev-dashboard-commercial-selftest.ts",
     "backfill:product-policy": "tsx --env-file=.env scripts/product-policy-backfill.ts",
     "dev-admin:create": "tsx --env-file=.env scripts/dev-admin-create.ts",

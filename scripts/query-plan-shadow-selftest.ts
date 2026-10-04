@@ -5,8 +5,14 @@ import {
   parseDeterministicQuery,
 } from "../app/services/search/deterministic-query-parser.server";
 import { routeQuery } from "../app/services/search/query-router.server";
-import { isApostropheSuffixCatalogMatch } from "../app/services/search/query-planner.server";
-import type { ShopSearchDictionary } from "../app/services/search/shop-search-dictionary.server";
+import {
+  isApostropheSuffixCatalogMatch,
+  sourceProductTypeOwnsTarget,
+} from "../app/services/search/query-planner.server";
+import {
+  buildMatchIndex,
+  type ShopSearchDictionary,
+} from "../app/services/search/shop-search-dictionary.server";
 
 const dictionary: ShopSearchDictionary = {
   shop: "fixture.myshopify.com",
@@ -31,6 +37,8 @@ const dictionary: ShopSearchDictionary = {
     ["air force 1", "Air Force 1", "MODEL"],
     ["iphone 15 pro max", "iPhone 15 Pro Max", "MODEL"],
     ["simple", "Simple", "MODEL"],
+    ["daisy", "Daisy", "MODEL"],
+    ["home", "Home", "PRODUCT_TYPE"],
     ["hat", "hat", "PRODUCT_TYPE"],
     ["man", "Man", "ATTRIBUTE"],
     ["co", "Co", "BRAND"],
@@ -49,7 +57,9 @@ const dictionary: ShopSearchDictionary = {
     aliases: [],
     productCount: 3,
   })),
+  matchIndex: {} as ShopSearchDictionary["matchIndex"],
 };
+dictionary.matchIndex = buildMatchIndex(dictionary.entries);
 
 function planRoute(query: string) {
   const deterministic = parseDeterministicQuery(query);
@@ -72,6 +82,28 @@ assert.equal(parseDeterministicQuery("giá đỡ điện thoại").price, undefi
 assert.equal(isApostropheSuffixCatalogMatch("I'm looking", "m"), true);
 assert.equal(isApostropheSuffixCatalogMatch("women's top", "s"), true);
 assert.equal(isApostropheSuffixCatalogMatch("shirt M", "m"), false);
+assert.equal(
+  sourceProductTypeOwnsTarget({
+    query: "comfortable clothes for working from home",
+    start: 5,
+    end: 6,
+  }),
+  false,
+);
+assert.equal(
+  sourceProductTypeOwnsTarget({
+    query: "jacket for rainy weather",
+    start: 0,
+    end: 1,
+  }),
+  true,
+);
+assert.equal(
+  matchCatalogTerms("bag for daily office use", dictionary).some(
+    (match) => match.entry.canonical === "Daisy",
+  ),
+  false,
+);
 
 // Accent folding must not turn Vietnamese source words into unrelated English
 // catalog facts before the translation pass.
@@ -102,7 +134,10 @@ assert.ok(exact.matches.some((match) => match.entry.field === "MODEL"));
 assert.ok(exact.deterministic.measurements.some((item) => item.name === "size"));
 
 const semantic = planRoute("giày đi cả ngày không đau chân");
-assert.equal(semantic.routed.route, "VECTOR_SEMANTIC");
+assert.equal(semantic.routed.route, "LIGHT_LLM");
+assert.ok(
+  semantic.routed.reasons.includes("IDENTITY_WITH_SUBSTANTIAL_SEMANTIC_REMAINDER"),
+);
 
 // A catalog model name can also be an ordinary adjective in recommendation
 // prose. An isolated MODEL hit must not collapse a long unresolved need into

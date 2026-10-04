@@ -1,6 +1,7 @@
 import type { LinksFunction, LoaderFunctionArgs } from "react-router";
-import { Form, Link, useLoaderData } from "react-router";
+import { Form, Link, useLoaderData, useNavigation } from "react-router";
 
+import { DevLoader } from "../components/dev-center-dashboard";
 import { getDevSearchHistoryData } from "../services/admin/dev-search-history.server";
 import { requireDevPermission } from "../services/dev-auth.server";
 import { devSecurityHeaders } from "../services/dev-security.server";
@@ -28,10 +29,13 @@ export async function loader({ request }: LoaderFunctionArgs) {
 
 export default function DevSearchHistoryRoute() {
   const { history, devUser, csrfToken } = useLoaderData<typeof loader>();
+  const navigation = useNavigation();
+  const busy = navigation.state !== "idle";
   const { filters, pagination } = history;
 
   return (
     <div className="dc-shell">
+      {busy ? <DevLoader label="Loading Search History..." /> : null}
       <aside className="dc-sidebar">
         <div className="dc-brand">
           <span className="dc-brand-mark">B</span>
@@ -121,7 +125,6 @@ export default function DevSearchHistoryRoute() {
                   <option value="50">50</option>
                   <option value="100">100</option>
                   <option value="250">250</option>
-                  <option value="all">All</option>
                 </select>
               </label>
 
@@ -150,7 +153,7 @@ export default function DevSearchHistoryRoute() {
                     <th>Original query</th>
                     <th>LLM expansion</th>
                     <th>Embedding input</th>
-                    <th>Top relevance score</th>
+                    <th>Top relevance / vector</th>
                     <th>Results</th>
                     <th>LLM</th>
                     <th>Duration</th>
@@ -169,8 +172,11 @@ export default function DevSearchHistoryRoute() {
                         <strong className="dc-score-value">{scoreRaw(search.topScore)}</strong>
                         <small>
                           Final {scoreRaw(search.topScore)}
-                          {search.topCandidateScore !== null
-                            ? " · raw candidate " + scoreRaw(search.topCandidateScore)
+                          {search.topVectorSimilarity !== null
+                            ? " · vector " + scoreRaw(search.topVectorSimilarity)
+                            : ""}
+                          {search.topPrimaryVectorSimilarity !== null
+                            ? " · primary " + scoreRaw(search.topPrimaryVectorSimilarity)
                             : ""}
                         </small>
                       </td>
@@ -197,7 +203,9 @@ export default function DevSearchHistoryRoute() {
                               <strong>Diagnostics</strong>
                               <dl>
                                 <dt>Top final score</dt><dd>{scoreRaw(search.topScore)}</dd>
-                                <dt>Top candidate score</dt><dd>{scoreRaw(search.topCandidateScore)}</dd>
+                                <dt>Top ranked vector similarity</dt><dd>{scoreRaw(search.topVectorSimilarity)}</dd>
+                                <dt>Top ranked primary-vector similarity</dt><dd>{scoreRaw(search.topPrimaryVectorSimilarity)}</dd>
+                                <dt>Top retrieval candidate score</dt><dd>{scoreRaw(search.topCandidateScore)}</dd>
                                 <dt>Vector threshold</dt><dd>{search.vectorThreshold.toFixed(3)}</dd>
                                 <dt>Scoring</dt><dd>Final relevance combines vector similarity and reranking; it is not a probability.</dd>
                                 <dt>Candidate count</dt><dd>{number(search.candidateCount)}</dd>
@@ -218,7 +226,7 @@ export default function DevSearchHistoryRoute() {
               <div className="dc-empty">No search history matches these filters.</div>
             ) : null}
 
-            {filters.pageSize !== "all" && pagination.totalPages > 1 ? (
+            {pagination.totalPages > 1 ? (
               <div className="dc-pagination">
                 <span>Page {number(pagination.page)} of {number(pagination.totalPages)}</span>
                 <div>
@@ -267,7 +275,7 @@ function pageUrl(
     query: string;
     llmStatus: string;
     page: number;
-    pageSize: number | "all";
+    pageSize: number;
   },
   page: number,
 ) {
@@ -321,8 +329,8 @@ function SearchDecisionDiagnostics({ analysisJson }: { analysisJson: string | nu
   ))}</>;
 }
 
-function scoreRaw(value: number | null) {
-  return value === null ? "—" : value.toFixed(3);
+function scoreRaw(value: number | null | undefined) {
+  return value === null || value === undefined ? "—" : value.toFixed(3);
 }
 
 function number(value: number) {

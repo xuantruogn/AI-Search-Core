@@ -98,7 +98,19 @@ function compileSnippetRoot(
       args.file.content,
     );
 
+  const links = document.tokens.filter((link) =>
+      link.kind === "HTML_OPEN" && link.tagName === "a" &&
+      link.attributes?.some((attribute) => attribute.name === "href" &&
+        /paginate\.(previous|next)\.url|part\.url/.test(attribute.value ?? "")),
+  );
+
   for (const token of document.tokens) {
+    const end = token.matchingTokenIndex;
+    if (links.length === 0 || end == null || !links.every((link) =>
+      link.index > token.index && link.index < end,
+    )) continue;
+    if (document.tokens.some((child) => child.index > token.index && child.index < end &&
+      child.kind === "HTML_OPEN" && child.tagName === "form")) continue;
     if (
       token.kind !== "HTML_OPEN" ||
       !token.tagName

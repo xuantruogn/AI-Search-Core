@@ -1,6 +1,12 @@
 import { createHash } from "node:crypto";
 
-import db from "../../db.server";
+import {
+  loadProductSemanticRows,
+  loadShopSemanticRows,
+  removeProductSemanticProfileFromCache,
+  type StoredSemanticTerm,
+} from "../search/product-semantic-profile.server";
+import { getSearchCatalogRevisionCached } from "../search/search-catalog-revision.server";
 
 import {
   buildThemeSearchTransportBatches,
@@ -453,130 +459,218 @@ export function buildThemeSearchTransportKeyCandidates(
 }
 
 // ============================================================
-// PERSIST
+// PROFILE CACHE
 // ============================================================
 
-export async function replaceProductThemeSearchTransportKeys(
-  args: {
-    shop: string;
-    product: ThemeSearchTransportProductInput;
-  },
-): Promise<{
-  productId: string;
-  keyCount: number;
-}> {
-  const shop = normalizeShop(args.shop);
+type ShopTransportIndex = {
+  uniqueOwnerBySignature: Map<string, string | null>;
+};
 
-  const productId = normalizeProductId(
-    args.product.productId,
+const TRANSPORT_CACHE_TTL_MS = (() => {
+  const raw = Number.parseInt(
+    process.env.AI_SEARCH_TRANSPORT_PROFILE_CACHE_TTL_MS || "",
+    10,
   );
+  return Number.isSafeInteger(raw) && raw >= 30_000
+    ? Math.min(raw, 60 * 60_000)
+    : 5 * 60_000;
+})();
 
-  if (!shop) {
-    throw new Error(
-      "THEME_SEARCH_TRANSPORT_SHOP_REQUIRED",
-    );
+const MAX_TOTAL_TRANSPORT_SIGNATURES = (() => {
+  const raw = Number.parseInt(
+    process.env.AI_SEARCH_TRANSPORT_CACHE_MAX_SIGNATURES || "",
+    10,
+  );
+  return Number.isSafeInteger(raw) && raw >= 10_000
+    ? Math.min(raw, 2_000_000)
+    : 500_000;
+})();
+
+type TransportCacheEntry = {
+  expiresAt: number;
+  semanticRevision: string;
+  value: ShopTransportIndex;
+  signatureCount: number;
+};
+
+const transportCache = new Map<string, TransportCacheEntry>();
+const pendingTransportLoads = new Map<string, Promise<ShopTransportIndex>>();
+
+function touchTransportCache(shop: string, entry: TransportCacheEntry) {
+  transportCache.delete(shop);
+  transportCache.set(shop, entry);
+}
+
+function enforceTransportCacheBudget() {
+  let totalSignatures = [...transportCache.values()].reduce(
+    (sum, entry) => sum + entry.signatureCount,
+    0,
+  );
+  while (
+    transportCache.size > 100 ||
+    totalSignatures > MAX_TOTAL_TRANSPORT_SIGNATURES
+  ) {
+    const oldest = transportCache.entries().next().value as
+      | [string, TransportCacheEntry]
+      | undefined;
+    if (!oldest) break;
+    transportCache.delete(oldest[0]);
+    totalSignatures -= oldest[1].signatureCount;
   }
+}
 
-  if (!productId) {
-    throw new Error(
-      "THEME_SEARCH_TRANSPORT_PRODUCT_ID_REQUIRED",
-    );
+export function invalidateThemeSearchTransportCache(shopInput: string) {
+  transportCache.delete(normalizeShop(shopInput));
+}
+
+export function invalidateDerivedProductSearchCaches(
+  shopInput: string,
+  productId?: string,
+) {
+  const shop = normalizeShop(shopInput);
+  if (!shop) return;
+  if (productId) {
+    removeProductSemanticProfileFromCache(shop, normalizeProductId(productId));
   }
+  invalidateThemeSearchTransportCache(shop);
+}
 
-  const candidates =
-    buildThemeSearchTransportKeyCandidates({
-      ...args.product,
-      productId,
-    });
+function transportProductFromSemanticRows(
+  productId: string,
+  rows: readonly StoredSemanticTerm[],
+): ThemeSearchTransportProductInput | null {
+  let title = "";
+  let vendor: string | null = null;
+  let productType: string | null = null;
+  const tags: string[] = [];
+  const skus: string[] = [];
+  const barcodes: string[] = [];
 
-  await db.$transaction(async (tx) => {
-    await tx.aiSearchRenderTransportKey.deleteMany({
-      where: {
-        shop,
-        productId,
-      },
-    });
-
-    if (candidates.length === 0) {
-      return;
+  for (const row of rows) {
+    switch (row.kind) {
+      case "PRODUCT_TITLE":
+        if (!title) title = row.value;
+        break;
+      case "VENDOR":
+        if (!vendor) vendor = row.value;
+        break;
+      case "PRODUCT_TYPE":
+        if (!productType) productType = row.value;
+        break;
+      case "TAG":
+        tags.push(row.value);
+        break;
+      case "SKU":
+        skus.push(row.value);
+        break;
+      case "BARCODE":
+        barcodes.push(row.value);
+        break;
+      default:
+        break;
     }
+  }
 
-    await tx.aiSearchRenderTransportKey.createMany({
-      data: candidates.map((item) => ({
-        shop,
-        productId,
-        kind: item.kind,
-        signature: item.signature,
-        clause: item.clause,
-      })),
-    });
-  });
-
+  if (!title) return null;
   return {
     productId,
-    keyCount: candidates.length,
+    title,
+    vendor,
+    productType,
+    tags,
+    skus,
+    barcodes,
   };
 }
 
-// ============================================================
-// DELETE
-// ============================================================
+async function loadShopTransportIndexUncached(
+  shop: string,
+  semanticRevision: string,
+): Promise<ShopTransportIndex> {
+  const uniqueOwnerBySignature = new Map<string, string | null>();
+  const transportTermsByProduct = new Map<string, StoredSemanticTerm[]>();
+  const transportKinds = new Set([
+    "PRODUCT_TITLE",
+    "VENDOR",
+    "PRODUCT_TYPE",
+    "TAG",
+    "SKU",
+    "BARCODE",
+  ]);
 
-export async function deleteProductThemeSearchTransportKeys(
-  args: {
-    shop: string;
-    productId: string;
-  },
-): Promise<number> {
-  const shop = normalizeShop(args.shop);
-  const productId = normalizeProductId(
-    args.productId,
-  );
-
-  if (!shop || !productId) {
-    return 0;
+  // Reuse the bounded semantic cache instead of issuing a second full-catalog
+  // DB scan. Only the six deterministic fields needed for native transport are
+  // retained in this temporary build map.
+  for (const row of await loadShopSemanticRows(shop)) {
+    if (!transportKinds.has(row.kind)) continue;
+    const terms = transportTermsByProduct.get(row.productId) ?? [];
+    terms.push(row);
+    transportTermsByProduct.set(row.productId, terms);
   }
 
-  const result =
-    await db.aiSearchRenderTransportKey.deleteMany({
-      where: {
-        shop,
-        productId,
-      },
-    });
+  for (const [productId, terms] of transportTermsByProduct) {
+    const source = transportProductFromSemanticRows(productId, terms);
+    if (!source) continue;
 
-  return result.count;
+    for (const candidate of buildThemeSearchTransportKeyCandidates(source)) {
+      if (!uniqueOwnerBySignature.has(candidate.signature)) {
+        uniqueOwnerBySignature.set(candidate.signature, productId);
+        continue;
+      }
+
+      const currentOwner = uniqueOwnerBySignature.get(candidate.signature);
+      if (currentOwner !== productId) {
+        uniqueOwnerBySignature.set(candidate.signature, null);
+      }
+    }
+  }
+
+  const value = { uniqueOwnerBySignature };
+  transportCache.set(shop, {
+    expiresAt: Date.now() + TRANSPORT_CACHE_TTL_MS,
+    semanticRevision,
+    value,
+    signatureCount: uniqueOwnerBySignature.size,
+  });
+  enforceTransportCacheBudget();
+  return value;
 }
 
-export async function deleteShopThemeSearchTransportKeys(
-  shopInput: string,
-): Promise<number> {
-  const shop = normalizeShop(shopInput);
-
-  if (!shop) {
-    return 0;
+async function loadShopTransportIndex(shop: string): Promise<ShopTransportIndex> {
+  const revisionSnapshot = await getSearchCatalogRevisionCached(shop);
+  const semanticRevision = revisionSnapshot?.semanticRevision ?? "0";
+  const cached = transportCache.get(shop);
+  if (
+    cached &&
+    cached.expiresAt > Date.now() &&
+    cached.semanticRevision === semanticRevision
+  ) {
+    touchTransportCache(shop, cached);
+    return cached.value;
   }
 
-  const result =
-    await db.aiSearchRenderTransportKey.deleteMany({
-      where: {
-        shop,
-      },
-    });
+  const pendingKey = shop + "\u0000" + semanticRevision;
+  const pending = pendingTransportLoads.get(pendingKey);
+  if (pending) return pending;
 
-  return result.count;
+  const task = loadShopTransportIndexUncached(shop, semanticRevision);
+  pendingTransportLoads.set(pendingKey, task);
+  try {
+    return await task;
+  } finally {
+    if (pendingTransportLoads.get(pendingKey) === task) {
+      pendingTransportLoads.delete(pendingKey);
+    }
+  }
 }
 
 // ============================================================
 // RESOLVE UNIQUE KEYS
 // ============================================================
 
-function pairKey(
-  kind: string,
-  signature: string,
-): string {
-  return `${kind}:${signature}`;
-}
+// ============================================================
+// RESOLVE UNIQUE KEYS
+// ============================================================
 
 export async function resolveUniqueThemeSearchTransportKeys(
   args: {
@@ -609,138 +703,14 @@ export async function resolveUniqueThemeSearchTransportKeys(
     };
   }
 
-  // ----------------------------------------------------------
-  // Chỉ load key của các AI target.
-  // Không load cả catalog.
-  // ----------------------------------------------------------
-
-  const targetRows =
-    await db.aiSearchRenderTransportKey.findMany({
-      where: {
-        shop,
-        productId: {
-          in: productIds,
-        },
-      },
-      select: {
-        productId: true,
-        kind: true,
-        signature: true,
-        clause: true,
-      },
-    });
-
-  if (targetRows.length === 0) {
-    return {
-      resolved: [],
-      unresolved: productIds.map(
-        (productId) => ({
-          productId,
-          reason: "NO_TRANSPORT_KEYS",
-        }),
-      ),
-    };
-  }
-
-  // ----------------------------------------------------------
-  // Lấy tập (kind, signature) cần kiểm uniqueness.
-  // ----------------------------------------------------------
-
-  const pairs = new Map<
-    string,
-    {
-      kind: string;
-      signature: string;
-    }
-  >();
-
+  const { uniqueOwnerBySignature } =
+    await loadShopTransportIndex(shop);
+  const targetRows = await loadProductSemanticRows(shop, productIds);
+  const rowsByProduct = new Map<string, StoredSemanticTerm[]>();
   for (const row of targetRows) {
-    const key = pairKey(
-      row.kind,
-      row.signature,
-    );
-
-    if (!pairs.has(key)) {
-      pairs.set(key, {
-        kind: row.kind,
-        signature: row.signature,
-      });
-    }
-  }
-
-  // ----------------------------------------------------------
-  // Query tất cả owner của đúng những signature cần thiết.
-  //
-  // Ví dụ:
-  //
-  // Product A:
-  // title/vendor/type signature XYZ
-  //
-  // Ta chỉ hỏi DB:
-  // "shop này có product nào khác cũng sở hữu XYZ không?"
-  //
-  // Không cần load toàn bộ catalog.
-  // ----------------------------------------------------------
-
-  const pairFilters = [...pairs.values()];
-
-  const ownerRows =
-    await db.aiSearchRenderTransportKey.findMany({
-      where: {
-        shop,
-        OR: pairFilters.map((pair) => ({
-          kind: pair.kind,
-          signature: pair.signature,
-        })),
-      },
-      select: {
-        productId: true,
-        kind: true,
-        signature: true,
-      },
-    });
-
-  const ownersByPair = new Map<
-    string,
-    Set<string>
-  >();
-
-  for (const row of ownerRows) {
-    const key = pairKey(
-      row.kind,
-      row.signature,
-    );
-
-    let owners = ownersByPair.get(key);
-
-    if (!owners) {
-      owners = new Set<string>();
-      ownersByPair.set(key, owners);
-    }
-
-    owners.add(row.productId);
-  }
-
-  // ----------------------------------------------------------
-  // Group candidate theo product.
-  // ----------------------------------------------------------
-
-  const rowsByProduct = new Map<
-    string,
-    typeof targetRows
-  >();
-
-  for (const productId of productIds) {
-    rowsByProduct.set(productId, []);
-  }
-
-  for (const row of targetRows) {
-    const rows =
-      rowsByProduct.get(row.productId);
-
-    if (rows) {
-      rows.push(row);
-    }
+    const list = rowsByProduct.get(row.productId) ?? [];
+    list.push(row);
+    rowsByProduct.set(row.productId, list);
   }
 
   const resolved: ResolvedThemeSearchTransportKey[] =
@@ -751,8 +721,13 @@ export async function resolveUniqueThemeSearchTransportKeys(
 
   // Giữ đúng order AI result.
   for (const productId of productIds) {
-    const rows =
-      rowsByProduct.get(productId) ?? [];
+    const source = transportProductFromSemanticRows(
+      productId,
+      rowsByProduct.get(productId) ?? [],
+    );
+    const rows = source
+      ? buildThemeSearchTransportKeyCandidates(source)
+      : [];
 
     if (rows.length === 0) {
       unresolved.push({
@@ -779,19 +754,11 @@ export async function resolveUniqueThemeSearchTransportKeys(
       },
     );
 
-    const selected = sorted.find((row) => {
-      const owners = ownersByPair.get(
-        pairKey(
-          row.kind,
-          row.signature,
-        ),
-      );
-
-      return (
-        owners?.size === 1 &&
-        owners.has(productId)
-      );
-    });
+    const selected = sorted.find(
+      (row) =>
+        uniqueOwnerBySignature.get(row.signature) ===
+        productId,
+    );
 
     if (!selected) {
       unresolved.push({
@@ -955,18 +922,12 @@ export async function getProductThemeSearchTransportKeys(
     args.productId,
   );
 
-  return db.aiSearchRenderTransportKey.findMany({
-    where: {
-      shop,
-      productId,
-    },
-    orderBy: [
-      {
-        kind: "asc",
-      },
-      {
-        signature: "asc",
-      },
-    ],
-  });
+  if (!shop || !productId) return [];
+
+  const rows = await loadProductSemanticRows(shop, [productId]);
+  const source = transportProductFromSemanticRows(productId, rows);
+  if (!source) return [];
+
+  return buildThemeSearchTransportKeyCandidates(source)
+    .sort((a, b) => a.kind.localeCompare(b.kind));
 }

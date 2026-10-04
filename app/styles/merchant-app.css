@@ -1,0 +1,143 @@
+.merchant-shell {
+  min-height: 100vh;
+  background: #f6f6f7;
+  color: #202223;
+  font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.merchant-topbar {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  border-bottom: 1px solid #dedee3;
+  background: rgba(255, 255, 255, 0.96);
+  backdrop-filter: blur(14px);
+}
+
+.merchant-topbar__inner {
+  max-width: 1440px;
+  margin: 0 auto;
+  padding: 0 24px;
+  display: flex;
+  align-items: center;
+  gap: 26px;
+  min-height: 64px;
+}
+
+.merchant-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  flex: 0 0 auto;
+  text-decoration: none;
+  color: #202223;
+}
+.merchant-brand__mark {
+  width: 34px;
+  height: 34px;
+  border-radius: 11px;
+  display: grid;
+  place-items: center;
+  background: #202223;
+  color: #fff;
+  font-weight: 800;
+  letter-spacing: -0.04em;
+}
+
+.merchant-brand__copy {
+  display: grid;
+  line-height: 1.05;
+}
+
+.merchant-brand__copy strong {
+  font-size: 14px;
+  letter-spacing: -0.01em;
+}
+
+.merchant-brand__copy small {
+  margin-top: 4px;
+  color: #6d7175;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.merchant-nav {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  gap: 4px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.merchant-nav::-webkit-scrollbar {
+  display: none;
+}
+
+.merchant-nav__item {
+  position: relative;
+  flex: 0 0 auto;
+  padding: 21px 12px 18px;
+  color: #61656a;
+  font-size: 13px;
+  font-weight: 650;
+  text-decoration: none;
+  white-space: nowrap;
+  border-bottom: 3px solid transparent;
+  transition: color .15s ease, background .15s ease, border-color .15s ease;
+}
+
+.merchant-nav__item:hover {
+  color: #202223;
+  background: #fafafa;
+}
+
+.merchant-nav__item.is-active {
+  color: #005bd3;
+  border-bottom-color: #005bd3;
+}
+
+.merchant-nav__external {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.merchant-loading-bar {
+  position: absolute;
+  left: 0;
+  top: 0;
+  height: 2px;
+  width: 72%;
+  background: #005bd3;
+  animation: merchant-loading 1s ease-in-out infinite alternate;
+}
+.merchant-content {
+  max-width: 1440px;
+  margin: 0 auto;
+  padding: 28px 24px 48px;
+}
+
+@keyframes merchant-loading {
+  from { opacity: .35; transform: scaleX(.55); transform-origin: left; }
+  to { opacity: 1; transform: scaleX(1); transform-origin: left; }
+}
+
+@media (max-width: 760px) {
+  .merchant-topbar__inner {
+    padding: 0 14px;
+    gap: 14px;
+  }
+
+  .merchant-brand__copy small {
+    display: none;
+  }
+
+  .merchant-nav__item {
+    padding-left: 10px;
+    padding-right: 10px;
+  }
+
+  .merchant-content {
+    padding: 20px 12px 36px;
+  }
+}

@@ -1,4 +1,5 @@
 import db from "../../db.server";
+import { getProductThemeSearchTransportKeys } from "./theme-search-transport-key.server";
 
 async function main() {
   const shop =
@@ -22,23 +23,13 @@ async function main() {
       },
     });
 
-  const transportKeys =
-    await db.aiSearchRenderTransportKey.findMany({
-      where: {
-        shop,
-        productId: {
-          in: productIds,
-        },
-      },
-      orderBy: [
-        {
-          productId: "asc",
-        },
-        {
-          kind: "asc",
-        },
-      ],
-    });
+  const transportKeys = (
+    await Promise.all(
+      productIds.map((productId) =>
+        getProductThemeSearchTransportKeys({ shop, productId }),
+      ),
+    )
+  ).flat();
 
   console.log(
     "\n=== INDEXED PRODUCTS ===",

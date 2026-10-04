@@ -369,6 +369,41 @@ button, a { -webkit-tap-highlight-color: transparent; }
 .dc-pagination > div { display: flex; gap: 6px; }
 .dc-button.is-disabled { cursor: default; opacity: .45; pointer-events: none; }
 
+.dc-loader-overlay {
+  align-items: center;
+  background: rgba(245, 247, 250, .72);
+  display: flex;
+  inset: 0;
+  justify-content: center;
+  position: fixed;
+  z-index: 1000;
+  backdrop-filter: blur(2px);
+}
+.dc-loader-card {
+  align-items: center;
+  background: #fff;
+  border: 1px solid var(--dc-border);
+  border-radius: 12px;
+  box-shadow: 0 16px 40px rgba(21, 28, 45, .14);
+  display: flex;
+  gap: 12px;
+  min-width: 250px;
+  padding: 15px 18px;
+}
+.dc-loader-card strong,
+.dc-loader-card small { display: block; }
+.dc-loader-card strong { font-size: 13px; }
+.dc-loader-card small { color: var(--dc-muted); font-size: 10px; margin-top: 3px; }
+.dc-loader-spinner {
+  animation: dc-spin .72s linear infinite;
+  border: 3px solid #e8ebf0;
+  border-radius: 50%;
+  border-top-color: var(--dc-primary);
+  height: 24px;
+  width: 24px;
+}
+@keyframes dc-spin { to { transform: rotate(360deg); } }
+
 @media (max-width: 1100px) {
   .dc-search-history-toolbar { align-items: stretch; flex-direction: column; }
   .dc-history-filters { grid-template-columns: repeat(2, minmax(0, 1fr)); }

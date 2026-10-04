@@ -20,6 +20,11 @@ uri = "/webhooks/app/subscriptions_update"
 # Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
 scopes = "read_products,read_themes,write_app_proxy"
 
+[app_proxy]
+url = "/proxy/ai-search"
+prefix = "apps"
+subpath = "ai-search"
+
 [auth]
 redirect_urls = [ "https://example.com/api/auth" ]
 

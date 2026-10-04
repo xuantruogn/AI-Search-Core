@@ -18,6 +18,70 @@ export type QuerySemanticProfile = {
   embeddingInput: string;
 };
 
+const GENERIC_DISCOVERY_FAMILIES = new Set([
+  "apparel",
+  "clothing",
+  "fashion",
+  "gear",
+  "equipment",
+  "accessory",
+  "accessories",
+  "outfit",
+  "outfits",
+  "products",
+  "items",
+]);
+
+export function isGenericDiscoveryFamily(value: string) {
+  const normalized = normalizeQueryText(value);
+  return Boolean(normalized) && GENERIC_DISCOVERY_FAMILIES.has(normalized);
+}
+
+function buildFallbackDiscoverySemanticTerms(plan: QueryPlan) {
+  if (plan.retrievalMode !== "DISCOVERY") {
+    return { target: [] as string[], source: [] as string[] };
+  }
+
+  const allowedFields = new Set([
+    "ATTRIBUTE",
+    "CONTEXT",
+    "AUDIENCE",
+    "COMPATIBILITY",
+  ]);
+  const target: string[] = [];
+  const source: string[] = [];
+  const seenTarget = new Set<string>();
+  const seenSource = new Set<string>();
+
+  for (const segment of plan.resolvedSegments) {
+    if (!allowedFields.has(segment.field) || segment.confidence < 0.5) continue;
+    const canonical = segment.canonicalValue.replace(/\s+/g, " ").trim();
+    const sourceText = segment.text.replace(/\s+/g, " ").trim();
+    const normalizedCanonical = normalizeQueryText(canonical);
+    const normalizedSource = normalizeQueryText(sourceText);
+    if (
+      !canonical ||
+      !normalizedCanonical ||
+      /\b(?:price|cheap|cheapest|budget|expensive|premium|luxury)\b/.test(
+        normalizedCanonical,
+      )
+    ) {
+      continue;
+    }
+    if (!seenTarget.has(normalizedCanonical)) {
+      seenTarget.add(normalizedCanonical);
+      target.push(canonical);
+    }
+    if (sourceText && normalizedSource && !seenSource.has(normalizedSource)) {
+      seenSource.add(normalizedSource);
+      source.push(sourceText);
+    }
+    if (target.length >= 3) break;
+  }
+
+  return { target: target.slice(0, 3), source: source.slice(0, 3) };
+}
+
 function keyOf(value: QueryConstraint) {
   return value.normalizedValue || normalizeQueryText(value.value);
 }
@@ -418,25 +482,51 @@ export function buildQuerySemanticProfile(args: {
   expandedPlan: QueryPlan;
   llm: QueryRewriteResult;
 }): QuerySemanticProfile {
-  const safeLlm: QueryRewriteResult =
-    args.rawPlan.retrievalMode === "COMPLEMENT"
+  const fallbackDiscoveryTerms = buildFallbackDiscoverySemanticTerms(
+    args.rawPlan,
+  );
+  const llmWithDeterministicFallback: QueryRewriteResult =
+    args.llm.fallbackReason &&
+    args.rawPlan.retrievalMode === "DISCOVERY" &&
+    fallbackDiscoveryTerms.target.length > 0
       ? {
           ...args.llm,
           analysis: {
             ...args.llm.analysis,
+            semanticMustTerms:
+              (args.llm.analysis.semanticMustTerms ?? []).length > 0
+                ? args.llm.analysis.semanticMustTerms
+                : fallbackDiscoveryTerms.target,
+            semanticSourceMustTerms:
+              (args.llm.analysis.semanticSourceMustTerms ?? []).length > 0
+                ? args.llm.analysis.semanticSourceMustTerms
+                : fallbackDiscoveryTerms.source,
+            decisionReason:
+              `${args.llm.analysis.decisionReason} Deterministic source facets preserved after LLM fallback.`,
+          },
+        }
+      : args.llm;
+  const safeLlm: QueryRewriteResult =
+    args.rawPlan.retrievalMode === "COMPLEMENT"
+      ? {
+          ...llmWithDeterministicFallback,
+          analysis: {
+            ...llmWithDeterministicFallback.analysis,
             semanticMustTerms: stripComplementReferenceMustTerms({
               originalQuery: args.originalQuery,
               rawPlan: args.rawPlan,
-              values: args.llm.analysis.semanticMustTerms ?? [],
+              values:
+                llmWithDeterministicFallback.analysis.semanticMustTerms ?? [],
             }),
             semanticSourceMustTerms: stripComplementReferenceMustTerms({
               originalQuery: args.originalQuery,
               rawPlan: args.rawPlan,
-              values: args.llm.analysis.semanticSourceMustTerms ?? [],
+              values:
+                llmWithDeterministicFallback.analysis.semanticSourceMustTerms ?? [],
             }),
           },
         }
-      : args.llm;
+      : llmWithDeterministicFallback;
   const semanticMustTerms = [
     ...(safeLlm.analysis.semanticMustTerms ?? []),
     ...(safeLlm.analysis.semanticSourceMustTerms ?? []),
@@ -464,6 +554,7 @@ export function buildQuerySemanticProfile(args: {
 
   const llmDirectIdentity =
     args.expandedPlan.identities.some((item) =>
+      !isGenericDiscoveryFamily(item.value) &&
       semanticTermsExplainedByIdentityOrFacets(
         item,
         targetSemanticMustTerms,
@@ -474,6 +565,7 @@ export function buildQuerySemanticProfile(args: {
     args.expandedPlan.resolvedSegments.some((segment) =>
       segment.field === "CATEGORY" &&
       segment.confidence >= 0.95 &&
+      !isGenericDiscoveryFamily(segment.canonicalValue) &&
       semanticIdentityTerms.some((term) =>
         normalizeQueryText(term) === normalizeQueryText(segment.canonicalValue),
       ),
@@ -496,7 +588,8 @@ export function buildQuerySemanticProfile(args: {
     args.rawPlan.identities.some(
       (item) =>
         item.mode === "MUST" &&
-        item.confidence >= 0.85,
+        item.confidence >= 0.85 &&
+        !isGenericDiscoveryFamily(item.value),
     ) ||
     args.rawPlan.entities.identifiers.length > 0 ||
     (

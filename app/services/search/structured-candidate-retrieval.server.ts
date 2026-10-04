@@ -2,7 +2,15 @@ import { listSearchableIndexedProducts } from "../commerce/indexed-products.serv
 import type { QueryPlan, QueryConstraint } from "./query-plan.server";
 import { normalizeQueryText } from "./deterministic-query-parser.server";
 import type { SearchResult } from "./semantic-search.server";
-import { loadShopSemanticRows } from "./product-semantic-profile.server";
+import {
+  findSemanticRowsByNormalizedValues,
+  loadProductSemanticRows,
+  semanticPayloadToken,
+} from "./product-semantic-profile.server";
+import {
+  findProductsBySemanticPayload,
+  getSemanticPayloadCoverage,
+} from "./vector-store.server";
 
 export const STRUCTURED_RANKING_WEIGHTS = {
   IDENTIFIER: 100,
@@ -77,6 +85,25 @@ export function hasStructuredAnchor(plan: QueryPlan) {
   return wantedTerms(plan).some(isRetrievalAnchor);
 }
 
+function rowKindsForWantedTerm(term: WantedTerm) {
+  if (term.kind === "IDENTIFIER") return ["IDENTIFIER", "SKU", "BARCODE"];
+  if (term.kind === "MODEL") return ["MODEL"];
+  if (term.kind === "PRODUCT_TYPE") {
+    return ["CANONICAL_PRODUCT_TYPE", "PRODUCT_TYPE", "ALIAS", "CATEGORY"];
+  }
+  if (term.kind === "BRAND") return ["BRAND", "VENDOR"];
+  if (term.kind === "COMPATIBILITY") return ["COMPATIBILITY"];
+  if (term.kind === "AUDIENCE") return ["AUDIENCE"];
+  if (term.kind === "MEASUREMENT") return ["MEASUREMENT", "VARIANT_OPTION"];
+  if (term.kind === "ATTRIBUTE") {
+    return term.constraint.mode === "SHOULD"
+      ? ["ATTRIBUTE", "VARIANT_OPTION", "TAG"]
+      : ["ATTRIBUTE", "VARIANT_OPTION"];
+  }
+  if (term.kind === "CONTEXT") return ["USE_CASE", "SOFT_CONTEXT"];
+  return [];
+}
+
 function rowMatchesWantedKind(rowKind: string, term: WantedTerm) {
   if (term.kind === "IDENTIFIER") {
     return ["IDENTIFIER", "SKU", "BARCODE"].includes(rowKind);
@@ -124,10 +151,65 @@ export async function retrieveStructuredCandidates(args: {
     constraint.normalizedValue || normalizeQueryText(constraint.value),
   ))];
 
+  const anchorSemanticTokens = [...new Set(
+    anchorTerms.flatMap((term) => {
+      const normalized =
+        term.constraint.normalizedValue ||
+        normalizeQueryText(term.constraint.value);
+      return rowKindsForWantedTerm(term)
+        .map((kind) => semanticPayloadToken(kind, normalized))
+        .filter(Boolean);
+    }),
+  )];
+
+  const requiredSemanticGroups = anchorTerms
+    .filter((term) => term.constraint.mode === "MUST")
+    .map((term) => {
+      const normalized =
+        term.constraint.normalizedValue ||
+        normalizeQueryText(term.constraint.value);
+      return rowKindsForWantedTerm(term)
+        .map((kind) => semanticPayloadToken(kind, normalized))
+        .filter(Boolean);
+    })
+    .filter((group) => group.length > 0);
+
+  let qdrantCandidateIds: string[] = [];
+  let qdrantCoverageComplete = false;
+
+  try {
+    const coverage = await getSemanticPayloadCoverage(args.shop);
+    qdrantCoverageComplete = coverage.complete;
+
+    if (qdrantCoverageComplete) {
+      const qdrantCandidates = await findProductsBySemanticPayload({
+        shop: args.shop,
+        // Qdrant is only the compact pre-filter. Do not seed it with weak
+        // context/attribute terms that can swamp a finite candidate window.
+        semanticTerms: anchorSemanticTokens,
+        requiredGroups: requiredSemanticGroups,
+        limit: Math.min(5_000, Math.max(500, args.limit * 8)),
+      });
+      qdrantCandidateIds = qdrantCandidates.map(
+        (candidate) => candidate.productId,
+      );
+    }
+  } catch (error) {
+    // Exact retrieval is an optimization over the authoritative JSON profile.
+    // A transient Qdrant/index problem must never turn into missing products.
+    console.warn("[AI Search][STRUCTURED] semantic payload lookup fallback", {
+      shop: args.shop,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    qdrantCoverageComplete = false;
+  }
+
   const normalizedSet = new Set(normalizedValues);
-  const rows = (await loadShopSemanticRows(args.shop)).filter((row) =>
-    normalizedSet.has(row.normalizedValue),
-  );
+  const rows = qdrantCoverageComplete
+    ? (
+        await loadProductSemanticRows(args.shop, qdrantCandidateIds)
+      ).filter((row) => normalizedSet.has(row.normalizedValue))
+    : await findSemanticRowsByNormalizedValues(args.shop, normalizedValues);
   const scores = new Map<string, number>();
   const matchedMust = new Map<string, Set<string>>();
   const matchedKeys = new Map<string, Set<string>>();

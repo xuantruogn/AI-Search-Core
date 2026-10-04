@@ -10,20 +10,6 @@ export type CatalogTermMatch = {
   end: number;
 };
 
-const FIELD_PRIORITY: Record<string, number> = {
-  IDENTIFIER: 100,
-  MODEL: 90,
-  BRAND: 85,
-  PRODUCT_TYPE: 80,
-  CATEGORY: 70,
-  AUDIENCE: 60,
-  MEASUREMENT: 55,
-  ATTRIBUTE: 50,
-  COMPATIBILITY: 45,
-  CONTEXT: 30,
-  ALIAS: 20,
-};
-
 const NESTED_FACT_FIELDS = new Set([
   "IDENTIFIER",
   "MODEL",
@@ -115,21 +101,21 @@ export function matchCatalogTerms(
   const matches: CatalogTermMatch[] = [];
   const occupied = new Set<number>();
 
-  for (const entry of dictionary.entries.slice().sort((a, b) => {
-    // Identity-like phrases beat attributes/tags, then longest phrase wins.
-    // This prevents "chain" from occupying the first token of the stronger
-    // synonym "chain breaker", while still preventing a noisy long TAG from
-    // shadowing a real product identity.
-    const identityFields = new Set(["IDENTIFIER", "MODEL", "BRAND", "PRODUCT_TYPE"]);
-    const identityTierDelta =
-      Number(identityFields.has(b.field)) - Number(identityFields.has(a.field));
-    const tokenDelta =
-      b.normalized.split(" ").length - a.normalized.split(" ").length;
-    const confidenceDelta = (b.confidence ?? 1) - (a.confidence ?? 1);
-    const priorityDelta =
-      (FIELD_PRIORITY[b.field] ?? 0) - (FIELD_PRIORITY[a.field] ?? 0);
-    return identityTierDelta || tokenDelta || confidenceDelta || priorityDelta;
-  })) {
+  const candidateSet = new Set<DictionaryEntry>();
+  for (const token of queryTokens) {
+    for (const key of identityTokenVariants(token)) {
+      for (const entry of dictionary.matchIndex.byFirstToken.get(key) ?? []) {
+        candidateSet.add(entry);
+      }
+    }
+  }
+  const candidates = [...candidateSet].sort(
+    (left, right) =>
+      (dictionary.matchIndex.rank.get(left) ?? Number.MAX_SAFE_INTEGER) -
+      (dictionary.matchIndex.rank.get(right) ?? Number.MAX_SAFE_INTEGER),
+  );
+
+  for (const entry of candidates) {
     const span = phraseTokenSpan(
       queryTokens,
       entry.normalized,
@@ -194,7 +180,11 @@ export function matchCatalogTerms(
 
     const sourceConfidence = Math.max(0, Math.min(entry.confidence ?? 1, 1));
     matches.push({
-      text: entry.normalized,
+      // Preserve the actual query span. entry.normalized can differ through
+      // identity morphology ("basket" -> "baskets"); using the catalog form
+      // here leaves the real source token falsely unresolved and triggers an
+      // unnecessary LLM rewrite.
+      text: queryTokens.slice(span.start, span.end).join(" "),
       entry,
       confidence: (entry.field === "ALIAS" ? 0.94 : 1) * sourceConfidence,
       matchType: entry.field === "ALIAS" ? "ALIAS" : "NORMALIZED",
@@ -204,14 +194,21 @@ export function matchCatalogTerms(
 
   for (const [index, token] of queryTokens.entries()) {
     if (token.length < 5 || occupied.has(index)) continue;
-    const candidates = dictionary.entries.filter(
+    const fuzzySafeFields = new Set([
+      "PRODUCT_TYPE", "CATEGORY", "ALIAS",
+    ]);
+    const fuzzyCandidates = [
+      ...(dictionary.matchIndex.fuzzySingleTokenByLength.get(token.length - 1) ?? []),
+      ...(dictionary.matchIndex.fuzzySingleTokenByLength.get(token.length) ?? []),
+      ...(dictionary.matchIndex.fuzzySingleTokenByLength.get(token.length + 1) ?? []),
+    ].filter(
       (entry) =>
-        ["BRAND", "MODEL"].includes(entry.field) &&
-        !entry.normalized.includes(" ") &&
+        fuzzySafeFields.has(entry.field) &&
         editDistanceAtMostOne(token, entry.normalized),
     );
-    if (candidates.length !== 1) continue;
-    const entry = candidates[0];
+    const uniqueCandidates = [...new Set(fuzzyCandidates)];
+    if (uniqueCandidates.length !== 1) continue;
+    const entry = uniqueCandidates[0];
     const sourceConfidence = Math.max(0, Math.min(entry.confidence ?? 1, 1));
     matches.push({
       text: token,

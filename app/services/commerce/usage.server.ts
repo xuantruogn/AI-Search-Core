@@ -863,19 +863,33 @@ export async function reconcileStaleUsageReservations({
 
 export async function deleteResolvedUsageReservations({
   olderThanDays = 7,
+  batchSize = 5_000,
+  maxBatches = 20,
 }: {
   olderThanDays?: number;
+  batchSize?: number;
+  maxBatches?: number;
 } = {}) {
   const safeDays = Math.max(1, Math.min(Math.trunc(olderThanDays), 365));
+  const safeBatchSize = Math.max(100, Math.min(Math.trunc(batchSize), 50_000));
+  const safeMaxBatches = Math.max(1, Math.min(Math.trunc(maxBatches), 100));
   const cutoff = new Date(Date.now() - safeDays * 24 * 60 * 60_000);
 
-  return db.$executeRaw`
-    DELETE FROM \`AiSearchUsageReservation\`
-    WHERE
-      \`status\` IN ('COMMITTED', 'ROLLED_BACK')
-      AND \`resolvedAt\` IS NOT NULL
-      AND \`resolvedAt\` < ${cutoff}
-  `;
+  let deleted = 0;
+  for (let batch = 0; batch < safeMaxBatches; batch += 1) {
+    const count = await db.$executeRaw`
+      DELETE FROM \`AiSearchUsageReservation\`
+      WHERE
+        \`status\` IN ('COMMITTED', 'ROLLED_BACK')
+        AND \`resolvedAt\` IS NOT NULL
+        AND \`resolvedAt\` < ${cutoff}
+      LIMIT ${safeBatchSize}
+    `;
+    deleted += count;
+    if (count < safeBatchSize) break;
+  }
+
+  return deleted;
 }
 
 export async function recordUsageEvent({

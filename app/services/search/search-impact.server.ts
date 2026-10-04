@@ -1,6 +1,16 @@
 import db from "../../db.server";
 import { getMerchantSearchClusters } from "./search-analytics.server";
 
+const MAX_ANALYTICS_EVENTS = (() => {
+  const raw = Number.parseInt(
+    process.env.AI_SEARCH_ANALYTICS_MAX_EVENTS || "",
+    10,
+  );
+  return Number.isSafeInteger(raw) && raw >= 1_000
+    ? Math.min(raw, 100_000)
+    : 20_000;
+})();
+
 type SearchImpactLogRow = {
   id: string;
   query: string;
@@ -100,7 +110,8 @@ export async function getSearchImpactSnapshot(
       shop,
       createdAt: { gte: windowStart },
     },
-    orderBy: { createdAt: "asc" },
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    take: MAX_ANALYTICS_EVENTS,
     select: {
       id: true,
       query: true,
@@ -118,6 +129,8 @@ export async function getSearchImpactSnapshot(
       },
     },
   });
+
+  logs.reverse();
 
   const clusters = await getMerchantSearchClusters(shop, windowDays);
 
