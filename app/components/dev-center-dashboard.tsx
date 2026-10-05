@@ -334,6 +334,17 @@ export function PlanCatalogEditor({ plans, csrfToken, canWrite, busy }: {
   canWrite: boolean;
   busy: boolean;
 }) {
+  const merchantFeatureCatalog = Array.from(
+    new Map(
+      plans
+        .flatMap((plan) => plan.features.merchantFeatures ?? [])
+        .map((feature) => [
+          feature.key,
+          { key: feature.key, label: feature.label },
+        ]),
+    ).values(),
+  );
+
   return (
     <div className="dc-panel" style={{ marginTop: 18 }}>
       <div className="dc-panel-head">
@@ -350,7 +361,11 @@ export function PlanCatalogEditor({ plans, csrfToken, canWrite, busy }: {
       {canWrite ? (
         <details className="dc-advanced" open>
           <summary>Create new plan</summary>
-          <PlanEditorForm csrfToken={csrfToken} busy={busy} />
+          <PlanEditorForm
+            csrfToken={csrfToken}
+            busy={busy}
+            merchantFeatureCatalog={merchantFeatureCatalog}
+          />
         </details>
       ) : <ReadOnly />}
 
@@ -369,7 +384,12 @@ export function PlanCatalogEditor({ plans, csrfToken, canWrite, busy }: {
             </div>
             {canWrite ? (
               <>
-                <PlanEditorForm plan={plan} csrfToken={csrfToken} busy={busy} />
+                <PlanEditorForm
+                  plan={plan}
+                  csrfToken={csrfToken}
+                  busy={busy}
+                  merchantFeatureCatalog={merchantFeatureCatalog}
+                />
                 <Form
                   method="post"
                   style={{ marginTop: 10 }}
@@ -401,15 +421,41 @@ export function PlanCatalogEditor({ plans, csrfToken, canWrite, busy }: {
   );
 }
 
-function PlanEditorForm({ plan, csrfToken, busy }: {
+function PlanEditorForm({
+  plan,
+  csrfToken,
+  busy,
+  merchantFeatureCatalog,
+}: {
   plan?: PlanCatalogItem;
   csrfToken: string;
   busy: boolean;
+  merchantFeatureCatalog: Array<{ key: string; label: string }>;
 }) {
   const isNew = !plan;
-  const [merchantFeatures, setMerchantFeatures] = useState(
-    () => plan?.features.merchantFeatures ?? [],
-  );
+  const [merchantFeatures, setMerchantFeatures] = useState(() => {
+    const planFeatures = new Map(
+      (plan?.features.merchantFeatures ?? []).map((feature) => [
+        feature.key,
+        feature,
+      ]),
+    );
+    const shared = merchantFeatureCatalog.map((feature) => {
+      const configured = planFeatures.get(feature.key);
+      return configured
+        ? {
+            key: feature.key,
+            label: configured.label || feature.label,
+            included: configured.included,
+          }
+        : { ...feature, included: false };
+    });
+    const sharedKeys = new Set(merchantFeatureCatalog.map((feature) => feature.key));
+    const planOnly = (plan?.features.merchantFeatures ?? []).filter(
+      (feature) => !sharedKeys.has(feature.key),
+    );
+    return [...shared, ...planOnly];
+  });
 
   const addMerchantFeature = () => {
     const key = `feature-${Date.now()}-${merchantFeatures.length + 1}`;
@@ -534,7 +580,16 @@ function PlanEditorForm({ plan, csrfToken, busy }: {
                   );
                 }}
               />
-              <label style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 12 }}>
+              <label
+                style={{
+                  display: "flex",
+                  gap: 6,
+                  alignItems: "center",
+                  fontSize: 12,
+                  color: feature.included ? "#067647" : "#b42318",
+                  fontWeight: 700,
+                }}
+              >
                 <input
                   type="checkbox"
                   name="planFeatureIncluded"
@@ -549,7 +604,7 @@ function PlanEditorForm({ plan, csrfToken, busy }: {
                     );
                   }}
                 />
-                Included
+                {feature.included ? "✓ Included" : "× Not included"}
               </label>
               <button
                 className="dc-link-danger"
