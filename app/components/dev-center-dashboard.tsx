@@ -761,8 +761,8 @@ function ShopDrawer({ shop, grants, csrfToken, query, canQuotaWrite, canPlanWrit
                   Usage billing enabled
                 </label>
 
-                <Field label="Agreement note / reason">
-                  <input name="reason" required defaultValue={shop.customConfig?.notes ?? ""} />
+                <Field label="Note">
+                  <input name="reason" defaultValue={shop.customConfig?.notes ?? ""} />
                 </Field>
                 <button className="dc-button dc-button-primary" disabled={busy} type="submit">
                   {busy ? "Saving..." : shop.customConfig ? "Update Custom plan" : "Create Custom plan for this shop"}

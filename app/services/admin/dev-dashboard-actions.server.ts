@@ -319,7 +319,7 @@ export async function handleDevDashboardAction({
         ]),
       );
 
-      const reason = requireReason(form);
+      const reason = optionalPlanNote(form);
       const terms = await setCustomPlanTerms({
         actorShop: actor,
         targetShop,

@@ -994,10 +994,7 @@ export async function setCustomPlanTerms({
   capabilities: Record<string, boolean>;
   reason: string;
 }) {
-  const cleanReason = reason.trim();
-  if (cleanReason.length < 3) {
-    throw new Error("Reason is required for Custom plan changes");
-  }
+  const cleanReason = reason.trim().slice(0, 1000);
 
   const cleanName = name.trim().slice(0, 120);
   if (!cleanName) {
