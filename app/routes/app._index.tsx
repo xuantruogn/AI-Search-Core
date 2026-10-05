@@ -1569,17 +1569,6 @@ export default function Dashboard() {
     entitlementNeedsAttention,
   ].filter(Boolean).length;
   const showOperationsAttention = attentionCount > 0;
-  const readinessSteps = [
-    subscriptionReady,
-    catalogReady && !catalogBusy && !catalogFailed && !queueHasFailures,
-    searchSettingReady,
-    embedReady,
-    rendererReady && !themeSyncing && !themeSyncFailed,
-    !entitlementNeedsAttention,
-  ];
-  const readinessDone = readinessSteps.filter(Boolean).length;
-  const readinessPercent = Math.round((readinessDone / readinessSteps.length) * 100);
-  const storefrontReady = readinessDone === readinessSteps.length;
 
   // Grants/overrides may already be stored while billing is inactive.
   // Keep them persisted, but do not present them as usable merchant quota until
@@ -1635,89 +1624,6 @@ export default function Dashboard() {
       <style>{dashboardCss}</style>
 
       <div className="vip-shell">
-        <section className="vip-hero">
-          <div className="vip-hero__content">
-            <div>
-              <div className="vip-kicker">Semantic storefront search</div>
-              <StatusPill state={storefrontReady ? "success" : "warning"}>
-                {storefrontReady ? "Storefront ready" : "Setup needs attention"}
-              </StatusPill>
-              <h2 style={{ marginTop: 16 }}>
-                Help shoppers find the right products even when their words do not match your catalog.
-              </h2>
-              <p className="vip-hero__subtitle">
-                Buyense understands natural-language intent, synonyms, context, and multilingual queries,
-                then returns relevant products through your existing Shopify storefront experience.
-              </p>
-
-              <div className="vip-actions">
-                <Link className="vip-action vip-action--primary" to="/app/catalog-sync">
-                  Sync catalog
-                </Link>
-                <Link className="vip-action vip-action--ghost" to="/app/settings">
-                  Configure search
-                </Link>
-                <Link className="vip-action vip-action--ghost" to="/app/search-analytics">
-                  View analytics
-                </Link>
-              </div>
-
-              <div className="vip-hero__meta" style={{ marginTop: 22 }}>
-                <span>{data.shop}</span>
-                <span>{entitlement.planLabel}</span>
-                <span>{entitlement.subscriptionStatus}</span>
-                {data.theme.themeName ? <span>Theme · {data.theme.themeName}</span> : null}
-              </div>
-            </div>
-
-            <div className="vip-readiness-card">
-              <div className="vip-readiness-card__top">
-                <div>
-                  <div className="vip-readiness-card__label">Store readiness</div>
-                  <div className="vip-readiness-card__score">{readinessPercent}%</div>
-                </div>
-                <div
-                  className="vip-ring"
-                  style={{ "--value": readinessPercent } as React.CSSProperties}
-                  aria-label={`${readinessPercent}% store ready`}
-                />
-              </div>
-              <div className="vip-readiness-card__footer">
-                <div>
-                  <strong>{readinessDone}/{readinessSteps.length} checks passed</strong>
-                  <div style={{ marginTop: 4 }}>
-                    Catalog, search settings, theme embed, rendering, and storefront eligibility.
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </section>
-
-        <section className="vip-quick-grid" aria-label="How Buyense works">
-          <div className="vip-quick-link">
-            <div>
-              <strong>1. Understand the query</strong>
-              <span>Interpret shopper intent instead of relying only on exact keyword overlap.</span>
-            </div>
-            <span className="vip-quick-arrow" aria-hidden="true">01</span>
-          </div>
-          <div className="vip-quick-link">
-            <div>
-              <strong>2. Match the catalog semantically</strong>
-              <span>Use indexed product meaning, attributes, context, and language to retrieve candidates.</span>
-            </div>
-            <span className="vip-quick-arrow" aria-hidden="true">02</span>
-          </div>
-          <div className="vip-quick-link">
-            <div>
-              <strong>3. Keep your storefront experience</strong>
-              <span>Return ranked products while your Shopify theme continues to render the results.</span>
-            </div>
-            <span className="vip-quick-arrow" aria-hidden="true">03</span>
-          </div>
-        </section>
-
         <header className="vip-overview-head">
           <div>
             <div className="vip-overview-head__eyebrow">Store intelligence</div>
