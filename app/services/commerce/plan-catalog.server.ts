@@ -14,10 +14,17 @@ export const PLAN_CAPABILITY_DEFINITIONS = [
 export type PlanCapabilityKey =
   (typeof PLAN_CAPABILITY_DEFINITIONS)[number]["key"];
 
+export type PlanMerchantFeature = {
+  key: string;
+  label: string;
+  included: boolean;
+};
+
 export type PlanFeatureConfig = {
   description: string;
   highlights: string[];
   capabilities: Record<PlanCapabilityKey, boolean>;
+  merchantFeatures: PlanMerchantFeature[];
 };
 
 const DEFAULT_CAPABILITIES: Record<PlanCapabilityKey, boolean> = {
@@ -36,6 +43,7 @@ export function disabledPlanFeatureConfig(): PlanFeatureConfig {
     capabilities: Object.fromEntries(
       PLAN_CAPABILITY_DEFINITIONS.map(({ key }) => [key, false]),
     ) as Record<PlanCapabilityKey, boolean>,
+    merchantFeatures: [],
   };
 }
 
@@ -53,6 +61,44 @@ function cleanHighlights(values: unknown) {
       .filter(Boolean),
   )].slice(0, 12);
 }
+
+function cleanMerchantFeatureKey(value: unknown, fallbackIndex: number) {
+  const normalized = cleanText(value, 80)
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return normalized || `feature-${fallbackIndex + 1}`;
+}
+
+function cleanMerchantFeatures(value: unknown): PlanMerchantFeature[] {
+  if (!Array.isArray(value)) return [];
+
+  const seen = new Set<string>();
+  const rows: PlanMerchantFeature[] = [];
+
+  value.slice(0, 40).forEach((entry, index) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) return;
+    const record = entry as Record<string, unknown>;
+    const label = cleanText(record.label, 180);
+    if (!label) return;
+
+    let key = cleanMerchantFeatureKey(record.key ?? label, index);
+    if (seen.has(key)) {
+      let suffix = 2;
+      while (seen.has(`${key}-${suffix}`)) suffix += 1;
+      key = `${key}-${suffix}`;
+    }
+    seen.add(key);
+    rows.push({
+      key,
+      label,
+      included: record.included !== false,
+    });
+  });
+
+  return rows;
+}
+
 export function parsePlanFeatureFlags(value: unknown): PlanFeatureConfig {
   const record =
     value && typeof value === "object" && !Array.isArray(value)
@@ -76,6 +122,7 @@ export function parsePlanFeatureFlags(value: unknown): PlanFeatureConfig {
     description: cleanText(record.description, 500),
     highlights: cleanHighlights(record.highlights),
     capabilities,
+    merchantFeatures: cleanMerchantFeatures(record.merchantFeatures),
   };
 }
 
@@ -97,6 +144,7 @@ export type SavePlanInput = {
   description: string;
   highlights: string[];
   capabilities: Partial<Record<PlanCapabilityKey, boolean>>;
+  merchantFeatures: PlanMerchantFeature[];
 };
 
 function normalizeHandle(value: string) {
@@ -162,6 +210,7 @@ function validateInput(input: SavePlanInput) {
       description: cleanText(input.description, 500),
       highlights: cleanHighlights(input.highlights),
       capabilities,
+      merchantFeatures: cleanMerchantFeatures(input.merchantFeatures),
     } satisfies Prisma.InputJsonValue,
   };
 }
@@ -204,6 +253,37 @@ export async function updatePlanDefinition(
       version: existing.version + 1,
     },
   });
+}
+
+export async function deletePlanDefinition(planId: string) {
+  const existing = await db.plan.findUnique({
+    where: { id: planId },
+    select: {
+      id: true,
+      handle: true,
+      name: true,
+      _count: {
+        select: {
+          subscriptions: true,
+          assignments: true,
+        },
+      },
+    },
+  });
+  if (!existing) throw new Error("Plan not found.");
+
+  if (existing.handle === "custom") {
+    throw new Error("The shared Custom plan definition cannot be deleted.");
+  }
+
+  if (existing._count.subscriptions > 0 || existing._count.assignments > 0) {
+    throw new Error(
+      "This plan has subscription or shop-assignment history. Deactivate it instead of deleting it.",
+    );
+  }
+
+  await db.plan.delete({ where: { id: planId } });
+  return existing;
 }
 
 export async function setPlanActive(planId: string, isActive: boolean) {

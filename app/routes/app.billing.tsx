@@ -21,6 +21,15 @@ import {
   resolveShopCustomPlanTerms,
 } from "../services/commerce/plan-catalog.server";
 
+const BILLING_CAPABILITIES = [
+  ["semanticSearch", "Semantic search"],
+  ["multilingualSearch", "Multilingual query translation"],
+  ["searchAnalytics", "Search analytics"],
+  ["themeIntegration", "Theme Map integration"],
+  ["selfRendering", "Self-rendering storefront mode"],
+  ["customDataMode", "Custom data mode"],
+] as const;
+
 function planPresentation(value: unknown) {
   const features = parsePlanFeatureFlags(value);
   const capabilityLabels = PLAN_CAPABILITY_DEFINITIONS
@@ -30,6 +39,8 @@ function planPresentation(value: unknown) {
     description: features.description,
     highlights: features.highlights,
     capabilityLabels,
+    capabilities: features.capabilities,
+    merchantFeatures: features.merchantFeatures,
   };
 }
 
@@ -123,6 +134,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         description: presentation.description,
         highlights: presentation.highlights,
         capabilityLabels: presentation.capabilityLabels,
+        capabilities: presentation.capabilities,
+        merchantFeatures: presentation.merchantFeatures,
         limits: {
           productLimit: plan.maxIndexedProducts,
           searchLimit: plan.maxMonthlySearches,
@@ -148,6 +161,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
                   customTerms.features.capabilities[key],
               )
               .map(({ label }) => label),
+            capabilities: customTerms.features.capabilities,
+            merchantFeatures: customTerms.features.merchantFeatures,
             limits: customTerms.limits,
             usageBillingEnabled:
               customTerms.usageBillingEnabled,
@@ -613,6 +628,13 @@ export default function BillingPage() {
   const availablePlans = data.customPlan
     ? [...data.plans, data.customPlan]
     : data.plans;
+  const comparisonFeatureCatalog = Array.from(
+    new Map(
+      availablePlans
+        .flatMap((plan) => plan.merchantFeatures ?? [])
+        .map((feature) => [feature.key, { key: feature.key, label: feature.label }]),
+    ).values(),
+  );
   const subscribeError =
     subscribeFetcher.data &&
     "success" in subscribeFetcher.data &&
@@ -988,13 +1010,41 @@ export default function BillingPage() {
             const isFeatured = plan.handle.toLowerCase() === "pro";
             const isCurrentPlan =
               isActive && currentPlanHandle === plan.handle.toLowerCase();
+            const planMerchantFeatures = new Map(
+              (plan.merchantFeatures ?? []).map((feature) => [feature.key, feature]),
+            );
             const featureList = [
-              limitText(plan.limits.productLimit, "Indexed products"),
-              limitText(plan.limits.searchLimit, "Searches / period"),
-              limitText(plan.limits.vectorUpdateLimit, "Vector updates / period"),
-              ...plan.capabilityLabels,
-              ...plan.highlights,
-            ].slice(0, 7);
+              {
+                key: "limit-products",
+                label: limitText(plan.limits.productLimit, "Indexed products"),
+                included: true,
+              },
+              {
+                key: "limit-searches",
+                label: limitText(plan.limits.searchLimit, "Searches / period"),
+                included: true,
+              },
+              {
+                key: "limit-vectors",
+                label: limitText(plan.limits.vectorUpdateLimit, "Vector updates / period"),
+                included: true,
+              },
+              ...BILLING_CAPABILITIES.map(([key, label]) => ({
+                key: `capability-${key}`,
+                label,
+                included: plan.capabilities[key],
+              })),
+              ...comparisonFeatureCatalog.map((feature) => ({
+                key: `merchant-${feature.key}`,
+                label: feature.label,
+                included: planMerchantFeatures.get(feature.key)?.included === true,
+              })),
+              ...plan.highlights.map((label, index) => ({
+                key: `highlight-${index}-${label}`,
+                label,
+                included: true,
+              })),
+            ];
             const formattedPrice = new Intl.NumberFormat(undefined, {
               style: "currency",
               currency: plan.currencyCode,
@@ -1077,10 +1127,26 @@ export default function BillingPage() {
                     fontSize: 13,
                   }}
                 >
-                  {featureList.map((feat) => (
-                    <li key={feat} style={{ display: "flex", gap: 9, alignItems: "flex-start" }}>
-                      <span style={{ color: "#12a66a", fontWeight: 800 }}>✓</span>
-                      <span>{feat}</span>
+                  {featureList.map((feature) => (
+                    <li
+                      key={feature.key}
+                      style={{
+                        display: "flex",
+                        gap: 9,
+                        alignItems: "flex-start",
+                        color: feature.included ? "#475467" : "#98a2b3",
+                      }}
+                    >
+                      <span
+                        style={{
+                          color: feature.included ? "#12a66a" : "#d92d20",
+                          fontWeight: 800,
+                          minWidth: 12,
+                        }}
+                      >
+                        {feature.included ? "✓" : "×"}
+                      </span>
+                      <span>{feature.label}</span>
                     </li>
                   ))}
                 </ul>

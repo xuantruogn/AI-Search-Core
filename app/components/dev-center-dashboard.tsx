@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { Form, Link, useNavigation } from "react-router";
 
 import type { DevDashboardData } from "../services/admin/dev-dashboard.server";
@@ -368,7 +368,25 @@ export function PlanCatalogEditor({ plans, csrfToken, canWrite, busy }: {
               <Stat label="Version" value={String(plan.version)} />
             </div>
             {canWrite ? (
-              <PlanEditorForm plan={plan} csrfToken={csrfToken} busy={busy} />
+              <>
+                <PlanEditorForm plan={plan} csrfToken={csrfToken} busy={busy} />
+                <Form
+                  method="post"
+                  style={{ marginTop: 10 }}
+                  onSubmit={(event) => {
+                    if (!window.confirm(`Delete plan "${plan.name}"? Plans with subscription or assignment history cannot be hard-deleted.`)) {
+                      event.preventDefault();
+                    }
+                  }}
+                >
+                  <input type="hidden" name="_csrf" value={csrfToken} />
+                  <input type="hidden" name="intent" value="delete_plan" />
+                  <input type="hidden" name="planId" value={plan.id} />
+                  <button className="dc-link-danger" disabled={busy} type="submit">
+                    Delete plan
+                  </button>
+                </Form>
+              </>
             ) : (
               <div className="dc-stat-list">
                 <Stat label="Products" value={planLimit(plan.limits.productLimit)} />
@@ -389,6 +407,18 @@ function PlanEditorForm({ plan, csrfToken, busy }: {
   busy: boolean;
 }) {
   const isNew = !plan;
+  const [merchantFeatures, setMerchantFeatures] = useState(
+    () => plan?.features.merchantFeatures ?? [],
+  );
+
+  const addMerchantFeature = () => {
+    const key = `feature-${Date.now()}-${merchantFeatures.length + 1}`;
+    setMerchantFeatures((current) => [
+      ...current,
+      { key, label: "", included: true },
+    ]);
+  };
+
   return (
     <Form method="post" className="dc-form-card" style={{ marginTop: 12 }}>
       <input type="hidden" name="_csrf" value={csrfToken} />
@@ -471,6 +501,77 @@ function PlanEditorForm({ plan, csrfToken, busy }: {
         </div>
       </div>
 
+      <div>
+        <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", marginBottom: 8 }}>
+          <strong style={{ fontSize: 13 }}>Merchant-facing feature rows</strong>
+          <button className="dc-button dc-button-ghost" type="button" onClick={addMerchantFeature}>
+            Add feature
+          </button>
+        </div>
+        <div style={{ display: "grid", gap: 8 }}>
+          {merchantFeatures.map((feature, index) => (
+            <div
+              key={feature.key}
+              style={{
+                display: "grid",
+                gridTemplateColumns: "minmax(0, 1fr) auto auto",
+                gap: 10,
+                alignItems: "center",
+              }}
+            >
+              <input type="hidden" name="planFeatureKey" value={feature.key} />
+              <input
+                name="planFeatureLabel"
+                required
+                value={feature.label}
+                placeholder="e.g. Priority indexing"
+                onChange={(event) => {
+                  const label = event.target.value;
+                  setMerchantFeatures((current) =>
+                    current.map((item, itemIndex) =>
+                      itemIndex === index ? { ...item, label } : item,
+                    ),
+                  );
+                }}
+              />
+              <label style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 12 }}>
+                <input
+                  type="checkbox"
+                  name="planFeatureIncluded"
+                  value={feature.key}
+                  checked={feature.included}
+                  onChange={(event) => {
+                    const included = event.target.checked;
+                    setMerchantFeatures((current) =>
+                      current.map((item, itemIndex) =>
+                        itemIndex === index ? { ...item, included } : item,
+                      ),
+                    );
+                  }}
+                />
+                Included
+              </label>
+              <button
+                className="dc-link-danger"
+                type="button"
+                onClick={() =>
+                  setMerchantFeatures((current) =>
+                    current.filter((_, itemIndex) => itemIndex !== index),
+                  )
+                }
+              >
+                Remove
+              </button>
+            </div>
+          ))}
+          {merchantFeatures.length === 0 ? (
+            <small style={{ color: "#6b7280" }}>
+              No custom comparison features yet. Add rows to show them across all merchant plan cards.
+            </small>
+          ) : null}
+        </div>
+      </div>
+
       <Field label="Merchant-facing highlights (one per line)">
         <textarea name="planHighlights" rows={4} defaultValue={plan?.features.highlights.join("\n") ?? ""} placeholder={"Priority indexing\nAdvanced analytics\nEmail support"} />
       </Field>
@@ -484,8 +585,8 @@ function PlanEditorForm({ plan, csrfToken, busy }: {
         </label>
       </div>
 
-      <Field label="Change reason">
-        <input name="reason" required placeholder={isNew ? "Why this plan is being created" : "Why these terms are changing"} />
+      <Field label="Change note (optional)">
+        <input name="reason" placeholder={isNew ? "Optional note about this plan" : "Optional note about this change"} />
       </Field>
       <button className="dc-button dc-button-primary" disabled={busy} type="submit">
         {busy ? "Saving..." : isNew ? "Create plan" : "Save plan"}

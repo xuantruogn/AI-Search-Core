@@ -317,9 +317,32 @@ export async function claimProductSyncJob(jobId: number) {
   });
 }
 
+async function terminalizeExhaustedStaleProductJobs(now: Date) {
+  const staleBefore = new Date(now.getTime() - PRODUCT_SYNC_LEASE_MS);
+  const result = await db.aiSearchSyncJob.updateMany({
+    where: {
+      status: PRODUCT_SYNC_JOB_STATUS.processing,
+      attempts: { gte: PRODUCT_SYNC_MAX_ATTEMPTS },
+      updatedAt: { lte: staleBefore },
+    },
+    data: {
+      status: PRODUCT_SYNC_JOB_STATUS.failed,
+      processedAt: now,
+      lastError: "WORKER_LEASE_EXPIRED_AFTER_MAX_ATTEMPTS",
+    },
+  });
+
+  if (result.count > 0) {
+    console.error("[AI Search] Exhausted stale product jobs terminalized:", {
+      count: result.count,
+    });
+  }
+}
+
 export async function claimNextProductSyncJob() {
   const now = new Date();
   const staleBefore = new Date(now.getTime() - PRODUCT_SYNC_LEASE_MS);
+  await terminalizeExhaustedStaleProductJobs(now);
 
   // Fetch a bounded set from each class, then order by the moment that job
   // actually became eligible. This avoids starving due retries on busy stores

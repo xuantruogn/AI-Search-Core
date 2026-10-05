@@ -276,8 +276,31 @@ function catalogEligibleAt(job: CatalogJobRow) {
   return Number.POSITIVE_INFINITY;
 }
 
+async function terminalizeExhaustedStaleCatalogJobs(now: Date) {
+  const staleBefore = new Date(now.getTime() - LEASE_MS);
+  const updated = await db.$executeRaw`
+    UPDATE \`AiSearchCatalogSyncJob\`
+    SET
+      \`status\` = 'FAILED',
+      \`processedAt\` = ${now},
+      \`lastError\` = 'WORKER_LEASE_EXPIRED_AFTER_MAX_ATTEMPTS',
+      \`updatedAt\` = ${now}
+    WHERE
+      \`status\` = 'PROCESSING'
+      AND \`attempts\` >= ${MAX_ATTEMPTS}
+      AND \`updatedAt\` <= ${staleBefore}
+  `;
+
+  if (updated > 0) {
+    console.error("[AI Search] Exhausted stale catalog jobs terminalized:", {
+      count: updated,
+    });
+  }
+}
+
 export async function claimNextCatalogSyncJob() {
   const now = new Date();
+  await terminalizeExhaustedStaleCatalogJobs(now);
   const claimableCandidates = (await candidates())
     .filter((candidate) => claimable(candidate, now))
     .sort((left, right) => {

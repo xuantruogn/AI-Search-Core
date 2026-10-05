@@ -20,6 +20,18 @@ api_version = "2026-10"
 topics = [ "app_subscriptions/update" ]
 uri = "/webhooks/app/subscriptions_update"
 
+[[webhooks.subscriptions]]
+topics = [ "products/create" ]
+uri = "/webhooks/products/create"
+
+[[webhooks.subscriptions]]
+topics = [ "products/update" ]
+uri = "/webhooks/products/update"
+
+[[webhooks.subscriptions]]
+topics = [ "products/delete" ]
+uri = "/webhooks/products/delete"
+
 [app_proxy]
 url = "/proxy/ai-search"
 prefix = "apps"

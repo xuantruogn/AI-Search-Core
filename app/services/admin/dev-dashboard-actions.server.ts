@@ -25,6 +25,7 @@ import {
 } from "../commerce/quota-grants.server";
 import {
   createPlanDefinition,
+  deletePlanDefinition,
   PLAN_CAPABILITY_DEFINITIONS,
   setPlanActive,
   updatePlanDefinition,
@@ -69,6 +70,17 @@ function parsePlanInput(form: FormData): SavePlanInput {
     ]),
   ) as SavePlanInput["capabilities"];
 
+  const featureKeys = form.getAll("planFeatureKey").map((value) => String(value).trim());
+  const featureLabels = form.getAll("planFeatureLabel").map((value) => String(value).trim());
+  const enabledFeatureKeys = new Set(
+    form.getAll("planFeatureIncluded").map((value) => String(value).trim()),
+  );
+  const merchantFeatures = featureKeys.map((key, index) => ({
+    key,
+    label: featureLabels[index] ?? "",
+    included: enabledFeatureKeys.has(key),
+  }));
+
   return {
     handle: String(form.get("planHandle") ?? "").trim(),
     name: String(form.get("planName") ?? "").trim(),
@@ -87,7 +99,12 @@ function parsePlanInput(form: FormData): SavePlanInput {
     description: String(form.get("planDescription") ?? "").trim(),
     highlights: String(form.get("planHighlights") ?? "").split(/\r?\n/),
     capabilities,
+    merchantFeatures,
   };
+}
+
+function optionalPlanNote(form: FormData) {
+  return String(form.get("reason") ?? "").trim().slice(0, 1000);
 }
 
 function requireReason(form: FormData) {
@@ -116,7 +133,12 @@ export async function handleDevDashboardAction({
   const intent = String(form.get("intent") ?? "");
   const targetShop = String(form.get("targetShop") ?? "").trim();
   const actor = `dev:${user.email}`;
-  const globalPlanIntent = ["create_plan", "update_plan", "set_plan_active"].includes(intent);
+  const globalPlanIntent = [
+    "create_plan",
+    "update_plan",
+    "set_plan_active",
+    "delete_plan",
+  ].includes(intent);
 
   if (!globalPlanIntent && !targetShop) {
     throw new Response("Target shop is required", { status: 400 });
@@ -124,7 +146,6 @@ export async function handleDevDashboardAction({
 
   if (globalPlanIntent) {
     await requireDevPermission(request, "shop_plan.write");
-    await requireRecentDevAuthentication(request);
   } else if (intent === "grant_quota" || intent === "revoke_grant") {
     await requireDevPermission(request, "shop_quota.write");
   } else if (intent === "set_limits") {
@@ -141,7 +162,7 @@ export async function handleDevDashboardAction({
 
   try {
     if (intent === "create_plan") {
-      const reason = requireReason(form);
+      const reason = optionalPlanNote(form);
       const plan = await createPlanDefinition(parsePlanInput(form));
       await writeDevAudit({
         request,
@@ -158,7 +179,7 @@ export async function handleDevDashboardAction({
     if (intent === "update_plan") {
       const planId = String(form.get("planId") ?? "").trim();
       if (!planId) throw new Error("Plan ID is required.");
-      const reason = requireReason(form);
+      const reason = optionalPlanNote(form);
       const plan = await updatePlanDefinition(planId, parsePlanInput(form));
       await writeDevAudit({
         request,
@@ -175,7 +196,7 @@ export async function handleDevDashboardAction({
     if (intent === "set_plan_active") {
       const planId = String(form.get("planId") ?? "").trim();
       if (!planId) throw new Error("Plan ID is required.");
-      const reason = requireReason(form);
+      const reason = optionalPlanNote(form);
       const enabled = String(form.get("enabled") ?? "") === "true";
       const plan = await setPlanActive(planId, enabled);
       await writeDevAudit({
@@ -191,6 +212,23 @@ export async function handleDevDashboardAction({
         ok: true,
         message: `Plan ${plan.name} ${enabled ? "activated" : "deactivated"}.`,
       };
+    }
+
+    if (intent === "delete_plan") {
+      const planId = String(form.get("planId") ?? "").trim();
+      if (!planId) throw new Error("Plan ID is required.");
+      const reason = optionalPlanNote(form);
+      const plan = await deletePlanDefinition(planId);
+      await writeDevAudit({
+        request,
+        devUserId: user.id,
+        action: "PLAN_DELETED",
+        resourceType: "plan",
+        resourceId: plan.id,
+        result: "SUCCESS",
+        metadata: { handle: plan.handle, name: plan.name, reason: reason || null },
+      });
+      return { ok: true, message: `Plan ${plan.name} deleted.` };
     }
 
     if (intent === "grant_quota") {

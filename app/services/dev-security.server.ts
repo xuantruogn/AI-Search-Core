@@ -134,7 +134,12 @@ function allowedOrigins(request: Request) {
     process.env.NODE_ENV === "production"
       ? configured.length
         ? configured
-        : ["https://app.aibuyense.com", "https://dev.aibuyense.com"]
+        : [
+            "https://buysenseshopify.com",
+            "https://admin.buysenseshopify.com",
+            "https://app.aibuyense.com",
+            "https://dev.aibuyense.com",
+          ]
       : configured,
   );
 
@@ -143,16 +148,25 @@ function allowedOrigins(request: Request) {
     allowed.add(current.origin);
   }
 
-  // Shopify CLI can run the web process with NODE_ENV=production while still
-  // exposing it through a temporary HTTPS quick tunnel. In that case only
-  // trust the exact tunnel origin supplied by Shopify CLI via SHOPIFY_APP_URL.
+  // Trust the exact configured app origin in every environment. This covers
+  // the production Dev Center host as well as Shopify CLI quick tunnels.
   const appUrl = process.env.SHOPIFY_APP_URL?.trim();
   if (appUrl) {
     try {
       const parsed = new URL(appUrl);
-      if (parsed.protocol === "https:" && parsed.hostname.endsWith(".trycloudflare.com")) {
+      if (parsed.protocol === "https:") {
         allowed.add(parsed.origin);
       }
+    } catch {
+      // Invalid configuration stays denied by default.
+    }
+  }
+
+  const devPublicOrigin = process.env.DEV_PUBLIC_ORIGIN?.trim();
+  if (devPublicOrigin) {
+    try {
+      const parsed = new URL(devPublicOrigin);
+      if (parsed.protocol === "https:") allowed.add(parsed.origin);
     } catch {
       // Invalid configuration stays denied by default.
     }
@@ -162,8 +176,15 @@ function allowedOrigins(request: Request) {
 }
 
 export function assertDevOrigin(request: Request) {
-  const origin = request.headers.get("origin");
-  if (!origin || !allowedOrigins(request).has(origin)) {
+  const rawSource = request.headers.get("origin") ?? request.headers.get("referer");
+  let sourceOrigin = "";
+  try {
+    sourceOrigin = rawSource ? new URL(rawSource).origin : "";
+  } catch {
+    sourceOrigin = "";
+  }
+
+  if (!sourceOrigin || !allowedOrigins(request).has(sourceOrigin)) {
     throw new Response("Forbidden", { status: 403 });
   }
 }

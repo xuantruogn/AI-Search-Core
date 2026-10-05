@@ -92,14 +92,14 @@ export default function App() {
   const navigation = useNavigation();
   const isNavigating = navigation.state === "loading";
 
-  const navItems = [
+  const navItems: Array<{ label: string; to: string; end?: boolean; external?: boolean }> = [
     { label: "Dashboard", to: "/app", end: true },
     { label: "Catalog", to: "/app/catalog-sync" },
     { label: "Usage", to: "/app/usage" },
     { label: "Search Analytics", to: "/app/search-analytics" },
     { label: "Plans & Billing", to: "/app/billing" },
     { label: "Settings", to: "/app/settings" },
-    { label: "Product Demo", to: "/demo", external: true },
+    { label: "Product Demo", to: "/demo" },
   ];
 
   return (
