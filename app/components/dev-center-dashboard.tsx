@@ -676,7 +676,7 @@ function ShopDrawer({ shop, grants, csrfToken, query, canQuotaWrite, canPlanWrit
                   <Field label="Amount"><input name="amount" type="number" min="1" required /></Field>
                   <Field label="Expiry"><select name="expiryMode" defaultValue="BILLING_CYCLE"><option value="BILLING_CYCLE">End of billing cycle</option><option value="30_DAYS">30 days</option><option value="NEVER">No expiry</option></select></Field>
                 </div>
-                <Field label="Reason"><input name="reason" required placeholder="Support ticket or reason" /></Field>
+                <Field label="Note"><input name="reason" placeholder="Optional note" /></Field>
                 <button className="dc-button dc-button-primary" disabled={busy} type="submit">Add grant</button>
               </Form>
             ) : <ReadOnly />}

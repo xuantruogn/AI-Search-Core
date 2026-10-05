@@ -240,7 +240,7 @@ export async function handleDevDashboardAction({
       if (!Number.isFinite(amount) || amount <= 0) {
         throw new Error("Grant amount must be greater than zero");
       }
-      const reason = requireReason(form);
+      const reason = optionalPlanNote(form);
       const expiryMode = String(
         form.get("expiryMode") ?? "BILLING_CYCLE",
       ) as "BILLING_CYCLE" | "30_DAYS" | "NEVER";

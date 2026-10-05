@@ -178,10 +178,7 @@ export async function createQuotaGrant({
   expiresAt: Date | null;
 }) {
   const safeAmount = boundedPositiveInteger(amount);
-  const cleanReason = reason.trim();
-  if (cleanReason.length < 3) {
-    throw new Error("Reason is required for quota changes");
-  }
+  const cleanReason = reason.trim().slice(0, 1000);
   if (expiresAt && expiresAt.getTime() <= Date.now()) {
     throw new Error("Grant expiry must be in the future");
   }
