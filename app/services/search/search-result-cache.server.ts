@@ -6,6 +6,22 @@ import {
   QUERY_ROUTER_VERSION,
 } from "./query-plan.server";
 import { getSearchCatalogRevisionCached } from "./search-catalog-revision.server";
+import {
+  BM25_MODEL,
+  BM25_OPTIONS,
+  QDRANT_COLLECTION,
+  VECTOR_SIZE,
+} from "./qdrant.server";
+import {
+  PRODUCT_SEMANTIC_PROFILE_SCHEMA_VERSION,
+  PRODUCT_VECTOR_SEMANTIC_PAYLOAD_VERSION,
+} from "./product-semantic-profile.server";
+import {
+  QUERY_EMBEDDING_PIPELINE_VERSION,
+  QUERY_SEMANTIC_PROFILE_VERSION,
+} from "./query-semantic-profile.server";
+import { SEMANTIC_CONTRACT_VERSION } from "./semantic-contract.server";
+import { PRODUCT_EMBEDDING_PIPELINE_VERSION } from "../products/product-indexer.server";
 
 export interface CachedRankedProduct {
   productId: string;
@@ -40,7 +56,7 @@ const MIN_TTL_MS = 60 * 1000;
 const DEFAULT_QUERY_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const MAX_RECEIPT_TTL_MS = 24 * 60 * 60 * 1000;
 const FULL_SEARCH_CACHE_PIPELINE_VERSION =
-  "full-search-cache-v71-dense-bm25-rrf-psf-2026-10-06";
+  "full-search-cache-v72-responsibility-boundaries-2026-10-06";
 
 export type CachedSearchSortIntent =
   | "RELEVANCE"
@@ -148,11 +164,20 @@ function readReceiptTtlMs() {
   return Math.min(parsed, MAX_RECEIPT_TTL_MS);
 }
 
-function currentSearchPipelineSignature() {
+export function currentSearchPipelineSignature() {
   return [
     FULL_SEARCH_CACHE_PIPELINE_VERSION,
     process.env.GEMINI_QUERY_REWRITE_MODEL?.trim() || "gemini-3.5-flash-lite",
     process.env.OPENAI_EMBEDDING_MODEL?.trim() || "text-embedding-3-small",
+    `qdrant:${QDRANT_COLLECTION}`,
+    `dense:${VECTOR_SIZE}`,
+    `bm25:${BM25_MODEL}:${JSON.stringify(BM25_OPTIONS)}`,
+    `product:${PRODUCT_EMBEDDING_PIPELINE_VERSION}`,
+    `product-profile:${PRODUCT_SEMANTIC_PROFILE_SCHEMA_VERSION}`,
+    `product-payload:${PRODUCT_VECTOR_SEMANTIC_PAYLOAD_VERSION}`,
+    `query-profile:${QUERY_SEMANTIC_PROFILE_VERSION}`,
+    `query-embedding:${QUERY_EMBEDDING_PIPELINE_VERSION}`,
+    `semantic-contract:${SEMANTIC_CONTRACT_VERSION}`,
     process.env.AI_SEARCH_QUERY_ROUTER_ENABLED?.trim() || "default",
     QUERY_PARSER_VERSION,
     QUERY_ROUTER_VERSION,

@@ -1,4 +1,6 @@
-﻿/** Recall-only contract. Never feed these fields into exact fact collectors. */
+﻿export const SEMANTIC_CONTRACT_VERSION = "supply-demand-v2-joint-evidence";
+
+/** Recall-only contract. Never feed these fields into exact fact collectors. */
 export const SEMANTIC_AXES = ["identity", "purpose", "useCase", "context", "quality", "audience", "style"] as const;
 
 export type SemanticSupplyProfile = {

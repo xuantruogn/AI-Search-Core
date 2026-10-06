@@ -2873,6 +2873,27 @@ export async function filterResultsByExplicitGender<
             !tokens.every((token) => genericSemanticFacetTokens.has(token))
           );
         });
+
+  // Demand axes are recall/ranking meaning, never closed-world facts. Keep a
+  // separate joint semantic coverage signal so qualities/use-cases/context can
+  // affect final evidence assessment without being converted into PSF MUSTs.
+  const semanticDemand = rewrite.analysis.semanticDemand;
+  const semanticDemandSignals = semanticDemand
+    ? [
+        ...new Set([
+          ...semanticDemand.identity,
+          ...semanticDemand.desiredOutcomes,
+          ...semanticDemand.useCases,
+          ...semanticDemand.contexts,
+          ...semanticDemand.qualities,
+          ...semanticDemand.audience,
+          ...semanticDemand.styles,
+        ]),
+      ]
+        .map((value) => value.replace(/\s+/g, " ").trim())
+        .filter(Boolean)
+        .filter((value) => !isCommerceOnlyValue(value))
+    : [];
   const brandSignals = rewrite.analysis.brands;
   const modelSignals = rewrite.analysis.models;
   const identifierSignals = rewrite.analysis.identifiers;
@@ -3137,6 +3158,11 @@ export async function filterResultsByExplicitGender<
       semanticMustFacetTokens,
       semanticMustFacetSignals,
     );
+    const semanticDemandCoverage = semanticSignalCoverage(
+      softRecallValues,
+      softRecallTokens,
+      semanticDemandSignals,
+    );
     const directContextNeedMatch =
       sourceContextNeedSignals.length === 0
         ? 0
@@ -3356,6 +3382,7 @@ export async function filterResultsByExplicitGender<
         expansionGroundedDiscoveryProductIds.has(result.productId),
       attributeMatch,
       semanticMustFacetMatch,
+      semanticDemandCoverage,
       directContextNeedMatch,
       sourceNeedCoverage,
       semanticBranchLift,
@@ -3557,6 +3584,9 @@ export async function filterResultsByExplicitGender<
       // This prevents open-world concepts such as style/use-case from
       // becoming accidental hard filters.
       Math.min(0.10, item.semanticMustFacetMatch * 0.10) +
+      // Joint Demand coverage is semantic evidence only. It can improve order
+      // and final confidence, but cannot manufacture exact fact authority.
+      Math.min(0.12, item.semanticDemandCoverage * 0.12) +
       Math.min(0.08, item.discoveryExpansionPreferenceMatch * 0.08) +
       Math.min(0.12, item.complementaryPreferenceMatch * 0.12) +
       // For long DIRECT need-style queries, an LLM expansion may resolve the
@@ -3633,6 +3663,14 @@ export async function filterResultsByExplicitGender<
         currentRetrievalMode === "DISCOVERY"
           ? item.semanticMustFacetMatch
           : 0,
+      _semanticDemandCoverage:
+        currentRetrievalMode === "DISCOVERY"
+          ? item.semanticDemandCoverage
+          : 0,
+      semanticDemandCoverage:
+        item.semanticDemandCoverage,
+      semanticDemandSignalCount:
+        semanticDemandSignals.length,
       _discoveryExpansionPreference:
         currentRetrievalMode === "DISCOVERY"
           ? item.discoveryExpansionPreferenceMatch
@@ -3659,6 +3697,11 @@ export async function filterResultsByExplicitGender<
     (
       currentRetrievalMode === "DISCOVERY"
         ? right._semanticNeedTier - left._semanticNeedTier
+        : 0
+    ) ||
+    (
+      currentRetrievalMode === "DISCOVERY"
+        ? right._semanticDemandCoverage - left._semanticDemandCoverage
         : 0
     ) ||
     (
@@ -3732,6 +3775,9 @@ export async function filterResultsByExplicitGender<
         relative < 0.9 ||
         (sourceCoverageSignals.length >= 2 &&
           item._sourceNeedCoverage < filtered[0]._sourceNeedCoverage) ||
+        (semanticDemandSignals.length >= 2 &&
+          item._semanticDemandCoverage + 0.15 <
+            filtered[0]._semanticDemandCoverage) ||
         item._typedRerankScore < topRankScore * 0.72
       ) {
         return;
@@ -3787,6 +3833,7 @@ export async function filterResultsByExplicitGender<
     _sourceDiscoveryTier: _sourceDiscoveryTierIgnored,
     _semanticNeedTier: _semanticNeedTierIgnored,
     _semanticNeedCoverage: _semanticNeedCoverageIgnored,
+    _semanticDemandCoverage: _semanticDemandCoverageIgnored,
     _discoveryExpansionPreference: _discoveryExpansionPreferenceIgnored,
     _expansionDiscoveryTier: _expansionDiscoveryTierIgnored,
     _typedRerankScore: _typedRerankScoreIgnored,

@@ -11,6 +11,11 @@ import {
 } from "./legacy-query-rewrite-adapter.server";
 import { normalizeQueryText } from "./deterministic-query-parser.server";
 
+export const QUERY_SEMANTIC_PROFILE_VERSION =
+  "query-semantic-profile-v2-source-owned-identity";
+export const QUERY_EMBEDDING_PIPELINE_VERSION =
+  "semantic-expansion-v13-aligned-demand-evidence";
+
 export type QuerySemanticProfile = {
   rawPlan: QueryPlan;
   expandedPlan: QueryPlan;
@@ -189,6 +194,56 @@ function exactSemanticTermMatches(
   return terms.some(
     (term) => normalizeQueryText(term) === value,
   );
+}
+
+/**
+ * Preserve only shopper-owned semantic identity across the legacy adapter.
+ *
+ * DISCOVERY intentionally does not promote LLM-expanded identities into hard
+ * QueryPlan constraints. That must not erase an identity the shopper actually
+ * named (including a translated source phrase) from downstream evidence
+ * assessment. Aligned mandatoryConcepts keep the shopper-source phrase paired
+ * with the canonical target concept so translation provenance survives without
+ * relying on parallel array order.
+ */
+export function sourceOwnedSemanticDemandIdentities(args: {
+  originalQuery: string;
+  identities: string[];
+  mandatoryConcepts: Array<{ target: string; source: string }>;
+}) {
+  const sourceQuery = normalizeQueryText(args.originalQuery);
+  const concepts = args.mandatoryConcepts.map((concept) => ({
+    target: normalizeQueryText(concept.target),
+    source: normalizeQueryText(concept.source),
+  }));
+
+  const sourceContains = (value: string) =>
+    Boolean(
+      value &&
+      (
+        sourceQuery.includes(value) ||
+        value.includes(sourceQuery)
+      ),
+    );
+
+  return [...new Set(
+    args.identities.filter((identity) => {
+      const normalizedIdentity = normalizeQueryText(identity);
+      if (!normalizedIdentity) return false;
+
+      // LLM output now carries aligned {target, source} pairs. The canonical
+      // identity is preserved only when the same pair's source phrase belongs
+      // to the shopper query. This keeps translation provenance without
+      // trusting array position or unrelated occasion/context MUSTs.
+      return concepts.some((concept) => {
+        const identityMatchesTarget =
+          concept.target === normalizedIdentity ||
+          concept.target.includes(normalizedIdentity) ||
+          normalizedIdentity.includes(concept.target);
+        return identityMatchesTarget && sourceContains(concept.source);
+      });
+    }),
+  )];
 }
 
 export function semanticTermsCoverConstraint(
@@ -691,6 +746,43 @@ export function buildQuerySemanticProfile(args: {
   };
   const baseline = queryPlanToLegacyRewrite(finalPlan, args.originalQuery);
   const mergedRewriteBase = mergeLlmRewriteIntoPlan(baseline, safeLlm);
+  const sourceOwnedDemandIdentities = sourceOwnedSemanticDemandIdentities({
+    originalQuery: args.originalQuery,
+    identities: safeLlm.analysis.semanticDemand?.identity ?? [],
+    mandatoryConcepts: safeLlm.analysis.semanticMandatoryConcepts ?? [],
+  });
+  // Keep source-owned identity available to legacy evidence consumers without
+  // converting it into a QueryPlan MUST. This is semantic provenance, not a
+  // closed-world filter.
+  const mergedRewriteBaseWithDemand =
+    sourceOwnedDemandIdentities.length === 0
+      ? mergedRewriteBase
+      : {
+          ...mergedRewriteBase,
+          analysis: {
+            ...mergedRewriteBase.analysis,
+            productType:
+              mergedRewriteBase.analysis.productType ||
+              sourceOwnedDemandIdentities[0] ||
+              "",
+            productTypes: [
+              ...new Set([
+                ...mergedRewriteBase.analysis.productTypes,
+                ...sourceOwnedDemandIdentities,
+              ]),
+            ],
+            productRelation:
+              mergedRewriteBase.analysis.productRelation !== "NONE"
+                ? mergedRewriteBase.analysis.productRelation
+                : sourceOwnedDemandIdentities.length > 1
+                  ? "ANY"
+                  : "SINGLE",
+            shopLanguageProductType:
+              mergedRewriteBase.analysis.shopLanguageProductType ||
+              sourceOwnedDemandIdentities[0] ||
+              "",
+          },
+        };
   const rawResolvedReferenceTerms =
     args.rawPlan.retrievalMode === "COMPLEMENT"
       ? args.rawPlan.resolvedSegments
@@ -719,9 +811,9 @@ export function buildQuerySemanticProfile(args: {
         ? rawResolvedReferenceTerms
         : llmReferenceTerms;
   const mergedRewrite: QueryRewriteResult = {
-    ...mergedRewriteBase,
+    ...mergedRewriteBaseWithDemand,
     analysis: {
-      ...mergedRewriteBase.analysis,
+      ...mergedRewriteBaseWithDemand.analysis,
       retrievalMode,
       referenceTerms:
         retrievalMode === "COMPLEMENT"

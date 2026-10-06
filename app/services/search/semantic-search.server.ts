@@ -777,6 +777,9 @@ export function fuseSemanticVectorBranches(
 }
 
 export type SemanticSearchDiagnostics = {
+  /** Open-world context uncertainty; never a certain absence proof. */
+  contextProductClassUncertain?: boolean;
+  /** Deprecated certainty flag. Certain absence is owned by absence-proof.server. */
   sourceProductClassAbsent?: boolean;
   primaryEmbeddingInput?: string;
   semanticFacetBranches?: string[];
@@ -2050,15 +2053,22 @@ export async function semanticSearch({
     cleanQuery.split(/\s+/).filter(Boolean).length >= 7
       ? Math.min(effectiveNoEvidenceTopScore, 0.55)
       : effectiveNoEvidenceTopScore;
-  const weakNoEvidenceVector = (effectiveRewrite?.context?.ungroundedSourceProductClass === true || effectiveRewrite?.context?.ungroundedExplicitFeature === true) || shouldRejectNoEvidenceVector({
-    hasStrongCatalogEvidence,
-    topVectorScore,
-    normalThreshold: effectiveNoEvidenceTopScore,
-    transientFallback: transientLlmFallback,
-    transientThreshold: fallbackNeedsSemanticGuard
-      ? fallbackGuardThreshold
-      : transientNoEvidenceThreshold,
-  });
+  // Context grounding may report that a shopper-owned product class is not
+  // currently grounded, but that signal is open-world uncertainty rather than
+  // a closed-world absence proof. Do not let it independently zero the result
+  // set. Certain absence is owned by absence-proof.server; semantic quality
+  // still has to pass the normal vector evidence guard below.
+  const weakNoEvidenceVector =
+    effectiveRewrite?.context?.ungroundedExplicitFeature === true ||
+    shouldRejectNoEvidenceVector({
+      hasStrongCatalogEvidence,
+      topVectorScore,
+      normalThreshold: effectiveNoEvidenceTopScore,
+      transientFallback: transientLlmFallback,
+      transientThreshold: fallbackNeedsSemanticGuard
+        ? fallbackGuardThreshold
+        : transientNoEvidenceThreshold,
+    });
   const expansionOnlyRescue =
     retrievalMode === "DISCOVERY" &&
     !hasStrongCatalogEvidence &&
@@ -2257,7 +2267,12 @@ export async function semanticSearch({
     primaryEmbeddingInput: primaryEmbeddingInputForDiagnostics.slice(0, 300),
     semanticFacetBranches: semanticBranchInputs.slice(0, 6).map((value) => value.slice(0, 300)),
     retrievalMode,
-    sourceProductClassAbsent: effectiveRewrite?.context?.ungroundedSourceProductClass === true || effectiveRewrite?.context?.ungroundedExplicitFeature === true,
+    contextProductClassUncertain:
+      effectiveRewrite?.context?.ungroundedSourceProductClass === true,
+    // Certain class absence is decided by absence-proof.server before fusion.
+    // Keep this legacy diagnostic false so open-world context inference cannot
+    // suppress sparse recall downstream.
+    sourceProductClassAbsent: false,
     noEvidenceGuardTriggered: weakNoEvidenceVector,
     noEvidenceThreshold: transientLlmFallback
       ? transientNoEvidenceThreshold

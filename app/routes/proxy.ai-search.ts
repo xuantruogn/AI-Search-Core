@@ -28,6 +28,7 @@ import {
 } from "../services/search/search-price-filter.server";
 import { classifySearchRequest } from "../services/search/search-request-router.server";
 import type { QueryPlan } from "../services/search/query-plan.server";
+import { QUERY_EMBEDDING_PIPELINE_VERSION } from "../services/search/query-semantic-profile.server";
 import {
   buildSearchQueryCacheIdentity,
   getSearchQueryCache,
@@ -90,7 +91,6 @@ const queryEmbeddingCache = new Map<
   { embedding: number[]; timestamp: number }
 >();
 const EMBEDDING_CACHE_TTL = 24 * 60 * 60 * 1000;
-const EMBEDDING_QUERY_PIPELINE_VERSION = "semantic-expansion-v12-full-native-dimensions";
 
 const SEARCH_CACHE_IGNORED_PARAMS = new Set([
   "q",
@@ -124,7 +124,7 @@ function buildEmbeddingCacheKey(shop: string, query: string) {
     shop,
     getEmbeddingModel(),
     String(getEmbeddingDimensions()),
-    EMBEDDING_QUERY_PIPELINE_VERSION,
+    QUERY_EMBEDDING_PIPELINE_VERSION,
     query.trim(),
   ].join("\u0000");
 }
@@ -2801,7 +2801,9 @@ let resultCacheStatus: "HIT" | "MISS" = "MISS";
           lexical,
           semanticNoEvidence:
             semanticDiagnostics?.noEvidenceGuardTriggered === true,
-          sourceProductClassAbsent: semanticDiagnostics?.sourceProductClassAbsent === true,
+          // Certain absence already short-circuits above via finalProof. Do not
+          // let open-world context uncertainty suppress the sparse lane here.
+          sourceProductClassAbsent: false,
           semanticThreshold:
             semanticDiagnostics?.vectorThreshold ??
             Number.parseFloat(
