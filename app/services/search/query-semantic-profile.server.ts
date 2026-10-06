@@ -206,12 +206,13 @@ function exactSemanticTermMatches(
 export function sourceOwnedSemanticDemandIdentities(args: {
   originalQuery: string;
   identities: string[];
-  semanticMustTerms: string[];
-  semanticSourceMustTerms: string[];
+  mandatoryConcepts: Array<{ target: string; source: string }>;
 }) {
   const sourceQuery = normalizeQueryText(args.originalQuery);
-  const targetMustTerms = args.semanticMustTerms.map(normalizeQueryText);
-  const sourceMustTerms = args.semanticSourceMustTerms.map(normalizeQueryText);
+  const concepts = args.mandatoryConcepts.map((concept) => ({
+    target: normalizeQueryText(concept.target),
+    source: normalizeQueryText(concept.source),
+  }));
 
   const sourceContains = (value: string) =>
     Boolean(
@@ -227,19 +228,16 @@ export function sourceOwnedSemanticDemandIdentities(args: {
       const normalizedIdentity = normalizeQueryText(identity);
       if (!normalizedIdentity) return false;
 
-      // Source ownership is intentionally conservative in every language:
-      // the identity must correspond to a mandatory canonical concept and the
-      // source-side concept at the same extraction position must be present in
-      // the shopper query. Mere token containment is not enough: in "bicycle
-      // accessories", bicycle is a qualifier/reference family, not necessarily
-      // the target product identity.
-      return targetMustTerms.some((target, index) => {
+      // LLM output now carries aligned {target, source} pairs. The canonical
+      // identity is preserved only when the same pair's source phrase belongs
+      // to the shopper query. This keeps translation provenance without
+      // trusting array position or unrelated occasion/context MUSTs.
+      return concepts.some((concept) => {
         const identityMatchesTarget =
-          target === normalizedIdentity ||
-          target.includes(normalizedIdentity) ||
-          normalizedIdentity.includes(target);
-        if (!identityMatchesTarget) return false;
-        return sourceContains(sourceMustTerms[index] ?? "");
+          concept.target === normalizedIdentity ||
+          concept.target.includes(normalizedIdentity) ||
+          normalizedIdentity.includes(concept.target);
+        return identityMatchesTarget && sourceContains(concept.source);
       });
     }),
   )];
@@ -748,8 +746,7 @@ export function buildQuerySemanticProfile(args: {
   const sourceOwnedDemandIdentities = sourceOwnedSemanticDemandIdentities({
     originalQuery: args.originalQuery,
     identities: safeLlm.analysis.semanticDemand?.identity ?? [],
-    semanticMustTerms: safeLlm.analysis.semanticMustTerms ?? [],
-    semanticSourceMustTerms: safeLlm.analysis.semanticSourceMustTerms ?? [],
+    mandatoryConcepts: safeLlm.analysis.semanticMandatoryConcepts ?? [],
   });
   // Keep source-owned identity available to legacy evidence consumers without
   // converting it into a QueryPlan MUST. This is semantic provenance, not a
