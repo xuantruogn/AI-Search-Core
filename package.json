@@ -23,7 +23,7 @@
     "test:v4": "tsx --env-file=.env scripts/theme-map-v4-selftest.ts",
     "test:v4:corpus": "tsx scripts/theme-map-v4-corpus-selftest.ts",
     "test:query-plan": "tsx scripts/query-plan-shadow-selftest.ts",
-    "test:search-hybrid": "tsx scripts/product-vector-v6-selftest.ts && tsx scripts/dense-sparse-rrf-selftest.ts && tsx scripts/hybrid-retrieval-fusion-selftest.ts && tsx scripts/grounded-facet-retrieval-selftest.ts && tsx scripts/search-threshold-selftest.ts && tsx scripts/search-context-evidence-selftest.ts && tsx scripts/search-source-coverage-selftest.ts && tsx scripts/final-relevance-cutoff-selftest.ts",
+    "test:search-hybrid": "tsx scripts/qdrant-v9-migration-selftest.ts && tsx scripts/product-vector-v6-selftest.ts && tsx scripts/dense-sparse-rrf-selftest.ts && tsx scripts/hybrid-retrieval-fusion-selftest.ts && tsx scripts/grounded-facet-retrieval-selftest.ts && tsx scripts/search-threshold-selftest.ts && tsx scripts/search-context-evidence-selftest.ts && tsx scripts/search-source-coverage-selftest.ts && tsx scripts/final-relevance-cutoff-selftest.ts",
     "test:product-lifecycle": "tsx --env-file=.env scripts/product-lifecycle-selftest.ts",
     "test:data-architecture": "tsx --env-file=.env scripts/data-architecture-selftest.ts",
     "test:compact-profile": "tsx scripts/compact-profile-integration-selftest.ts",
