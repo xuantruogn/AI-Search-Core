@@ -56,14 +56,15 @@ function structuredCanRescueGuard(
   const kinds = new Set(result.structuredMatchedKinds ?? []);
   if (kinds.has("BRAND") && kinds.has("PRODUCT_TYPE") &&
       meaningfulUnresolved(plan).length === 0 && coversPositiveSemanticFacets(result, plan)) return true;
-  const typedMultiFact =
-    kinds.has("PRODUCT_TYPE") &&
-    ["ATTRIBUTE", "AUDIENCE", "CONTEXT"].some((kind) => kinds.has(kind));
   if (
     meaningfulUnresolved(plan).length === 0 &&
     coversPositiveSemanticFacets(result, plan) &&
-    (result.structuredExactCanonicalIdentity || typedMultiFact)
+    result.structuredExactCanonicalIdentity
   ) {
+    // Structured rescue is reserved for explicit authority: an exact
+    // canonical identity whose shopper-owned positive facets are actually
+    // covered. Generic PRODUCT_TYPE + soft CONTEXT/AUDIENCE coincidence is
+    // evidence for reranking, not permission to resurrect a rejected result.
     return true;
   }
   return false;
