@@ -777,6 +777,9 @@ export function fuseSemanticVectorBranches(
 }
 
 export type SemanticSearchDiagnostics = {
+  /** Open-world context uncertainty; never a certain absence proof. */
+  contextProductClassUncertain?: boolean;
+  /** Deprecated certainty flag. Certain absence is owned by absence-proof.server. */
   sourceProductClassAbsent?: boolean;
   primaryEmbeddingInput?: string;
   semanticFacetBranches?: string[];
@@ -2264,7 +2267,12 @@ export async function semanticSearch({
     primaryEmbeddingInput: primaryEmbeddingInputForDiagnostics.slice(0, 300),
     semanticFacetBranches: semanticBranchInputs.slice(0, 6).map((value) => value.slice(0, 300)),
     retrievalMode,
-    sourceProductClassAbsent: effectiveRewrite?.context?.ungroundedSourceProductClass === true || effectiveRewrite?.context?.ungroundedExplicitFeature === true,
+    contextProductClassUncertain:
+      effectiveRewrite?.context?.ungroundedSourceProductClass === true,
+    // Certain class absence is decided by absence-proof.server before fusion.
+    // Keep this legacy diagnostic false so open-world context inference cannot
+    // suppress sparse recall downstream.
+    sourceProductClassAbsent: false,
     noEvidenceGuardTriggered: weakNoEvidenceVector,
     noEvidenceThreshold: transientLlmFallback
       ? transientNoEvidenceThreshold
