@@ -39,4 +39,45 @@ assert.deepEqual(discovery.map((r: any) => r.productId), [
   "dense", "confirmed", "sparse-strong",
 ]);
 
+const discoveryDemandAware = applyFinalRelevanceCutoff({
+  retrievalMode: "DISCOVERY",
+  semanticThreshold: 0.35,
+  results: [
+    {
+      ...base("joint-good"),
+      vectorSimilarity: 0.39,
+      semanticDemandCoverage: 0.7,
+      semanticDemandSignalCount: 3,
+      retrievalSources: ["SEMANTIC" as const, "SPARSE" as const],
+    },
+    {
+      ...base("joint-weak"),
+      vectorSimilarity: 0.39,
+      semanticDemandCoverage: 0,
+      semanticDemandSignalCount: 3,
+      retrievalSources: ["SEMANTIC" as const, "SPARSE" as const],
+    },
+    {
+      ...base("joint-weak-strong-dense"),
+      vectorSimilarity: 0.47,
+      semanticDemandCoverage: 0,
+      semanticDemandSignalCount: 3,
+      retrievalSources: ["SEMANTIC" as const, "SPARSE" as const],
+    },
+    {
+      ...base("sparse-weak-demand"),
+      sparseScore: 20,
+      sparseRank: 1,
+      semanticDemandCoverage: 0,
+      semanticDemandSignalCount: 3,
+      retrievalSources: ["SPARSE" as const],
+    },
+  ],
+});
+assert.deepEqual(
+  discoveryDemandAware.map((r: any) => r.productId),
+  ["joint-good", "joint-weak-strong-dense"],
+  "multi-lane agreement must not replace joint Demand evidence",
+);
+
 console.log("PASS: final relevance cutoff preserves authority/semantic evidence and removes weak sparse tail");
