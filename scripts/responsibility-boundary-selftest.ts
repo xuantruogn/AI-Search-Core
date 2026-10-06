@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 
 import {
   sourceOwnedSemanticDemandIdentities,
+  QUERY_EMBEDDING_PIPELINE_VERSION,
   QUERY_SEMANTIC_PROFILE_VERSION,
 } from "../app/services/search/query-semantic-profile.server";
 import { parseRewrittenQuery } from "../app/services/search/query-rewriter.server";
@@ -92,6 +93,7 @@ assert.ok(signature.includes("qdrant:"), "cache signature must include resolved 
 assert.ok(signature.includes("dense:1536"), "cache signature must include embedding dimension");
 assert.ok(signature.includes("qdrant/bm25"), "cache signature must include BM25 contract");
 assert.ok(signature.includes(QUERY_SEMANTIC_PROFILE_VERSION));
+assert.ok(signature.includes(QUERY_EMBEDDING_PIPELINE_VERSION));
 assert.ok(signature.includes(SEMANTIC_CONTRACT_VERSION));
 assert.ok(signature.includes("semantic-product-v9-supply-demand-dense-bm25"));
 
