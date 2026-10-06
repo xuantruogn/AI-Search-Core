@@ -11,6 +11,9 @@ import {
 } from "./legacy-query-rewrite-adapter.server";
 import { normalizeQueryText } from "./deterministic-query-parser.server";
 
+export const QUERY_SEMANTIC_PROFILE_VERSION =
+  "query-semantic-profile-v2-source-owned-identity";
+
 export type QuerySemanticProfile = {
   rawPlan: QueryPlan;
   expandedPlan: QueryPlan;
