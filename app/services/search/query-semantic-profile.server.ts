@@ -13,6 +13,8 @@ import { normalizeQueryText } from "./deterministic-query-parser.server";
 
 export const QUERY_SEMANTIC_PROFILE_VERSION =
   "query-semantic-profile-v2-source-owned-identity";
+export const QUERY_EMBEDDING_PIPELINE_VERSION =
+  "semantic-expansion-v13-aligned-demand-evidence";
 
 export type QuerySemanticProfile = {
   rawPlan: QueryPlan;
