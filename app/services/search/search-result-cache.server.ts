@@ -16,7 +16,10 @@ import {
   PRODUCT_SEMANTIC_PROFILE_SCHEMA_VERSION,
   PRODUCT_VECTOR_SEMANTIC_PAYLOAD_VERSION,
 } from "./product-semantic-profile.server";
-import { QUERY_SEMANTIC_PROFILE_VERSION } from "./query-semantic-profile.server";
+import {
+  QUERY_EMBEDDING_PIPELINE_VERSION,
+  QUERY_SEMANTIC_PROFILE_VERSION,
+} from "./query-semantic-profile.server";
 import { SEMANTIC_CONTRACT_VERSION } from "./semantic-contract.server";
 import { PRODUCT_EMBEDDING_PIPELINE_VERSION } from "../products/product-indexer.server";
 
@@ -173,6 +176,7 @@ export function currentSearchPipelineSignature() {
     `product-profile:${PRODUCT_SEMANTIC_PROFILE_SCHEMA_VERSION}`,
     `product-payload:${PRODUCT_VECTOR_SEMANTIC_PAYLOAD_VERSION}`,
     `query-profile:${QUERY_SEMANTIC_PROFILE_VERSION}`,
+    `query-embedding:${QUERY_EMBEDDING_PIPELINE_VERSION}`,
     `semantic-contract:${SEMANTIC_CONTRACT_VERSION}`,
     process.env.AI_SEARCH_QUERY_ROUTER_ENABLED?.trim() || "default",
     QUERY_PARSER_VERSION,
