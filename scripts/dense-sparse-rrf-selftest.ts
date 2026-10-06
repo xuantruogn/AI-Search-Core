@@ -72,4 +72,42 @@ assert.deepEqual(
   new Set(["SEMANTIC", "SPARSE"]),
 );
 assert.equal(fused.diagnostics.rrfConfirmedCount, 1);
+
+const guarded = fuseHybridRetrieval({
+  plan: null,
+  semantic: [],
+  sparse: [
+    { ...base("token-neighbor", 20), sparseScore: 20, sparseRank: 1 },
+  ],
+  structured: [],
+  lexical: [],
+  semanticNoEvidence: true,
+  semanticThreshold: 0.5,
+  limit: 10,
+});
+assert.equal(
+  guarded.results.length,
+  0,
+  "BM25 overlap must not bypass semantic no-evidence",
+);
+
+const absentFamily = fuseHybridRetrieval({
+  plan: null,
+  semantic: [],
+  sparse: [
+    { ...base("wrong-family", 20), sparseScore: 20, sparseRank: 1 },
+  ],
+  structured: [],
+  lexical: [],
+  semanticNoEvidence: false,
+  sourceProductClassAbsent: true,
+  semanticThreshold: 0.5,
+  limit: 10,
+});
+assert.equal(
+  absentFamily.results.length,
+  0,
+  "BM25 overlap must not resurrect an absent product family",
+);
+
 console.log("PASS: sparse document isolation and dense+sparse RRF fusion");
