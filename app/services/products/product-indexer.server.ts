@@ -390,16 +390,23 @@ export async function indexProduct({
 
   // A schema/pipeline migration must not consume the merchant's monthly
   // vector-update quota when the Shopify source document itself is unchanged.
-  // With a versioned Qdrant collection the new collection can be empty while
-  // the authoritative DB registry still records the previous vector/hash, so
-  // migration detection must use either source instead of requiring a point in
-  // the current collection.
+  // Prefer the source hash because it survives arbitrary future pipeline
+  // version bumps. Older rows that predate sourceDocumentHash fall back to
+  // the known historical document hashes.
   const previousDocumentHash =
     existingVector?.documentHash ??
     registryProduct?.documentHash ??
     "";
 
-  const isPipelineMigration =
+  const sourceUnchangedAcrossPipeline =
+    Boolean(
+      registryProduct?.hasVector &&
+      registryProduct.sourceDocumentHash &&
+      registryProduct.sourceDocumentHash === sourceDocumentHash &&
+      registryProduct.documentHash !== documentHash,
+    );
+
+  const legacyPipelineHash =
     [
       createLegacyProductDocumentHash(
         document,
@@ -423,8 +430,6 @@ export async function indexProduct({
         "semantic-product-v4-general-commerce",
       ),
 
-      // This is the last pipeline version that was deployed before the
-      // supply/demand dense + BM25 migration.
       createProductDocumentHashForVersion(
         document,
         searchLanguage,
@@ -433,6 +438,10 @@ export async function indexProduct({
     ].includes(
       previousDocumentHash,
     );
+
+  const isPipelineMigration =
+    sourceUnchangedAcrossPipeline ||
+    legacyPipelineHash;
 
   const entitlement =
     await getShopEntitlement(shop);
