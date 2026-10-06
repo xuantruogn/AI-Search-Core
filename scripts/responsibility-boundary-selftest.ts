@@ -4,6 +4,7 @@ import {
   sourceOwnedSemanticDemandIdentities,
   QUERY_SEMANTIC_PROFILE_VERSION,
 } from "../app/services/search/query-semantic-profile.server";
+import { parseRewrittenQuery } from "../app/services/search/query-rewriter.server";
 import {
   currentSearchPipelineSignature,
 } from "../app/services/search/search-result-cache.server";
@@ -41,18 +42,50 @@ assert.deepEqual(
   "reference/family words must not be promoted when canonical MUST meaning disagrees",
 );
 
-assert.deepEqual(
-  sourceOwnedSemanticDemandIdentities({
-    originalQuery: "quà tặng cho mùa đông",
-    identities: ["gift box"],
+const parsedRewrite = parseRewrittenQuery(
+  JSON.stringify({
+    semanticDemand: {
+      identity: ["bicycle"],
+      desiredOutcomes: ["weekend riding"],
+      useCases: [],
+      contexts: [],
+      qualities: [],
+      audience: [],
+      styles: [],
+      negativeConstraints: [],
+      exactConstraints: [],
+    },
+    detectedLanguage: "vi",
+    retrievalMode: "DIRECT",
+    referenceTerms: [],
+    semanticQuery: "Looking for bicycle. The goal is weekend riding.",
+    expansions: ["bike"],
     mandatoryConcepts: [
-      { target: "gift box", source: "mùa đông" },
-      { target: "winter", source: "quà tặng" },
+      { target: "bicycle", source: "xe đạp" },
+      { target: "weekend riding", source: "đi cuối tuần" },
     ],
+    mustNotTerms: [],
   }),
-  [],
-  "an unrelated source MUST at another position must not launder expanded identity",
+  "tôi muốn xe đạp để đi cuối tuần",
+  "en",
+  "COMPLEX",
 );
+assert.ok(parsedRewrite, "aligned mandatory-concept rewrite must parse");
+assert.deepEqual(
+  parsedRewrite?.analysis.semanticMandatoryConcepts,
+  [
+    { target: "bicycle", source: "xe đạp" },
+    { target: "weekend riding", source: "đi cuối tuần" },
+  ],
+);
+assert.deepEqual(parsedRewrite?.analysis.semanticMustTerms, [
+  "bicycle",
+  "weekend riding",
+]);
+assert.deepEqual(parsedRewrite?.analysis.semanticSourceMustTerms, [
+  "xe đạp",
+  "đi cuối tuần",
+]);
 
 const signature = currentSearchPipelineSignature();
 assert.ok(signature.includes("qdrant:"), "cache signature must include resolved collection");
