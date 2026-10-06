@@ -220,7 +220,17 @@ export function fuseHybridRetrieval(args: {
   };
 
   addRrfLane(args.semantic, "SEMANTIC");
-  addRrfLane(sparse, "SPARSE");
+
+  // BM25 is a recall lane, not catalog truth. If the semantic/absence guard
+  // says the requested meaning or product class has no credible support,
+  // sparse token overlap must not resurrect sibling products. Exact lexical
+  // title/handle evidence and closed-world PSF facts still have their own
+  // explicit rescue paths below.
+  if (!args.semanticNoEvidence && !args.sourceProductClassAbsent) {
+    addRrfLane(sparse, "SPARSE");
+  } else {
+    diagnostics.sparseRecallAdded = 0;
+  }
 
   const merged = new Map<string, SearchResult>();
   for (const [productId, entry] of rrf) {

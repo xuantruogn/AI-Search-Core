@@ -238,6 +238,10 @@ export async function getProductVectorForShop({
   productId: string;
   withVector?: boolean;
 }): Promise<ProductVectorRecord | null> {
+  // V9 uses a schema-versioned collection. On the first migration pass that
+  // collection may not exist yet, so create/validate it before attempting a
+  // point lookup. Search paths already do this; indexing must be equally safe.
+  await ensureProductCollection();
   const qdrant = getQdrantClient();
   const result = await qdrant.scroll(QDRANT_COLLECTION, {
     filter: {

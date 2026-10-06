@@ -134,6 +134,28 @@ function createProductDocumentHashForVersion(
     .digest("hex");
 }
 
+export function isProductEmbeddingPipelineMigration(args: {
+  registryHasVector: boolean;
+  registrySourceDocumentHash: string | null | undefined;
+  sourceDocumentHash: string;
+  registryDocumentHash: string | null | undefined;
+  currentDocumentHash: string;
+  previousDocumentHash: string;
+  knownLegacyHashes: string[];
+}) {
+  const sourceUnchangedAcrossPipeline =
+    Boolean(
+      args.registryHasVector &&
+      args.registrySourceDocumentHash &&
+      args.registrySourceDocumentHash === args.sourceDocumentHash &&
+      args.registryDocumentHash !== args.currentDocumentHash,
+    );
+
+  return (
+    sourceUnchangedAcrossPipeline ||
+    args.knownLegacyHashes.includes(args.previousDocumentHash)
+  );
+}
 function refreshDerivedRenderTransportForShop(
   shop: string,
 ): void {
@@ -218,8 +240,8 @@ export async function indexProduct({
     registryProduct,
     semanticProfileState,
   ] = await Promise.all([
-    // Normal sync only needs payload metadata. Pulling the 768D vector for
-    // every unchanged webhook/catalog pass wastes Qdrant bandwidth and heap.
+    // Normal sync only needs payload metadata. Pulling the full dense vector
+    // for every unchanged webhook/catalog pass wastes Qdrant bandwidth and heap.
     getProductVectorForShop({
       shop,
       productId: product.id,
@@ -388,36 +410,56 @@ export async function indexProduct({
     };
   }
 
+  // A schema/pipeline migration must not consume the merchant's monthly
+  // vector-update quota when the Shopify source document itself is unchanged.
+  // Prefer the source hash because it survives arbitrary future pipeline
+  // version bumps. Older rows that predate sourceDocumentHash fall back to
+  // the known historical document hashes.
+  const previousDocumentHash =
+    existingVector?.documentHash ??
+    registryProduct?.documentHash ??
+    "";
+
+  const knownLegacyHashes = [
+    createLegacyProductDocumentHash(
+      document,
+    ),
+
+    createProductDocumentHashForVersion(
+      document,
+      searchLanguage,
+      "semantic-product-v2",
+    ),
+
+    createProductDocumentHashForVersion(
+      document,
+      searchLanguage,
+      "semantic-product-v3-shop-context",
+    ),
+
+    createProductDocumentHashForVersion(
+      document,
+      searchLanguage,
+      "semantic-product-v4-general-commerce",
+    ),
+
+    createProductDocumentHashForVersion(
+      document,
+      searchLanguage,
+      "semantic-product-v5-canonical-shop-type",
+    ),
+  ];
+
   const isPipelineMigration =
-    Boolean(
-      existingVector &&
-        [
-          createLegacyProductDocumentHash(
-            document,
-          ),
-
-          createProductDocumentHashForVersion(
-            document,
-            searchLanguage,
-            "semantic-product-v2",
-          ),
-
-          createProductDocumentHashForVersion(
-            document,
-            searchLanguage,
-            "semantic-product-v3-shop-context",
-          ),
-
-          createProductDocumentHashForVersion(
-            document,
-            searchLanguage,
-            "semantic-product-v4-general-commerce",
-          ),
-        ].includes(
-          existingVector.documentHash ??
-            "",
-        ),
-    );
+    isProductEmbeddingPipelineMigration({
+      registryHasVector: Boolean(registryProduct?.hasVector),
+      registrySourceDocumentHash: registryProduct?.sourceDocumentHash,
+      sourceDocumentHash,
+      registryDocumentHash: registryProduct?.documentHash,
+      currentDocumentHash: documentHash,
+      previousDocumentHash,
+      knownLegacyHashes,
+    });
 
   const entitlement =
     await getShopEntitlement(shop);

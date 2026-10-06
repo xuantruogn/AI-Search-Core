@@ -1,10 +1,29 @@
 import { QdrantClient } from "@qdrant/js-client-rest";
 import { getEmbeddingDimensions } from "./embeddings.server";
 
-export const QDRANT_COLLECTION =
+export const VECTOR_SIZE = getEmbeddingDimensions();
+
+export function buildQdrantV9CollectionName(
+  baseCollection: string,
+  vectorSize: number,
+) {
+  const base = baseCollection.trim() || "ai_search_products";
+  if (!Number.isSafeInteger(vectorSize) || vectorSize <= 0) {
+    throw new Error(`Invalid Qdrant vector size: ${vectorSize}`);
+  }
+  return `${base}_v9_${vectorSize}_bm25`;
+}
+
+// QDRANT_COLLECTION remains the legacy/base collection name for compatibility
+// with existing environments. V9 writes to a schema-versioned collection so a
+// live 768D unnamed-vector collection can never be mutated in place into the
+// 1536D/3072D named dense + BM25 schema.
+const QDRANT_COLLECTION_BASE =
   process.env.QDRANT_COLLECTION?.trim() || "ai_search_products";
 
-export const VECTOR_SIZE = getEmbeddingDimensions();
+export const QDRANT_COLLECTION =
+  process.env.QDRANT_COLLECTION_V9?.trim() ||
+  buildQdrantV9CollectionName(QDRANT_COLLECTION_BASE, VECTOR_SIZE);
 export const DENSE_VECTOR_NAME = "dense";
 export const BM25_VECTOR_NAME = "bm25";
 export const BM25_MODEL = "qdrant/bm25";
