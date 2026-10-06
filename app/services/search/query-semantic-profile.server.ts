@@ -210,32 +210,40 @@ export function sourceOwnedSemanticDemandIdentities(args: {
   semanticSourceMustTerms: string[];
 }) {
   const sourceQuery = normalizeQueryText(args.originalQuery);
-  const sourceOwned = args.semanticSourceMustTerms.some((value) => {
-    const normalized = normalizeQueryText(value);
-    return Boolean(
-      normalized &&
+  const targetMustTerms = args.semanticMustTerms.map(normalizeQueryText);
+  const sourceMustTerms = args.semanticSourceMustTerms.map(normalizeQueryText);
+
+  const sourceContains = (value: string) =>
+    Boolean(
+      value &&
       (
-        sourceQuery.includes(normalized) ||
-        normalized.includes(sourceQuery)
+        sourceQuery.includes(value) ||
+        value.includes(sourceQuery)
       ),
     );
-  });
-  if (!sourceOwned) return [];
-
-  const mustTerms = args.semanticMustTerms
-    .map(normalizeQueryText)
-    .filter(Boolean);
 
   return [...new Set(
     args.identities.filter((identity) => {
       const normalizedIdentity = normalizeQueryText(identity);
       if (!normalizedIdentity) return false;
-      return mustTerms.some(
-        (term) =>
-          term === normalizedIdentity ||
-          term.includes(normalizedIdentity) ||
-          normalizedIdentity.includes(term),
-      );
+
+      // Same-language source identity is already explicit.
+      if (sourceContains(normalizedIdentity)) return true;
+
+      // Cross-language preservation is intentionally conservative: the target
+      // identity must correspond to a mandatory canonical concept and the
+      // source-side concept at the same extraction position must be present in
+      // the shopper query. This prevents an unrelated source MUST (occasion,
+      // season, etc.) from laundering an LLM-expanded product class into
+      // shopper-owned identity.
+      return targetMustTerms.some((target, index) => {
+        const identityMatchesTarget =
+          target === normalizedIdentity ||
+          target.includes(normalizedIdentity) ||
+          normalizedIdentity.includes(target);
+        if (!identityMatchesTarget) return false;
+        return sourceContains(sourceMustTerms[index] ?? "");
+      });
     }),
   )];
 }
