@@ -2801,7 +2801,9 @@ let resultCacheStatus: "HIT" | "MISS" = "MISS";
           lexical,
           semanticNoEvidence:
             semanticDiagnostics?.noEvidenceGuardTriggered === true,
-          sourceProductClassAbsent: semanticDiagnostics?.sourceProductClassAbsent === true,
+          // Certain absence already short-circuits above via finalProof. Do not
+          // let open-world context uncertainty suppress the sparse lane here.
+          sourceProductClassAbsent: false,
           semanticThreshold:
             semanticDiagnostics?.vectorThreshold ??
             Number.parseFloat(
