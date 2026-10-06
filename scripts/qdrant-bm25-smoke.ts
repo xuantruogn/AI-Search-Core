@@ -27,6 +27,25 @@ const r = await q.query(QDRANT_COLLECTION, {
   limit: 3,
   with_payload: true,
 });
-if (!r.points.length || String(r.points[0].id) !== id) throw new Error("BM25 smoke query returned no expected point");
-console.log("BM25_SMOKE_PASS", { collection: QDRANT_COLLECTION, denseDimensions: VECTOR_SIZE, sparseScore: r.points[0].score });
+if (!r.points.length || String(r.points[0].id) !== id) {
+  throw new Error("BM25 smoke query returned no expected point");
+}
+
+const denseResult = await q.query(QDRANT_COLLECTION, {
+  query: dense,
+  using: DENSE_VECTOR_NAME,
+  filter: { must: [{ key: "shop", match: { value: "__smoke__" } }] },
+  limit: 3,
+  with_payload: true,
+});
+if (!denseResult.points.length || String(denseResult.points[0].id) !== id) {
+  throw new Error("Dense named-vector smoke query returned no expected point");
+}
+
+console.log("HYBRID_QDRANT_SMOKE_PASS", {
+  collection: QDRANT_COLLECTION,
+  denseDimensions: VECTOR_SIZE,
+  denseScore: denseResult.points[0].score,
+  sparseScore: r.points[0].score,
+});
 await q.delete(QDRANT_COLLECTION, { wait: true, points: [id] });
