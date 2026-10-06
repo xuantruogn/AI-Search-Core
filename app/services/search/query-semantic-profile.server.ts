@@ -227,15 +227,12 @@ export function sourceOwnedSemanticDemandIdentities(args: {
       const normalizedIdentity = normalizeQueryText(identity);
       if (!normalizedIdentity) return false;
 
-      // Same-language source identity is already explicit.
-      if (sourceContains(normalizedIdentity)) return true;
-
-      // Cross-language preservation is intentionally conservative: the target
-      // identity must correspond to a mandatory canonical concept and the
+      // Source ownership is intentionally conservative in every language:
+      // the identity must correspond to a mandatory canonical concept and the
       // source-side concept at the same extraction position must be present in
-      // the shopper query. This prevents an unrelated source MUST (occasion,
-      // season, etc.) from laundering an LLM-expanded product class into
-      // shopper-owned identity.
+      // the shopper query. Mere token containment is not enough: in "bicycle
+      // accessories", bicycle is a qualifier/reference family, not necessarily
+      // the target product identity.
       return targetMustTerms.some((target, index) => {
         const identityMatchesTarget =
           target === normalizedIdentity ||
