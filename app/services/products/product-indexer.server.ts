@@ -134,6 +134,28 @@ function createProductDocumentHashForVersion(
     .digest("hex");
 }
 
+export function isProductEmbeddingPipelineMigration(args: {
+  registryHasVector: boolean;
+  registrySourceDocumentHash: string | null | undefined;
+  sourceDocumentHash: string;
+  registryDocumentHash: string | null | undefined;
+  currentDocumentHash: string;
+  previousDocumentHash: string;
+  knownLegacyHashes: string[];
+}) {
+  const sourceUnchangedAcrossPipeline =
+    Boolean(
+      args.registryHasVector &&
+      args.registrySourceDocumentHash &&
+      args.registrySourceDocumentHash === args.sourceDocumentHash &&
+      args.registryDocumentHash !== args.currentDocumentHash,
+    );
+
+  return (
+    sourceUnchangedAcrossPipeline ||
+    args.knownLegacyHashes.includes(args.previousDocumentHash)
+  );
+}
 function refreshDerivedRenderTransportForShop(
   shop: string,
 ): void {
@@ -398,50 +420,46 @@ export async function indexProduct({
     registryProduct?.documentHash ??
     "";
 
-  const sourceUnchangedAcrossPipeline =
-    Boolean(
-      registryProduct?.hasVector &&
-      registryProduct.sourceDocumentHash &&
-      registryProduct.sourceDocumentHash === sourceDocumentHash &&
-      registryProduct.documentHash !== documentHash,
-    );
+  const knownLegacyHashes = [
+    createLegacyProductDocumentHash(
+      document,
+    ),
 
-  const legacyPipelineHash =
-    [
-      createLegacyProductDocumentHash(
-        document,
-      ),
+    createProductDocumentHashForVersion(
+      document,
+      searchLanguage,
+      "semantic-product-v2",
+    ),
 
-      createProductDocumentHashForVersion(
-        document,
-        searchLanguage,
-        "semantic-product-v2",
-      ),
+    createProductDocumentHashForVersion(
+      document,
+      searchLanguage,
+      "semantic-product-v3-shop-context",
+    ),
 
-      createProductDocumentHashForVersion(
-        document,
-        searchLanguage,
-        "semantic-product-v3-shop-context",
-      ),
+    createProductDocumentHashForVersion(
+      document,
+      searchLanguage,
+      "semantic-product-v4-general-commerce",
+    ),
 
-      createProductDocumentHashForVersion(
-        document,
-        searchLanguage,
-        "semantic-product-v4-general-commerce",
-      ),
-
-      createProductDocumentHashForVersion(
-        document,
-        searchLanguage,
-        "semantic-product-v5-canonical-shop-type",
-      ),
-    ].includes(
-      previousDocumentHash,
-    );
+    createProductDocumentHashForVersion(
+      document,
+      searchLanguage,
+      "semantic-product-v5-canonical-shop-type",
+    ),
+  ];
 
   const isPipelineMigration =
-    sourceUnchangedAcrossPipeline ||
-    legacyPipelineHash;
+    isProductEmbeddingPipelineMigration({
+      registryHasVector: Boolean(registryProduct?.hasVector),
+      registrySourceDocumentHash: registryProduct?.sourceDocumentHash,
+      sourceDocumentHash,
+      registryDocumentHash: registryProduct?.documentHash,
+      currentDocumentHash: documentHash,
+      previousDocumentHash,
+      knownLegacyHashes,
+    });
 
   const entitlement =
     await getShopEntitlement(shop);
