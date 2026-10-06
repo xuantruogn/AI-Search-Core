@@ -1,6 +1,10 @@
 import db from "../../db.server";
 
 import {
+  BM25_MODEL,
+  BM25_OPTIONS,
+  BM25_VECTOR_NAME,
+  DENSE_VECTOR_NAME,
   ensureProductCollection,
   getQdrantClient,
   QDRANT_COLLECTION,
@@ -67,6 +71,7 @@ export type ProductVectorPayload = {
 export type UpsertProductVectorInput = {
   pointId: number | string;
   vector: number[];
+  sparseDocument?: string;
   payload: ProductVectorPayload;
 };
 
@@ -87,10 +92,16 @@ export type SearchProductVectorsInput = {
 
 export type ProductVectorSearchResult = {
   score: number;
+  sparseScore?: number;
+  sparseRank?: number;
   /** Raw Qdrant cosine similarity before any branch weighting or reranking. */
   vectorSimilarity?: number;
   /** Raw cosine to the primary query vector when this candidate hit that branch. */
   primaryVectorSimilarity?: number;
+  /** Relative support within a secondary semantic branch (0..1). */
+  semanticBranchRelativeScore?: number;
+  /** One-based secondary branch index providing the strongest support. */
+  semanticBranchIndex?: number;
   productId: string;
   handle: string;
   title: string;
@@ -106,16 +117,26 @@ export type ProductVectorSearchResult = {
 export async function upsertProductVector({
   pointId,
   vector,
+  sparseDocument,
   payload,
 }: UpsertProductVectorInput) {
   const qdrant = getQdrantClient();
+  const vectors: Record<string, unknown> = {
+    [DENSE_VECTOR_NAME]: vector,
+  };
+  if (sparseDocument?.trim()) {
+    vectors[BM25_VECTOR_NAME] = {
+      text: sparseDocument.trim(),
+      model: BM25_MODEL,
+      options: BM25_OPTIONS,
+    };
+  }
   await qdrant.upsert(QDRANT_COLLECTION, {
     wait: true,
-
     points: [
       {
         id: pointId,
-        vector,
+        vector: vectors as any,
         payload,
       },
     ],
@@ -242,9 +263,14 @@ export async function getProductVectorForShop({
       continue;
     }
 
+    const rawVector = point.vector as unknown;
+    const denseVector =
+      rawVector && typeof rawVector === "object" && !Array.isArray(rawVector)
+        ? (rawVector as Record<string, unknown>)[DENSE_VECTOR_NAME]
+        : rawVector;
     const vector =
-      withVector && Array.isArray(point.vector)
-        ? point.vector.filter(
+      withVector && Array.isArray(denseVector)
+        ? denseVector.filter(
             (value): value is number => typeof value === "number",
           )
         : null;
@@ -1172,6 +1198,7 @@ export async function searchProductVectors({
   const passCount = 1;
   const response = await qdrant.query(QDRANT_COLLECTION, {
       query: vector,
+      using: DENSE_VECTOR_NAME,
       filter: {
         must: [
           {
@@ -1381,6 +1408,7 @@ export async function searchProductVectorsBatch({
   const responses = await qdrant.queryBatch(QDRANT_COLLECTION, {
     searches: vectors.map((vector, index) => ({
       query: vector,
+      using: DENSE_VECTOR_NAME,
       filter,
       score_threshold: scoreThreshold,
       limit: candidateLimits[index],
@@ -1485,6 +1513,120 @@ export async function searchProductVectorsBatch({
   });
   return resultSets;
 }
+
+export async function searchProductSparse({
+  shop,
+  query,
+  limit = 100,
+  productIds,
+}: {
+  shop: string;
+  query: string;
+  limit?: number;
+  productIds?: string[];
+}): Promise<ProductVectorSearchResult[]> {
+  const cleanQuery = query.replace(/\s+/g, " ").trim();
+  if (!cleanQuery) return [];
+  await ensureProductCollection();
+
+  const requestedProductIds = productIds?.length
+    ? [...new Set(productIds.map((value) => value.trim()).filter(Boolean))]
+    : null;
+  if (productIds && requestedProductIds?.length === 0) return [];
+
+  const safeLimit = Math.max(1, Math.min(Math.trunc(limit), 500));
+  const qdrant = getQdrantClient();
+  const response = await qdrant.query(QDRANT_COLLECTION, {
+    query: {
+      text: cleanQuery,
+      model: BM25_MODEL,
+      options: BM25_OPTIONS,
+    },
+    using: BM25_VECTOR_NAME,
+    filter: {
+      must: [
+        { key: "shop", match: { value: shop } },
+        { key: "searchable", match: { value: true } },
+        ...(requestedProductIds
+          ? [{ key: "productId", match: { any: requestedProductIds } }]
+          : []),
+      ],
+    },
+    limit: safeLimit,
+    with_payload: [
+      "shop", "productId", "handle", "title",
+      "minVariantPrice", "maxVariantPrice", "currencyCode",
+    ],
+    with_vector: false,
+  });
+
+  const candidateIds = [
+    ...new Set(
+      response.points
+        .map((point) =>
+          typeof point.payload?.productId === "string"
+            ? point.payload.productId
+            : "",
+        )
+        .filter(Boolean),
+    ),
+  ];
+  const registryRows = candidateIds.length
+    ? await db.aiSearchIndexedProduct.findMany({
+        where: {
+          shop,
+          productId: { in: candidateIds },
+          searchable: true,
+          hasVector: true,
+        },
+        select: { productId: true },
+      })
+    : [];
+  const validIds = new Set(registryRows.map((row) => row.productId));
+
+  const seen = new Set<string>();
+  const results: ProductVectorSearchResult[] = [];
+  for (const [index, point] of response.points.entries()) {
+    const payload = point.payload;
+    if (!payload || payload.shop !== shop) continue;
+    const productId =
+      typeof payload.productId === "string" ? payload.productId : null;
+    const handle = typeof payload.handle === "string" ? payload.handle : null;
+    const title = typeof payload.title === "string" ? payload.title : null;
+    if (
+      !productId ||
+      !handle ||
+      !title ||
+      !validIds.has(productId) ||
+      seen.has(productId)
+    ) continue;
+    seen.add(productId);
+    results.push({
+      score: point.score,
+      sparseScore: point.score,
+      sparseRank: index + 1,
+      productId,
+      handle,
+      title,
+      minVariantPrice:
+        typeof payload.minVariantPrice === "number" &&
+        Number.isFinite(payload.minVariantPrice)
+          ? payload.minVariantPrice
+          : undefined,
+      maxVariantPrice:
+        typeof payload.maxVariantPrice === "number" &&
+        Number.isFinite(payload.maxVariantPrice)
+          ? payload.maxVariantPrice
+          : undefined,
+      currencyCode:
+        typeof payload.currencyCode === "string" && payload.currencyCode
+          ? payload.currencyCode.toUpperCase()
+          : undefined,
+    });
+  }
+  return results;
+}
+
 // =====================================================
 // DELETE ALL VECTORS FOR A SHOP
 // Used by privacy shop/redact cleanup.

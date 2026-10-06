@@ -1,3 +1,4 @@
+import { renderSemanticDemand } from "./semantic-contract.server";
 import type {
   AttributeConstraint,
   QueryConstraint,
@@ -38,10 +39,6 @@ export function isGenericDiscoveryFamily(value: string) {
 }
 
 function buildFallbackDiscoverySemanticTerms(plan: QueryPlan) {
-  if (plan.retrievalMode !== "DISCOVERY") {
-    return { target: [] as string[], source: [] as string[] };
-  }
-
   const allowedFields = new Set([
     "ATTRIBUTE",
     "CONTEXT",
@@ -52,30 +49,82 @@ function buildFallbackDiscoverySemanticTerms(plan: QueryPlan) {
   const source: string[] = [];
   const seenTarget = new Set<string>();
   const seenSource = new Set<string>();
+  const negativeValues = new Set(
+    [
+      ...plan.identities,
+      ...plan.attributes,
+      ...plan.contexts,
+      ...plan.compatibility,
+      ...plan.entities.brands,
+      ...plan.entities.models,
+      ...plan.entities.identifiers,
+    ]
+      .filter((item) => item.mode === "MUST_NOT")
+      .map((item) => keyOf(item)),
+  );
 
-  for (const segment of plan.resolvedSegments) {
-    if (!allowedFields.has(segment.field) || segment.confidence < 0.5) continue;
-    const canonical = segment.canonicalValue.replace(/\s+/g, " ").trim();
-    const sourceText = segment.text.replace(/\s+/g, " ").trim();
-    const normalizedCanonical = normalizeQueryText(canonical);
-    const normalizedSource = normalizeQueryText(sourceText);
+  const addTerm = (canonical: string, sourceText: string) => {
+    const cleanCanonical = canonical.replace(/\s+/g, " ").trim();
+    const cleanSource = sourceText.replace(/\s+/g, " ").trim();
+    const normalizedCanonical = normalizeQueryText(cleanCanonical);
+    const normalizedSource = normalizeQueryText(cleanSource);
     if (
-      !canonical ||
+      !cleanCanonical ||
       !normalizedCanonical ||
+      negativeValues.has(normalizedCanonical) ||
       /\b(?:price|cheap|cheapest|budget|expensive|premium|luxury)\b/.test(
         normalizedCanonical,
       )
     ) {
-      continue;
+      return;
     }
     if (!seenTarget.has(normalizedCanonical)) {
       seenTarget.add(normalizedCanonical);
-      target.push(canonical);
+      target.push(cleanCanonical);
     }
-    if (sourceText && normalizedSource && !seenSource.has(normalizedSource)) {
+    if (
+      cleanSource &&
+      normalizedSource &&
+      !negativeValues.has(normalizedSource) &&
+      !seenSource.has(normalizedSource)
+    ) {
       seenSource.add(normalizedSource);
-      source.push(sourceText);
+      source.push(cleanSource);
     }
+  };
+
+  const genericLowConfidenceFacets = new Set([
+    "home", "clothes", "clothing", "weather", "goods", "items", "products",
+  ]);
+  for (const segment of plan.resolvedSegments) {
+    if (!allowedFields.has(segment.field) || segment.confidence < 0.5) continue;
+    const normalized = normalizeQueryText(segment.canonicalValue);
+    if (
+      segment.confidence < 0.7 &&
+      genericLowConfidenceFacets.has(normalized)
+    ) {
+      continue;
+    }
+    addTerm(segment.canonicalValue, segment.text);
+    if (target.length >= 3) break;
+  }
+
+  const unresolvedStopWords = new Set([
+    "a", "an", "the", "for", "with", "without", "to", "from", "on", "at",
+    "in", "of", "and", "or", "need", "want", "something", "someone", "thing",
+    "i", "me", "my", "this", "that", "these", "those", "please",
+    "who", "love", "loves", "loving",
+    "cho", "voi", "khong", "de", "tu", "tren", "duoi", "va", "hoac",
+    "toi", "minh", "mot", "cai", "thu", "gi", "do", "nay",
+  ]);
+  for (const unresolved of plan.unresolvedSegments) {
+    const tokens = normalizeQueryText(unresolved)
+      .split(" ")
+      .filter(Boolean)
+      .filter((token) => !unresolvedStopWords.has(token));
+    const clean = [...new Set(tokens)].join(" ").trim();
+    if (!clean || clean.length < 3) continue;
+    addTerm(clean, clean);
     if (target.length >= 3) break;
   }
 
@@ -441,39 +490,30 @@ export function stripReferenceScopedFacetsFromEmbedding(args: {
 function composeFacetEmbeddingInput(
   semanticQuery: string,
   finalPlan: QueryPlan,
-  expandedPlan: QueryPlan,
+  _expandedPlan: QueryPlan,
   llm: QueryRewriteResult,
 ) {
-  const detectedLanguage = baseLanguage(llm.analysis.detectedLanguage);
-  const shopLanguage = baseLanguage(llm.analysis.shopLanguage);
-  const crossLanguage =
-    detectedLanguage &&
-    shopLanguage &&
-    detectedLanguage !== "unknown" &&
-    shopLanguage !== "unknown" &&
-    detectedLanguage !== shopLanguage;
+  // The dense query vector should represent the shopper's natural semantic
+  // intent, not a serialized copy of structured facets. Exact attributes,
+  // identity, brand/model/SKU, compatibility, price and negatives already
+  // have dedicated structured/lexical/filter lanes and separate semantic
+  // branches. Injecting them again here distorts cosine geometry.
+  const demandText = llm.analysis.semanticDemand && !llm.fallbackReason
+    ? renderSemanticDemand(llm.analysis.semanticDemand) : "";
+  const naturalIntent = demandText || (!llm.fallbackReason && llm.analysis.intent !== "unknown"
+    ? llm.analysis.intent : semanticQuery);
+  const cleanSemanticQuery = naturalIntent.split(/\s*;\s*/)[0].replace(/\s+/g, " ").trim();
+  if (cleanSemanticQuery) return cleanSemanticQuery;
 
-  const facetTerms = crossLanguage
-    ? [
-        ...(llm.analysis.semanticMustTerms ?? []),
-        ...expandedPlan.resolvedSegments.map((segment) => segment.text),
-      ]
-    : facetValues(finalPlan);
-
-  const values: string[] = [];
-  const seen = new Set<string>();
-  for (const value of [semanticQuery, ...facetTerms]) {
-    const clean = value.replace(/\s+/g, " ").trim();
-    const normalized = normalizeQueryText(clean);
-    if (!clean || !normalized || seen.has(normalized)) continue;
-    if (values.some((current) => normalizeQueryText(current).includes(normalized))) {
-      continue;
-    }
-    seen.add(normalized);
-    values.push(clean);
-    if (values.length >= 12) break;
-  }
-  return values.join(" ; ");
+  // Deterministic/LLM fallback only: if no semantic sentence survived,
+  // preserve the smallest natural phrase that still represents the need.
+  const fallbackValues = [
+    finalPlan.semanticQuery,
+    ...(llm.analysis.semanticMustTerms ?? []),
+  ]
+    .map((value) => value.replace(/\s+/g, " ").trim())
+    .filter(Boolean);
+  return fallbackValues[0] ?? "";
 }
 
 export function buildQuerySemanticProfile(args: {
@@ -487,7 +527,6 @@ export function buildQuerySemanticProfile(args: {
   );
   const llmWithDeterministicFallback: QueryRewriteResult =
     args.llm.fallbackReason &&
-    args.rawPlan.retrievalMode === "DISCOVERY" &&
     fallbackDiscoveryTerms.target.length > 0
       ? {
           ...args.llm,
@@ -502,7 +541,7 @@ export function buildQuerySemanticProfile(args: {
                 ? args.llm.analysis.semanticSourceMustTerms
                 : fallbackDiscoveryTerms.source,
             decisionReason:
-              `${args.llm.analysis.decisionReason} Deterministic source facets preserved after LLM fallback.`,
+              `${args.llm.analysis.decisionReason} Deterministic source meaning preserved after LLM fallback.`,
           },
         }
       : args.llm;
@@ -665,10 +704,19 @@ export function buildQuerySemanticProfile(args: {
       : [];
   const llmReferenceTerms = safeLlm.analysis.referenceTerms ?? [];
   const trustedReferenceTerms =
-    rawResolvedReferenceTerms.length > 0
-      ? rawResolvedReferenceTerms
-      : rawFallbackReferenceTerms.length > 0
-        ? rawFallbackReferenceTerms
+    rawFallbackReferenceTerms.length > 0
+      ? [
+          ...rawFallbackReferenceTerms,
+          ...rawResolvedReferenceTerms,
+        ].filter(
+          (value, index, list) =>
+            list.findIndex(
+              (candidate) =>
+                normalizeQueryText(candidate) === normalizeQueryText(value),
+            ) === index,
+        )
+      : rawResolvedReferenceTerms.length > 0
+        ? rawResolvedReferenceTerms
         : llmReferenceTerms;
   const mergedRewrite: QueryRewriteResult = {
     ...mergedRewriteBase,

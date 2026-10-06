@@ -135,9 +135,50 @@ async function buildUncachedPlan(
 ): Promise<QueryPlan> {
   const deterministic = parseDeterministicQuery(query);
   const normalizedQuery = normalizeQueryText(query);
-  const complementaryRelation = isComplementaryRelationQuery(normalizedQuery);
-  const complementarySpan = complementaryRelationSpan(normalizedQuery);
-  const rawMatches = matchCatalogTerms(query, dictionary)
+  const initialCatalogMatches = matchCatalogTerms(query, dictionary);
+  const explicitComplementarySpan = complementaryRelationSpan(normalizedQuery);
+  const normalizedTokens = normalizedQuery.split(" ").filter(Boolean);
+  const forIndex = normalizedTokens.indexOf("for");
+  const genericTargetBeforeFor =
+    forIndex > 0 &&
+    /^(?:an? )?(?:accessory|accessories|part|parts)\b/.test(
+      normalizedTokens.slice(0, forIndex).join(" "),
+    );
+  const genericComplementTargets = new Set([
+    "accessory", "accessories", "part", "parts",
+  ]);
+  const specificTargetBeforeFor =
+    forIndex > 0 &&
+    initialCatalogMatches.some(
+      (match) =>
+        match.entry.field === "PRODUCT_TYPE" &&
+        match.end <= forIndex &&
+        !genericComplementTargets.has(
+          normalizeQueryText(match.entry.canonical),
+        ) &&
+        sourceProductTypeOwnsTarget({
+          query,
+          start: match.start,
+          end: match.end,
+        }),
+    );
+  const referenceIdentityAfterFor =
+    forIndex >= 0 &&
+    initialCatalogMatches.some(
+      (match) =>
+        match.entry.field === "PRODUCT_TYPE" &&
+        match.start > forIndex,
+    );
+  const genericComplementarySpan =
+    !explicitComplementarySpan &&
+    genericTargetBeforeFor &&
+    !specificTargetBeforeFor
+      ? { start: forIndex, end: forIndex + 1 }
+      : null;
+  const complementarySpan =
+    explicitComplementarySpan ?? genericComplementarySpan;
+  const complementaryRelation = complementarySpan !== null;
+  const rawMatches = initialCatalogMatches
     .filter((match) => {
       if (
         deterministic.price &&
@@ -153,7 +194,12 @@ async function buildUncachedPlan(
           query,
           start: match.start,
           end: match.end,
-        })
+        }) &&
+        !(
+          complementaryRelation &&
+          complementarySpan &&
+          match.start >= complementarySpan.end
+        )
       ) {
         return false;
       }
@@ -205,26 +251,116 @@ async function buildUncachedPlan(
       strongestBySpan.set(key, match);
     }
   }
-  const spanWinners = [...strongestBySpan.values()];
+  const originalSpanWinners = [...strongestBySpan.values()];
+  const promotedFamilySuffixKeys = new Set<string>();
+  for (const identity of originalSpanWinners) {
+    if (
+      identity.entry.field !== "PRODUCT_TYPE" ||
+      identity.confidence > 0.92
+    ) {
+      continue;
+    }
+    const leadingAttribute = originalSpanWinners.some(
+      (match) =>
+        match.entry.field === "ATTRIBUTE" &&
+        match.start === identity.start &&
+        match.end < identity.end &&
+        match.confidence >= 0.5,
+    );
+    if (!leadingAttribute) continue;
+
+    for (const candidate of originalSpanWinners) {
+      if (
+        !["ATTRIBUTE", "ALIAS", "CATEGORY"].includes(candidate.entry.field) ||
+        candidate.start <= identity.start ||
+        candidate.end !== identity.end ||
+        candidate.entry.productCount <
+          Math.max(3, identity.entry.productCount * 3)
+      ) {
+        continue;
+      }
+      promotedFamilySuffixKeys.add(
+        `${candidate.start}:${candidate.end}:${normalizeQueryText(candidate.text)}`,
+      );
+    }
+  }
+
+  const spanWinners = originalSpanWinners.map((match) => {
+    const key =
+      `${match.start}:${match.end}:${normalizeQueryText(match.text)}`;
+    if (!promotedFamilySuffixKeys.has(key)) return match;
+    return {
+      ...match,
+      confidence: Math.max(match.confidence, 0.8),
+      entry: {
+        ...match.entry,
+        field: "PRODUCT_TYPE" as const,
+        confidence: Math.max(match.entry.confidence ?? 0, 0.8),
+      },
+    };
+  });
   const productTypeSpans = spanWinners.filter(
     (match) => match.entry.field === "PRODUCT_TYPE",
   );
+  const decomposableProductTypeSpans = new Set(
+    productTypeSpans.filter((identity) => {
+      const leadingAttribute = spanWinners.some(
+        (match) =>
+          match.entry.field === "ATTRIBUTE" &&
+          match.start === identity.start &&
+          match.end < identity.end,
+      );
+      const suffixFamily = productTypeSpans.some(
+        (candidate) =>
+          candidate !== identity &&
+          candidate.start > identity.start &&
+          candidate.end === identity.end,
+      );
+      return leadingAttribute && suffixFamily;
+    }),
+  );
   const matches = spanWinners.filter((match) => {
-    if (match.entry.field !== "ATTRIBUTE") return true;
-    // Dictionary aggregation can expose identity words again as attributes.
-    // Drop identity-internal head nouns such as "shirt" inside "t shirt" and
-    // compound identity fragments such as "fixed gear" inside
-    // "fixed gear bicycle". A single leading modifier is different: when the
-    // catalog independently knows "leather" / "waterproof" as an ATTRIBUTE,
-    // keep it as a soft shopper facet so an exact leaf type does not bypass
-    // semantic recall/reranking merely because one enriched product happened
-    // to use the whole phrase as its canonical type.
+    if (
+      match.entry.field === "PRODUCT_TYPE" &&
+      decomposableProductTypeSpans.has(match)
+    ) {
+      // Prefer "modifier + family" over a catalog phrase that accidentally
+      // fossilized the modifier into identity: "leather shoes" becomes
+      // ATTRIBUTE=leather + PRODUCT_TYPE=shoes. This keeps exact facets and
+      // family retrieval independently enforceable.
+      return false;
+    }
+    const dominatedByLongerSameField = spanWinners.some(
+      (other) =>
+        other !== match &&
+        other.entry.field === match.entry.field &&
+        !decomposableProductTypeSpans.has(other) &&
+        other.start <= match.start &&
+        other.end >= match.end &&
+        (other.start < match.start || other.end > match.end),
+    );
+    if (dominatedByLongerSameField) return false;
+
+    if (match.entry.field === "PRODUCT_TYPE") return true;
+
     const containingIdentity = productTypeSpans.find(
       (identity) =>
         match.start >= identity.start &&
-        match.end <= identity.end,
+        match.end <= identity.end &&
+        (match.start > identity.start || match.end < identity.end),
     );
     if (!containingIdentity) return true;
+
+    // A longer exact product identity owns its internal span. Nested model,
+    // compatibility, audience, measurement, etc. are descriptive pieces of
+    // that identity, not independent MUST constraints. Treating them as
+    // separate closed-world facts can prove false absence, e.g. an exact
+    // "Presta valve adapter" identity intersected with COMPATIBILITY="Presta
+    // valve". The one intentional exception is a leading ATTRIBUTE modifier:
+    // "black backpack" and "waterproof jacket" should retain their explicit
+    // shopper facet even when an enriched leaf identity happens to contain it.
+    if (match.entry.field !== "ATTRIBUTE") return false;
+
     const attributeTokens = normalizeQueryText(match.text)
       .split(" ")
       .filter(Boolean);
@@ -239,8 +375,22 @@ async function buildUncachedPlan(
   );
   const structural = new Set(["khong", "phai", "bat", "buoc", "cang", "tot", "or", "and"]);
   const semanticQuery = buildSemanticQuery(query, deterministic);
+  const effectiveDeterministicMeasurements = deterministic.measurements.filter(
+    (measurement) => {
+      const normalizedMeasurement = normalizeQueryText(measurement.value);
+      if (!normalizedMeasurement) return false;
+      return !matches.some(
+        (match) =>
+          match.entry.field === "COMPATIBILITY" &&
+          (
+            normalizeQueryText(match.text) === normalizedMeasurement ||
+            normalizeQueryText(match.text).startsWith(normalizedMeasurement + " ")
+          ),
+      );
+    },
+  );
   const measurementTokens = new Set(
-    deterministic.measurements.flatMap((item) =>
+    effectiveDeterministicMeasurements.flatMap((item) =>
       normalizeQueryText(item.value).split(" "),
     ),
   );
@@ -360,12 +510,22 @@ async function buildUncachedPlan(
           .join(" ")
           .trim()
       : "";
-  const referenceTerms =
-    resolvedReferenceTerms.length > 0
-      ? [...new Set(resolvedReferenceTerms)]
-      : referenceTail
-        ? [referenceTail]
-        : [];
+  const normalizedReferenceTail = referenceTail
+    .replace(/^(?:a|an|the|mot|một)\s+/i, "")
+    .trim();
+  // Preserve the full source reference phrase so qualifiers owned by the
+  // referenced item (black dress, blue skirt, fixed gear bicycle) survive
+  // LLM timeout/fallback. Canonical context terms supplement that phrase;
+  // they must never replace it and silently discard color/style/model facts.
+  const referenceTerms = [
+    ...(normalizedReferenceTail ? [normalizedReferenceTail] : []),
+    ...resolvedReferenceTerms,
+  ].filter(
+    (value, index, list) =>
+      value && list.findIndex((candidate) =>
+        normalizeQueryText(candidate) === normalizeQueryText(value),
+      ) === index,
+  );
 
   return {
     rawQuery: query,
@@ -394,7 +554,7 @@ async function buildUncachedPlan(
         name: "attribute",
       })),
     measurements: [
-      ...deterministic.measurements,
+      ...effectiveDeterministicMeasurements,
       ...byField("MEASUREMENT").map((item) => ({ ...item, name: "measurement" })),
     ],
     audiences: byField("AUDIENCE"),

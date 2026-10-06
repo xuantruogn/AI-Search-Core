@@ -12,7 +12,10 @@ import {
 import { parsePriceConstraint } from "../services/search/query-constraints.server";
 import { prepareParallelQueryPipeline } from "../services/search/parallel-query-pipeline.server";
 import type { AbsenceProof } from "../services/search/absence-proof.server";
-import { retrieveStructuredCandidates } from "../services/search/structured-candidate-retrieval.server";
+import { retrieveStructuredCandidates, retrieveGroundedFacetCandidates } from "../services/search/structured-candidate-retrieval.server";
+import { retrieveLexicalCandidates } from "../services/search/lexical-candidate-retrieval.server";
+import { retrieveSparseCandidates } from "../services/search/sparse-candidate-retrieval.server";
+import { fuseHybridRetrieval, type HybridFusionDiagnostics } from "../services/search/hybrid-retrieval-fusion.server";
 import {
   applyShopContextToQuery,
   filterResultsByExplicitGender,
@@ -64,6 +67,7 @@ import {
 
 import { getShopSettings } from "../services/commerce/shop-registry.server";
 import {
+  getEmbeddingDimensions,
   getEmbeddingModel,
   warmOpenAiConnection,
 } from "../services/search/embeddings.server";
@@ -86,7 +90,7 @@ const queryEmbeddingCache = new Map<
   { embedding: number[]; timestamp: number }
 >();
 const EMBEDDING_CACHE_TTL = 24 * 60 * 60 * 1000;
-const EMBEDDING_QUERY_PIPELINE_VERSION = "semantic-expansion-v10-evidence-provenance";
+const EMBEDDING_QUERY_PIPELINE_VERSION = "semantic-expansion-v12-full-native-dimensions";
 
 const SEARCH_CACHE_IGNORED_PARAMS = new Set([
   "q",
@@ -119,7 +123,7 @@ function buildEmbeddingCacheKey(shop: string, query: string) {
   return [
     shop,
     getEmbeddingModel(),
-    "768",
+    String(getEmbeddingDimensions()),
     EMBEDDING_QUERY_PIPELINE_VERSION,
     query.trim(),
   ].join("\u0000");
@@ -771,70 +775,92 @@ let resultCacheStatus: "HIT" | "MISS" = "MISS";
         const requestedThemeId =
           requestUrl.searchParams.get("theme_id");
 
-        let syncedMap =
-          await loadSyncedThemeMapForStorefront({
-            shop: session.shop,
-            themeId: requestedThemeId,
-          });
+        try {
+          let syncedMap =
+            await loadSyncedThemeMapForStorefront({
+              shop: session.shop,
+              themeId: requestedThemeId,
+            });
 
-        if (
-          syncedMap.ok === false &&
-          syncedMap.reason === "THEME_SYNC_REQUIRED" &&
-          process.env.NODE_ENV !== "production" &&
-          requestedThemeId
-        ) {
-          try {
-            const devMap =
-              await rebuildThemeMapV4ForTheme({
-                admin,
-                shop: session.shop,
-                themeId: requestedThemeId,
-              });
+          if (
+            syncedMap.ok === false &&
+            syncedMap.reason === "THEME_SYNC_REQUIRED" &&
+            process.env.NODE_ENV !== "production" &&
+            requestedThemeId
+          ) {
+            try {
+              const devMap =
+                await rebuildThemeMapV4ForTheme({
+                  admin,
+                  shop: session.shop,
+                  themeId: requestedThemeId,
+                });
 
-            console.info(
-              "[AI Search][Theme Map V4] development preview theme compiled:",
-              {
-                shop: session.shop,
-                themeId: requestedThemeId,
-                status: devMap.status,
-                fingerprint: devMap.fingerprint,
-              },
-            );
+              console.info(
+                "[AI Search][Theme Map V4] development preview theme compiled:",
+                {
+                  shop: session.shop,
+                  themeId: requestedThemeId,
+                  status: devMap.status,
+                  fingerprint: devMap.fingerprint,
+                },
+              );
 
-            syncedMap =
-              await loadSyncedThemeMapForStorefront({
-                shop: session.shop,
-                themeId: requestedThemeId,
-              });
-          } catch (error) {
-            console.warn(
-              "[AI Search][Theme Map V4] development preview theme compile failed:",
-              {
-                shop: session.shop,
-                themeId: requestedThemeId,
-                error:
-                  error instanceof Error
-                    ? error.message
-                    : String(error),
-              },
-            );
+              syncedMap =
+                await loadSyncedThemeMapForStorefront({
+                  shop: session.shop,
+                  themeId: requestedThemeId,
+                });
+            } catch (error) {
+              console.warn(
+                "[AI Search][Theme Map V4] development preview theme compile failed:",
+                {
+                  shop: session.shop,
+                  themeId: requestedThemeId,
+                  error:
+                    error instanceof Error
+                      ? error.message
+                      : String(error),
+                },
+              );
+            }
           }
-        }
 
-        if (syncedMap.ok) {
-          const bootstrapCandidate =
-            getThemeResultRendererCandidates(syncedMap.map)[0] ??
-            getThemeContextTransportCandidate(syncedMap.map);
+          if (syncedMap.ok) {
+            const bootstrapCandidate =
+              getThemeResultRendererCandidates(syncedMap.map)[0] ??
+              getThemeContextTransportCandidate(syncedMap.map);
 
-          if (bootstrapCandidate?.mount) {
-            themeMapBootstrap = {
-              theme_id: syncedMap.map.theme.id,
-              map_fingerprint: syncedMap.map.fingerprint,
-              mount: bootstrapCandidate.mount,
-              native_pagination:
-                bootstrapCandidate.nativePagination,
-            };
+            if (bootstrapCandidate?.mount) {
+              themeMapBootstrap = {
+                theme_id: syncedMap.map.theme.id,
+                map_fingerprint: syncedMap.map.fingerprint,
+                mount: bootstrapCandidate.mount,
+                native_pagination:
+                  bootstrapCandidate.nativePagination,
+              };
+            }
           }
+        } catch (error) {
+          // The runtime bootstrap's primary contract is selecting the
+          // storefront engine. A stale/corrupt Theme Map must not prevent V4
+          // from loading: receipt/render requests perform their own verified
+          // Theme Map lookup and safely fall back to native search.
+          console.error(
+            "[AI Search][Runtime Config] Theme Map bootstrap failed",
+            {
+              shop: session.shop,
+              requestedThemeId,
+              error:
+                error instanceof Error
+                  ? {
+                      name: error.name,
+                      message: error.message,
+                      stack: error.stack,
+                    }
+                  : String(error),
+            },
+          );
         }
       }
 
@@ -2532,6 +2558,19 @@ let resultCacheStatus: "HIT" | "MISS" = "MISS";
             limit: SEARCH_LIMIT,
           })
         : Promise.resolve([]);
+      const lexicalPromise = retrieveLexicalCandidates({
+        shop: session.shop,
+        query,
+        limit: Math.min(100, SEARCH_LIMIT),
+      });
+      const sparsePromise =
+        queryPlan?.route === "STRUCTURED_ONLY"
+          ? Promise.resolve([])
+          : retrieveSparseCandidates({
+              shop: session.shop,
+              query,
+              limit: Math.min(100, SEARCH_LIMIT),
+            });
 
       if (queryPlan) {
         console.log("[AI Search][QUERY PLAN]", {
@@ -2596,6 +2635,10 @@ let resultCacheStatus: "HIT" | "MISS" = "MISS";
 
       let searchDiagnostics:
         | SemanticSearchDiagnostics
+        | null =
+        null;
+      let hybridFusionDiagnostics:
+        | HybridFusionDiagnostics
         | null =
         null;
 
@@ -2673,6 +2716,8 @@ let resultCacheStatus: "HIT" | "MISS" = "MISS";
 
       if (proofBasedNoResult) {
         void structuredPromise.catch(() => undefined);
+        void lexicalPromise.catch(() => undefined);
+        void sparsePromise.catch(() => undefined);
         void semanticPromise?.catch(() => undefined);
         rawSearchResults = [];
 
@@ -2684,83 +2729,88 @@ let resultCacheStatus: "HIT" | "MISS" = "MISS";
           responseWonRace: true,
         });
       } else if (queryPlan?.route === "STRUCTURED_ONLY") {
-        const structured = await structuredPromise;
-        if (structured.length > 0) {
-          rawSearchResults = structured;
+        const [structured, lexical] = await Promise.all([
+          structuredPromise,
+          lexicalPromise,
+        ]);
+        if (structured.length > 0 || lexical.length > 0) {
+          const fused = fuseHybridRetrieval({
+            plan: queryPlan,
+            semantic: [],
+            sparse: [],
+            structured,
+            lexical,
+            semanticNoEvidence: false,
+            semanticThreshold: Number.parseFloat(
+              process.env.AI_SEARCH_VECTOR_SCORE_THRESHOLD || "0.35",
+            ),
+            limit: SEARCH_LIMIT,
+          });
+          hybridFusionDiagnostics = fused.diagnostics;
+          rawSearchResults = fused.results;
         } else {
           console.log("[AI Search][ROUTE FALLBACK]", {
             shop: session.shop,
             from: "STRUCTURED_ONLY",
             to: "VECTOR_SEMANTIC",
-            reason: "NO_STRUCTURED_CANDIDATES",
+            reason: "NO_STRUCTURED_OR_LEXICAL_CANDIDATES",
           });
-          rawSearchResults = await runSemanticSearch();
-        }
-      } else {
-        const [structured, semantic] = await Promise.all([
-          structuredPromise,
-          semanticPromise ?? Promise.resolve([]),
-        ]);
-
-        // On semantic routes, vector relevance is the primary ranking signal.
-        // Structured retrieval is used as exact-fact recall/support, not as a
-        // competing score scale. Using max(structured, vector) made generic
-        // identity matches such as "jacket" (0.92) erase the semantic
-        // distinction in "waterprof jacket", and weak measurement matches such
-        // as "small" could dominate a broad gift query.
-        const merged = new Map<string, (typeof semantic)[number]>();
-
-        for (const result of semantic) {
-          merged.set(result.productId, result);
-        }
-
-        const semanticDiagnostics =
-          searchDiagnostics as SemanticSearchDiagnostics | null;
-        const semanticFloor = Math.max(
-          0,
-          Math.min(
-            0.99,
-            (semanticDiagnostics?.vectorThreshold ??
+          const [semantic, sparse] = await Promise.all([
+            runSemanticSearch(),
+            retrieveSparseCandidates({
+              shop: session.shop,
+              query,
+              limit: Math.min(100, SEARCH_LIMIT),
+            }),
+          ]);
+          const fused = fuseHybridRetrieval({
+            plan: queryPlan,
+            semantic,
+            sparse,
+            structured: [],
+            lexical: [],
+            semanticNoEvidence:
+              (searchDiagnostics as SemanticSearchDiagnostics | null)
+                ?.noEvidenceGuardTriggered === true,
+            semanticThreshold:
+              (searchDiagnostics as SemanticSearchDiagnostics | null)
+                ?.vectorThreshold ??
               Number.parseFloat(
                 process.env.AI_SEARCH_VECTOR_SCORE_THRESHOLD || "0.35",
-              )) - 0.001,
-          ),
-        );
-
-        // Once semantic retrieval proves that the catalog lacks
-        // enough evidence for the unresolved/required meaning, the structured
-        // lane must not resurrect an exact-but-wrong broad fact (for example
-        // Drome for "drone", cycling Computer for "gaming computer", or Home
-        // for "home office"). The no-evidence guard is authoritative across
-        // semantic routes; STRUCTURED_ONLY queries never enter this branch.
-        const suppressStructuredRecall =
-          semanticDiagnostics?.noEvidenceGuardTriggered === true;
-
-        if (!suppressStructuredRecall) {
-          for (const result of structured) {
-            const current = merged.get(result.productId);
-
-            if (current) {
-              // Semantic similarity already captures the unresolved part of the
-              // query. Structured overlap only confirms recall here; adding it
-              // again would double-count generic identity terms such as
-              // "jacket" and bury the more relevant "waterproof jacket".
-              continue;
-            }
-
-            merged.set(result.productId, {
-              ...result,
-              score: Math.min(
-                result.score,
-                semanticFloor,
               ),
-            });
-          }
+            limit: SEARCH_LIMIT,
+          });
+          hybridFusionDiagnostics = fused.diagnostics;
+          rawSearchResults = fused.results;
         }
-
-        rawSearchResults = [...merged.values()]
-          .sort((left, right) => right.score - left.score)
-          .slice(0, SEARCH_LIMIT);
+      } else {
+        const [structured, lexical, sparse, semantic, groundedFacets] = await Promise.all([
+          structuredPromise,
+          lexicalPromise,
+          sparsePromise,
+          semanticPromise ?? Promise.resolve([]),
+          retrieveGroundedFacetCandidates({ shop: session.shop, rewrite: preparedRewrite }),
+        ]);
+        const semanticDiagnostics =
+          searchDiagnostics as SemanticSearchDiagnostics | null;
+        const fused = fuseHybridRetrieval({
+          plan: queryPlan,
+          semantic,
+          sparse,
+          structured: [...structured, ...groundedFacets],
+          lexical,
+          semanticNoEvidence:
+            semanticDiagnostics?.noEvidenceGuardTriggered === true,
+          sourceProductClassAbsent: semanticDiagnostics?.sourceProductClassAbsent === true,
+          semanticThreshold:
+            semanticDiagnostics?.vectorThreshold ??
+            Number.parseFloat(
+              process.env.AI_SEARCH_VECTOR_SCORE_THRESHOLD || "0.35",
+            ),
+          limit: SEARCH_LIMIT,
+        });
+        hybridFusionDiagnostics = fused.diagnostics;
+        rawSearchResults = fused.results;
       }
 
       console.log("[AI Search][PARALLEL RETRIEVAL]", {
@@ -2769,6 +2819,7 @@ let resultCacheStatus: "HIT" | "MISS" = "MISS";
         structuredMs: Date.now() - structuredPrefetchStartedAt,
         finalProof: finalProof?.status ?? "DISABLED",
         resultCount: rawSearchResults.length,
+        hybridFusion: hybridFusionDiagnostics,
       });
 
       console.timeEnd(
@@ -4257,6 +4308,35 @@ let resultCacheStatus: "HIT" | "MISS" = "MISS";
       );
     }
   } catch (error) {
+    console.error("[AI Search] App proxy request failed", {
+      mode: requestUrl.searchParams.get("mode"),
+      query,
+      error:
+        error instanceof Error
+          ? {
+              name: error.name,
+              message: error.message,
+              stack: error.stack,
+            }
+          : String(error),
+    });
+
+    if (requestUrl.searchParams.get("mode") === "runtime-config") {
+      return Response.json(
+        {
+          status: "fallback",
+          engine: null,
+          reason: "RUNTIME_CONFIG_ERROR",
+        },
+        {
+          status: 503,
+          headers: {
+            "Cache-Control": "no-store",
+          },
+        },
+      );
+    }
+
     return nativeRedirect(
       query,
       nativeSearchTarget,

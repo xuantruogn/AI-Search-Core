@@ -1,9 +1,18 @@
+import { parseSemanticDemandProfile, renderSemanticDemand, semanticDemandSchema, type SemanticDemandProfile } from "./semantic-contract.server";
 import { getShopSettings } from "../commerce/shop-registry.server";
-import { recordGeminiUsageSafe } from "../ai/provider-usage.server";
+import {
+  recordGeminiUsageSafe,
+  recordOpenAiUsageSafe,
+} from "../ai/provider-usage.server";
 import {
   generateGeminiQueryRewrite,
   getGeminiQueryRewriteModel,
 } from "./gemini-query-rewriter.server";
+import {
+  generateOpenAiQueryRewrite,
+  getOpenAiQueryRewriteModel,
+  isOpenAiQueryRewriteConfigured,
+} from "./openai-query-rewriter.server";
 
 type CacheEntry<T> = {
   expiresAt: number;
@@ -56,7 +65,10 @@ export type QueryRewriteResult = {
     identityCandidateProductIds?: string[];
     directExpansionGroundedProductIds?: string[];
     directSourceFacetGroundedProductIds?: string[];
+    directSourceFacetConsensusProductIds?: string[];
     discoverySourceIdentityProductIds?: string[];
+    ungroundedSourceProductClass?: boolean;
+    ungroundedExplicitFeature?: boolean;
     discoverySourceGroundedProductIds?: string[];
     discoveryExpansionGroundedProductIds?: string[];
   };
@@ -81,6 +93,8 @@ export type QueryRewriteTiming = {
 };
 
 export type QueryRewriteAnalysis = {
+  /** LLM semantic meaning only; exact enforcement remains code-owned. */
+  semanticDemand?: SemanticDemandProfile;
   // Keep PREMIUM/BUDGET in this legacy field for downstream compatibility.
   // marketPreference is the cleaner semantic signal for new consumers.
   sortIntent: "RELEVANCE" | "PRICE_ASC" | "PRICE_DESC" | "PREMIUM" | "BUDGET";
@@ -122,6 +136,7 @@ export type QueryRewriteAnalysis = {
 };
 
 type FastQueryAnalysis = {
+  semanticDemand?: SemanticDemandProfile;
   detectedLanguage: string;
   retrievalMode?: "DIRECT" | "DISCOVERY" | "COMPLEMENT";
   referenceTerms?: string[];
@@ -133,7 +148,7 @@ type FastQueryAnalysis = {
 };
 
 const QUERY_REWRITE_CACHE_VERSION =
-  "semantic-normalize-v37-route-and-taxonomy";
+  "semantic-normalize-v40-supply-demand-context";
 const rewrittenQueryCache = new Map<string, CacheEntry<QueryRewriteResult>>();
 const pendingRewrites = new Map<string, Promise<QueryRewriteResult>>();
 
@@ -150,6 +165,17 @@ function isEnabled() {
 
 function getRewriteModel() {
   return getGeminiQueryRewriteModel();
+}
+
+function shouldUseOpenAiRewriteBackup(error: unknown) {
+  if (!isOpenAiQueryRewriteConfigured()) return false;
+  const message = error instanceof Error ? error.message : String(error);
+  return (
+    /Gemini API (?:429|5\d\d)\b/i.test(message) ||
+    /quota|rate limit|resource exhausted/i.test(message) ||
+    /timed?\s*out|timeout|GeminiTimeoutError|AbortError/i.test(message) ||
+    /fetch failed|connection|ECONNRESET|ENETUNREACH|EAI_AGAIN/i.test(message)
+  );
 }
 
 function hasExplicitNegationIntent(query: string) {
@@ -434,7 +460,7 @@ function composeEmbeddingQuery(originalQuery: string, groups: string[][]) {
   return terms.map((term) => term.raw).join(" | ").trim();
 }
 
-function parseRewrittenQuery(
+export function parseRewrittenQuery(
   outputText: string,
   originalQuery: string,
   selectedShopLanguage: string,
@@ -470,7 +496,9 @@ function parseRewrittenQuery(
           96,
         )
       : [];
-  const semanticQuery = parseShortString(parsed.semanticQuery, 240);
+  const semanticDemand = parseSemanticDemandProfile(parsed.semanticDemand);
+  if (!semanticDemand) return null;
+  const semanticQuery = renderSemanticDemand(semanticDemand) || parseShortString(parsed.semanticQuery, 240);
   if (!semanticQuery) return null;
 
   const expansions = parseShortStringArray(parsed.expansions, 6, 96).filter(
@@ -507,7 +535,8 @@ function parseRewrittenQuery(
     analysis: {
       sortIntent: "RELEVANCE",
       marketPreference: "ANY",
-      intent: semanticQuery,
+      semanticDemand,
+      intent: normalizedEmbeddingQuery,
       detectedLanguage,
       complexity: complexityRoute,
       confidence: 1,
@@ -564,6 +593,7 @@ export async function rewriteSearchQuery({
   if (!isEnabled()) return fallback(cleanQuery, "DISABLED");
 
   const model = getRewriteModel();
+  const backupModel = getOpenAiQueryRewriteModel();
   const settingsStartedAt = Date.now();
   let searchLanguage = providedSearchLanguage?.trim() || null;
   if (!searchLanguage) {
@@ -577,7 +607,7 @@ export async function rewriteSearchQuery({
 
   const { timeoutMs, complexityRoute } = getRewriteBudget(cleanQuery);
   const startedAt = requestStartedAt;
-  const cacheKey = `merchant-language-v3:${searchLanguage}:${model}:${QUERY_REWRITE_CACHE_VERSION}\u0000${shop}\u0000${cleanQuery.toLocaleLowerCase("en-US")}`;
+  const cacheKey = `merchant-language-v4:${searchLanguage}:gemini=${model}:openai=${backupModel || "none"}:${QUERY_REWRITE_CACHE_VERSION}\u0000${shop}\u0000${cleanQuery.toLocaleLowerCase("en-US")}`;
   const cacheLookupStartedAt = Date.now();
   const cached = getCached(rewrittenQueryCache, cacheKey);
   const cacheLookupCodeMs = Date.now() - cacheLookupStartedAt;
@@ -645,7 +675,7 @@ export async function rewriteSearchQuery({
     };
   }
 
-  const task = performRewrite({ shop, cleanQuery, searchLanguage, model, timeoutMs,
+  const task = performRewrite({ shop, cleanQuery, searchLanguage, model, backupModel, timeoutMs,
     cacheKey, startedAt, normalizeCodeMs, settingsDbMs, cacheLookupCodeMs,
     complexityRoute });
   pendingRewrites.set(cacheKey, task);
@@ -675,11 +705,11 @@ export async function rewriteSearchQuery({
   }
 }
 
-async function performRewrite({ shop, cleanQuery, searchLanguage, model, timeoutMs,
+async function performRewrite({ shop, cleanQuery, searchLanguage, model, backupModel, timeoutMs,
   cacheKey, startedAt, normalizeCodeMs, settingsDbMs, cacheLookupCodeMs,
   complexityRoute }: {
   shop: string; cleanQuery: string; searchLanguage: string; model: string;
-  timeoutMs: number; cacheKey: string; startedAt: number;
+  backupModel: string; timeoutMs: number; cacheKey: string; startedAt: number;
   normalizeCodeMs: number; settingsDbMs: number; cacheLookupCodeMs: number;
   complexityRoute: "SIMPLE" | "COMPLEX";
 }): Promise<QueryRewriteResult> {
@@ -701,12 +731,14 @@ async function performRewrite({ shop, cleanQuery, searchLanguage, model, timeout
       "Preserve the shopper action/domain. Queries meaning wear/dress/mặc must stay in apparel/outfit products. Use gift/giftable intent ONLY when the source explicitly says gift, present, quà, tặng or an equivalent gift action. Recipient phrasing such as 'for someone who likes X' is NOT gift intent by itself; keep it as a preference/recipient need. Do not turn a wear or preference query into gift suggestions or vice versa.",
       "For DISCOVERY requests that name an activity, occasion, environment or recipient need but do NOT explicitly name wearing/clothing/fashion or a product class, keep the primary semanticQuery cross-category and need-first. Do not invent apparel/outfit as the primary family. Individual expansions may include apparel alongside equipment, accessories or other natural product classes when relevant.",
       "Preserve exact brands, models, SKUs, numbers, measurements and negation. Do not invent features.",
+      "Also return semanticDemand with string arrays identity, desiredOutcomes, useCases, contexts, qualities, audience, styles, negativeConstraints, exactConstraints. These axes align with product Supply identity, purposes, useCases, contexts, qualities, audience, styles. Use only shopper-owned meaning, in target language. Leave identity empty when the source names no target class; never copy expansions or reference products into it. Audience only if explicit. Put only closed-world exact brand/model/SKU/identifier/compatibility/price/measurements/color/size in exactConstraints, excluded properties in negativeConstraints; do not duplicate those exact-only values in positive axes. Seasons, weather, use cases, desired outcomes and semantic qualities belong on their semantic axes even when explicitly stated; do not move them into exactConstraints merely because they are explicit. Demand constraints are advisory extraction, code owns hard validation. semanticQuery is a natural sentence of the same demand, never a semicolon facet dump.",
       "Return JSON only.",
     ].join(" ");
 
     const schema = {
       type: "object",
       properties: {
+        semanticDemand: semanticDemandSchema,
         detectedLanguage: { type: "string" },
         retrievalMode: {
           type: "string",
@@ -740,6 +772,7 @@ async function performRewrite({ shop, cleanQuery, searchLanguage, model, timeout
         },
       },
       required: [
+        "semanticDemand",
         "detectedLanguage",
         "retrievalMode",
         "referenceTerms",
@@ -757,46 +790,67 @@ async function performRewrite({ shop, cleanQuery, searchLanguage, model, timeout
       instructions,
       input: `SHOPPER_QUERY:\n${cleanQuery}`,
       schema,
-      maxOutputTokens: 256,
+      maxOutputTokens: 900,
       timeoutMs,
       complexityRoute,
     } as const;
-    let response: Awaited<ReturnType<typeof generateGeminiQueryRewrite>>;
+    let provider: "GEMINI" | "OPENAI" = "GEMINI";
+    let activeModel = model;
+    let response:
+      | Awaited<ReturnType<typeof generateGeminiQueryRewrite>>
+      | Awaited<ReturnType<typeof generateOpenAiQueryRewrite>>;
+
     try {
       response = await generateGeminiQueryRewrite(rewriteRequest);
-    } catch (error) {
-      const transientTimeout =
-        error instanceof Error &&
-        (
-          error.name === "APIConnectionTimeoutError" ||
-          /timed?\s*out|timeout/i.test(error.message)
-        );
-      const shouldRetryTransient = transientTimeout;
-      if (!shouldRetryTransient) throw error;
-      const retryTimeoutMs =
-        complexityRoute === "SIMPLE" ? 2_000 : 2_500;
-      console.warn("[AI Search] Retrying query rewrite after timeout", {
+      recordGeminiUsageSafe({
+        shop,
+        operation: "QUERY_REWRITE",
+        model,
+        requestId: response.requestId,
+        inputTokens: response.usage.inputTokens,
+        cachedInputTokens: response.usage.cachedInputTokens,
+        outputTokens: response.usage.outputTokens,
+        totalTokens: response.usage.totalTokens,
+      });
+    } catch (primaryError) {
+      if (!shouldUseOpenAiRewriteBackup(primaryError)) {
+        throw primaryError;
+      }
+
+      provider = "OPENAI";
+      activeModel = backupModel;
+      console.warn("[AI Search] Gemini rewrite unavailable; using OpenAI backup", {
         shop,
         query: cleanQuery,
-        model,
-        retryTimeoutMs,
+        geminiModel: model,
+        openAiModel: backupModel,
+        reason:
+          primaryError instanceof Error
+            ? primaryError.message.slice(0, 300)
+            : String(primaryError).slice(0, 300),
       });
-      response = await generateGeminiQueryRewrite({
-        ...rewriteRequest,
-        timeoutMs: retryTimeoutMs,
+
+      const openAiResponse = await generateOpenAiQueryRewrite({
+        model: backupModel,
+        instructions,
+        input: rewriteRequest.input,
+        schema,
+        maxOutputTokens: rewriteRequest.maxOutputTokens,
+        timeoutMs,
+      });
+      response = openAiResponse;
+      recordOpenAiUsageSafe({
+        shop,
+        operation: "QUERY_REWRITE",
+        model: backupModel,
+        requestId: openAiResponse.requestId,
+        inputTokens: openAiResponse.usage.inputTokens,
+        cachedInputTokens: openAiResponse.usage.cachedInputTokens,
+        outputTokens: openAiResponse.usage.outputTokens,
+        totalTokens: openAiResponse.usage.totalTokens,
+        headers: openAiResponse.headers,
       });
     }
-
-    recordGeminiUsageSafe({
-      shop,
-      operation: "QUERY_REWRITE",
-      model,
-      requestId: response.requestId,
-      inputTokens: response.usage.inputTokens,
-      cachedInputTokens: response.usage.cachedInputTokens,
-      outputTokens: response.usage.outputTokens,
-      totalTokens: response.usage.totalTokens,
-    });
 
     const llmDurationMs =
       Date.now() - llmStartedAt;
@@ -805,9 +859,10 @@ async function performRewrite({ shop, cleanQuery, searchLanguage, model, timeout
         process.env.AI_SEARCH_LOG_LLM_CONTRACT?.trim().toLowerCase() ?? "",
       )
     ) {
-      console.log("[AI Search][LLM CONTRACT] Gemini result", {
+      console.log("[AI Search][LLM CONTRACT] Query rewrite result", {
         shop,
-        model,
+        provider,
+        model: activeModel,
         responseStatus: response.status,
         finishReason: response.finishReason,
         outputTextLength: response.outputText.length,
@@ -819,10 +874,10 @@ async function performRewrite({ shop, cleanQuery, searchLanguage, model, timeout
       const reason = response.finishReason === "MAX_TOKENS"
         ? "LLM_OUTPUT_TRUNCATED" : "LLM_INCOMPLETE";
       console.warn("[AI Search] Query rewrite incomplete", {
-        shop, model, reason, llmDurationMs, usage: response.usage,
+        shop, provider, model: activeModel, reason, llmDurationMs, usage: response.usage,
       });
       return {
-        ...fallback(cleanQuery, reason, model),
+        ...fallback(cleanQuery, reason, activeModel),
         timing: {
           cacheStatus: "MISS", totalMs: Date.now() - startedAt,
           llmMs: llmDurationMs, llmCallCount: 1,
@@ -847,12 +902,13 @@ async function performRewrite({ shop, cleanQuery, searchLanguage, model, timeout
     if (!parsed) {
       console.warn("[AI Search] Structured LLM output rejected", {
         shop,
-        model,
+        provider,
+        model: activeModel,
         query: cleanQuery,
         outputPreview: response.outputText.slice(0, 1_000),
       });
       return {
-        ...fallback(cleanQuery, "INVALID_LLM_OUTPUT", model),
+        ...fallback(cleanQuery, "INVALID_LLM_OUTPUT", activeModel),
         timing: {
           cacheStatus: "MISS", totalMs: Date.now() - startedAt,
           llmMs: llmDurationMs, llmCallCount: 1,
@@ -869,7 +925,7 @@ async function performRewrite({ shop, cleanQuery, searchLanguage, model, timeout
 
     const result: QueryRewriteResult = {
       ...parsed,
-      model,
+      model: activeModel,
       fallbackReason: null,
       timing: {
         cacheStatus: "MISS",
@@ -912,7 +968,8 @@ async function performRewrite({ shop, cleanQuery, searchLanguage, model, timeout
       query: cleanQuery,
       complexityRoute,
       cacheStatus: "MISS",
-      model,
+      provider,
+      model: activeModel,
       llmMs: llmDurationMs,
       totalMs: Date.now() - startedAt,
       inputTokens: response.usage.inputTokens,

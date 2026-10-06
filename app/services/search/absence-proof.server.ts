@@ -42,8 +42,40 @@ function must(items: QueryConstraint[]) {
   return items.filter((item) => item.mode === "MUST");
 }
 
+function proofEquivalenceKey(value: string) {
+  return normalizeQueryText(value)
+    .split(" ")
+    .filter(Boolean)
+    .map((token) => {
+      if (token.length > 4 && token.endsWith("ies")) {
+        return token.slice(0, -3) + "y";
+      }
+      if (
+        token.length > 3 &&
+        token.endsWith("s") &&
+        !token.endsWith("ss") &&
+        !token.endsWith("us") &&
+        !token.endsWith("is")
+      ) {
+        return token.slice(0, -1);
+      }
+      return token;
+    })
+    .join(" ");
+}
+
+function dedupeProofConstraints(items: ProofConstraint[]) {
+  const seen = new Set<string>();
+  return items.filter((item) => {
+    const key = `${item.label}:${proofEquivalenceKey(normalized(item.constraint))}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 function proofConstraints(plan: QueryPlan): ProofConstraint[] {
-  return [
+  return dedupeProofConstraints([
     ...must(plan.entities.identifiers).map((constraint) => ({
       label: "identifier",
       constraint,
@@ -86,7 +118,7 @@ function proofConstraints(plan: QueryPlan): ProofConstraint[] {
         kinds: ["MEASUREMENT", "VARIANT_OPTION", "ATTRIBUTE"],
         requiresEnrichment: true,
       })),
-  ];
+  ]);
 }
 
 function intersect(left: Set<string>, right: Set<string>) {
@@ -212,6 +244,8 @@ export async function proveNoResult(args: {
       let candidateCount = searchableCount;
       let globalEnrichmentComplete: boolean | null =
         identities.length > 0 ? currentEnrichmentComplete : null;
+      let cumulativeProofComplete =
+        identities.length > 0 ? identityProofComplete : true;
 
       for (const identity of identities) {
         const value = normalized(identity);
@@ -253,6 +287,11 @@ export async function proveNoResult(args: {
           coverageComplete = globalEnrichmentComplete;
         }
 
+        cumulativeProofComplete =
+          cumulativeProofComplete &&
+          coverageComplete &&
+          item.constraint.confidence >= 0.99;
+
         const value = normalized(item.constraint);
         groups.push(
           item.kinds
@@ -267,9 +306,9 @@ export async function proveNoResult(args: {
 
         if (candidateCount === 0) {
           return {
-            status: coverageComplete ? "CERTAIN_NO_RESULT" : "UNKNOWN",
+            status: cumulativeProofComplete ? "CERTAIN_NO_RESULT" : "UNKNOWN",
             phase: args.phase,
-            reason: coverageComplete
+            reason: cumulativeProofComplete
               ? `${item.label.toUpperCase()}_INTERSECTION_EMPTY`
               : `${item.label.toUpperCase()}_COVERAGE_INCOMPLETE`,
             durationMs: Date.now() - startedAt,
@@ -288,8 +327,7 @@ export async function proveNoResult(args: {
           : "NO_CLOSED_WORLD_CONSTRAINT",
         durationMs: Date.now() - startedAt,
         candidateCount: groups.length > 0 ? candidateCount : null,
-        coverageComplete:
-          identities.length > 0 ? identityProofComplete : true,
+        coverageComplete: cumulativeProofComplete,
         evidence,
       };
     } catch (error) {
@@ -302,6 +340,8 @@ export async function proveNoResult(args: {
   }
 
   let candidates: Set<string> | null = null;
+  let cumulativeProofComplete =
+    identities.length > 0 ? identityProofComplete : true;
 
   for (const identity of identities) {
     const matches = await exactMatches({
@@ -331,6 +371,10 @@ export async function proveNoResult(args: {
     const coverageComplete = item.requiresEnrichment
       ? await enrichmentCoverage(args.shop, candidateIds, searchableCount)
       : true;
+    cumulativeProofComplete =
+      cumulativeProofComplete &&
+      coverageComplete &&
+      item.constraint.confidence >= 0.99;
     const matches = await exactMatches({
       shop: args.shop,
       kinds: item.kinds,
@@ -340,9 +384,9 @@ export async function proveNoResult(args: {
 
     if (matches.size === 0) {
       return {
-        status: coverageComplete ? "CERTAIN_NO_RESULT" : "UNKNOWN",
+        status: cumulativeProofComplete ? "CERTAIN_NO_RESULT" : "UNKNOWN",
         phase: args.phase,
-        reason: coverageComplete
+        reason: cumulativeProofComplete
           ? `${item.label.toUpperCase()}_INTERSECTION_EMPTY`
           : `${item.label.toUpperCase()}_COVERAGE_INCOMPLETE`,
         durationMs: Date.now() - startedAt,
@@ -355,9 +399,9 @@ export async function proveNoResult(args: {
     candidates = candidates ? intersect(candidates, matches) : matches;
     if (candidates.size === 0) {
       return {
-        status: coverageComplete ? "CERTAIN_NO_RESULT" : "UNKNOWN",
+        status: cumulativeProofComplete ? "CERTAIN_NO_RESULT" : "UNKNOWN",
         phase: args.phase,
-        reason: coverageComplete
+        reason: cumulativeProofComplete
           ? "MUST_INTERSECTION_EMPTY"
           : "MUST_COVERAGE_INCOMPLETE",
         durationMs: Date.now() - startedAt,
@@ -376,8 +420,7 @@ export async function proveNoResult(args: {
       : "NO_CLOSED_WORLD_CONSTRAINT",
     durationMs: Date.now() - startedAt,
     candidateCount: candidates?.size ?? null,
-    coverageComplete:
-      identities.length > 0 ? identityProofComplete : true,
+    coverageComplete: cumulativeProofComplete,
     evidence,
   };
 }

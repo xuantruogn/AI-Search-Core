@@ -1,4 +1,4 @@
-export const QUERY_PARSER_VERSION = "deterministic-v8-nested-soft-modifier";
+export const QUERY_PARSER_VERSION = "deterministic-v10-modifier-family-ownership";
 export const QUERY_ROUTER_VERSION = "coverage-router-v12-semantic-remainder";
 
 export type QueryRoute =

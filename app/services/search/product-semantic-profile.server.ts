@@ -1,3 +1,4 @@
+import { SUPPLY_AXES, parseSemanticProfile, type SemanticSupplyProfile } from "./semantic-contract.server";
 import { createHash } from "node:crypto";
 import type { Prisma } from "@prisma/client";
 
@@ -13,6 +14,7 @@ export type StoredSemanticTerm = {
 };
 
 type SemanticAnalysisMeta = {
+  semanticSupply?: SemanticSupplyProfile;
   sourceLanguage?: string;
   canonicalProductType?: string;
   shopLanguageProductType?: string;
@@ -419,6 +421,8 @@ function analysisMetaFromAnalysis(
   if (sourceLanguageTerms.length > 0) meta.sourceLanguageTerms = sourceLanguageTerms;
   if (shopLanguageTerms.length > 0) meta.shopLanguageTerms = shopLanguageTerms;
   if (factualSummary) meta.factualSummary = factualSummary;
+  const supply = parseSemanticProfile<SemanticSupplyProfile>(analysis.semanticSupply, SUPPLY_AXES);
+  if (supply) meta.semanticSupply = supply;
   return Object.keys(meta).length > 0 ? meta : null;
 }
 
@@ -441,6 +445,8 @@ function parseAnalysisMeta(value: unknown): SemanticAnalysisMeta | null {
   if (sourceLanguageTerms.length > 0) meta.sourceLanguageTerms = sourceLanguageTerms;
   if (shopLanguageTerms.length > 0) meta.shopLanguageTerms = shopLanguageTerms;
   if (factualSummary) meta.factualSummary = factualSummary;
+  const supply = parseSemanticProfile<SemanticSupplyProfile>(value.semanticSupply, SUPPLY_AXES);
+  if (supply) meta.semanticSupply = supply;
   return Object.keys(meta).length > 0 ? meta : null;
 }
 

@@ -1,9 +1,20 @@
 import { QdrantClient } from "@qdrant/js-client-rest";
+import { getEmbeddingDimensions } from "./embeddings.server";
 
 export const QDRANT_COLLECTION =
   process.env.QDRANT_COLLECTION?.trim() || "ai_search_products";
 
-export const VECTOR_SIZE = 768;
+export const VECTOR_SIZE = getEmbeddingDimensions();
+export const DENSE_VECTOR_NAME = "dense";
+export const BM25_VECTOR_NAME = "bm25";
+export const BM25_MODEL = "qdrant/bm25";
+export const BM25_OPTIONS = {
+  tokenizer: "multilingual" as const,
+  lowercase: true,
+  ascii_folding: true,
+  stopwords: { languages: [], custom: [] },
+  stemmer: { type: "none" as const },
+};
 
 let qdrantClient: QdrantClient | null = null;
 let qdrantFingerprint = "";
@@ -61,15 +72,22 @@ function validateCollectionVectorConfig(
   info: Awaited<ReturnType<QdrantClient["getCollection"]>>,
 ) {
   const vectors = info.config?.params?.vectors;
-  if (!vectors || !("size" in vectors) || !("distance" in vectors)) {
+  const sparseVectors = info.config?.params?.sparse_vectors;
+  if (!vectors || !("dense" in vectors)) {
     throw new Error(
-      `Qdrant collection ${QDRANT_COLLECTION} uses a named/unsupported vector configuration; AI Search expects one unnamed ${VECTOR_SIZE}-dimension Cosine vector`,
+      `Qdrant collection ${QDRANT_COLLECTION} must expose named dense vector "${DENSE_VECTOR_NAME}"`,
     );
   }
-
-  if (vectors.size !== VECTOR_SIZE || vectors.distance !== "Cosine") {
+  const dense = vectors[DENSE_VECTOR_NAME];
+  if (!dense || dense.size !== VECTOR_SIZE || dense.distance !== "Cosine") {
     throw new Error(
-      `Qdrant collection ${QDRANT_COLLECTION} has incompatible vector config: size=${vectors.size}, distance=${vectors.distance}; expected size=${VECTOR_SIZE}, distance=Cosine`,
+      `Qdrant collection ${QDRANT_COLLECTION} has incompatible dense config; expected ${DENSE_VECTOR_NAME}=${VECTOR_SIZE}D Cosine`,
+    );
+  }
+  const sparse = sparseVectors?.[BM25_VECTOR_NAME];
+  if (!sparse || sparse.modifier !== "idf") {
+    throw new Error(
+      `Qdrant collection ${QDRANT_COLLECTION} must expose sparse vector "${BM25_VECTOR_NAME}" with IDF modifier`,
     );
   }
 }
@@ -183,8 +201,15 @@ async function ensureProductCollectionFresh() {
     try {
       await qdrant.createCollection(QDRANT_COLLECTION, {
         vectors: {
-          size: VECTOR_SIZE,
-          distance: "Cosine",
+          [DENSE_VECTOR_NAME]: {
+            size: VECTOR_SIZE,
+            distance: "Cosine",
+          },
+        },
+        sparse_vectors: {
+          [BM25_VECTOR_NAME]: {
+            modifier: "idf",
+          },
         },
       });
       created = true;

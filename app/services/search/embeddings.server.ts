@@ -51,6 +51,21 @@ export function getEmbeddingModel() {
   return process.env.OPENAI_EMBEDDING_MODEL?.trim() || "text-embedding-3-small";
 }
 
+export function getEmbeddingDimensions() {
+  const model = getEmbeddingModel();
+  if (model === "text-embedding-3-large") return 3_072;
+  if (model === "text-embedding-3-small" || model === "text-embedding-ada-002") {
+    return 1_536;
+  }
+
+  // AI-Buyense currently supports OpenAI embedding models whose native vector
+  // width is known above. Unknown models fail closed instead of silently
+  // creating/searching a Qdrant collection with the wrong vector width.
+  throw new Error(
+    `Unsupported embedding model for native dimensions: ${model}`,
+  );
+}
+
 export async function warmOpenAiConnection() {
   if (!isOpenAiConfigured()) return;
 
@@ -73,7 +88,7 @@ export async function warmOpenAiConnection() {
     {
       model: getEmbeddingModel(),
       input: "warmup",
-      dimensions: 768,
+      dimensions: getEmbeddingDimensions(),
       encoding_format: "base64",
     },
     {
@@ -158,7 +173,7 @@ export async function createEmbedding(
     {
       model: getEmbeddingModel(),
       input: text,
-      dimensions: 768,
+      dimensions: getEmbeddingDimensions(),
       // Base64 carries the same float32 vector in a substantially smaller
       // response than a JSON array containing hundreds of decimal strings.
       encoding_format: "base64",
@@ -276,7 +291,7 @@ export async function createEmbeddings(
     {
       model: getEmbeddingModel(),
       input: texts,
-      dimensions: 768,
+      dimensions: getEmbeddingDimensions(),
       encoding_format: "base64",
     },
     {

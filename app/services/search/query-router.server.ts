@@ -71,6 +71,7 @@ export function routeQuery(args: {
     hasExactIdentifier ||
     (
       hasStrongModel &&
+      !shouldAnalyzeUnresolvedIdentityRemainder(unresolvedSegments) &&
       (
         hasIdentitySignal ||
         hasStrongBrand ||

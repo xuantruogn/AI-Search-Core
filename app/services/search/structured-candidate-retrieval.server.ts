@@ -2,6 +2,7 @@ import { listSearchableIndexedProducts } from "../commerce/indexed-products.serv
 import type { QueryPlan, QueryConstraint } from "./query-plan.server";
 import { normalizeQueryText } from "./deterministic-query-parser.server";
 import type { SearchResult } from "./semantic-search.server";
+import type { ContextualQueryResult } from "./shop-context-index.server";
 import {
   findSemanticRowsByNormalizedValues,
   loadProductSemanticRows,
@@ -26,6 +27,39 @@ export const STRUCTURED_RANKING_WEIGHTS = {
 
 type WantedKind = keyof typeof STRUCTURED_RANKING_WEIGHTS;
 type WantedTerm = { kind: WantedKind; constraint: QueryConstraint };
+
+/** Recall exact source-grounded profile facts missed by vector retrieval.
+ * Context membership is only a shortlist, not proof: a compound component fact
+ * such as "waterproof synthetic sole" does not prove "waterproof shoes".
+ * Recheck complete fact equality and the searchable tenant registry here.
+ * No vector score is invented. */
+export async function retrieveGroundedFacetCandidates(args: {
+  shop: string;
+  rewrite: ContextualQueryResult;
+}): Promise<SearchResult[]> {
+  if (args.rewrite.planning?.retrievalMode !== "DIRECT") return [];
+  const ids = args.rewrite.context.directSourceFacetConsensusProductIds;
+  if (!ids.length) return [];
+  const negatives = (args.rewrite.analysis.negativeTerms ?? []).map(normalizeQueryText);
+  const facets = args.rewrite.planning.resolvedSegments.filter((segment) =>
+    ["ATTRIBUTE", "COMPATIBILITY"].includes(segment.field) && segment.confidence >= 0.8 &&
+    !negatives.includes(normalizeQueryText(segment.canonicalValue)),
+  );
+  if (!facets.length) return [];
+  const [products, rows] = await Promise.all([
+    listSearchableIndexedProducts(args.shop, ids), loadProductSemanticRows(args.shop, ids),
+  ]);
+  return products.filter((product) => facets.every((facet) => rows.some((row) =>
+    row.productId === product.productId &&
+    ["ATTRIBUTE", "VARIANT_OPTION", "USE_CASE", "SOFT_CONTEXT", "COMPATIBILITY"].includes(row.kind) &&
+    normalizeQueryText(row.value) === normalizeQueryText(facet.canonicalValue),
+  ))).map((product) => ({
+    ...product, score: 0.72, structuredScore: 0.72,
+    structuredMatchedKinds: ["PRODUCT_TYPE", ...new Set(facets.map(f => f.field))],
+    structuredMatchedTerms: facets.map(f => ({ kind: f.field, value: normalizeQueryText(f.canonicalValue) })),
+    structuredAnchorKinds: ["PRODUCT_TYPE"], retrievalSources: ["STRUCTURED"],
+  }));
+}
 
 const STRUCTURED_ANCHOR_KINDS = new Set<WantedKind>([
   "IDENTIFIER",
@@ -63,8 +97,30 @@ function isRetrievalAnchor(term: WantedTerm) {
   );
 }
 
+function structuredEquivalenceKey(value: string) {
+  return normalizeQueryText(value)
+    .split(" ")
+    .filter(Boolean)
+    .map((token) => {
+      if (token.length > 4 && token.endsWith("ies")) {
+        return token.slice(0, -3) + "y";
+      }
+      if (
+        token.length > 3 &&
+        token.endsWith("s") &&
+        !token.endsWith("ss") &&
+        !token.endsWith("us") &&
+        !token.endsWith("is")
+      ) {
+        return token.slice(0, -1);
+      }
+      return token;
+    })
+    .join(" ");
+}
+
 function wantedTerms(plan: QueryPlan): WantedTerm[] {
-  return [
+  const raw: WantedTerm[] = [
     ...plan.entities.identifiers.map((constraint) => ({ kind: "IDENTIFIER" as const, constraint })),
     ...plan.entities.models.map((constraint) => ({ kind: "MODEL" as const, constraint })),
     ...plan.identities.map((constraint) => ({ kind: "PRODUCT_TYPE" as const, constraint })),
@@ -75,6 +131,15 @@ function wantedTerms(plan: QueryPlan): WantedTerm[] {
     ...plan.attributes.map(({ name: _name, ...constraint }) => ({ kind: "ATTRIBUTE" as const, constraint })),
     ...plan.contexts.map((constraint) => ({ kind: "CONTEXT" as const, constraint })),
   ];
+  const seen = new Set<string>();
+  return raw.filter((term) => {
+    const normalized =
+      term.constraint.normalizedValue || normalizeQueryText(term.constraint.value);
+    const key = `${term.kind}:${structuredEquivalenceKey(normalized)}:${term.constraint.mode}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 export function hasStructuredAnchor(plan: QueryPlan) {
@@ -141,9 +206,8 @@ export async function retrieveStructuredCandidates(args: {
   if (!hasStructuredAnchor(args.plan)) return [];
 
   // Structured retrieval is an exact-fact lane, not a second broad semantic
-  // search engine. Weak SHOULD attributes/context such as "blue", "goods" or
-  // "camping" may boost/rerank anchored candidates, but must never create a
-  // standalone candidate pool.
+  // search engine. Weak SHOULD attributes/context may boost/rerank anchored
+  // candidates, but must never create a standalone candidate pool.
   const anchorTerms = wanted.filter(isRetrievalAnchor);
   if (!anchorTerms.length) return [];
 
@@ -213,6 +277,7 @@ export async function retrieveStructuredCandidates(args: {
   const scores = new Map<string, number>();
   const matchedMust = new Map<string, Set<string>>();
   const matchedKeys = new Map<string, Set<string>>();
+  const matchedRowKinds = new Map<string, Set<string>>();
   const excluded = new Set<string>();
   const mustKeys = new Set(
     wanted.filter(({ constraint }) => constraint.mode === "MUST")
@@ -240,6 +305,10 @@ export async function retrieveStructuredCandidates(args: {
       const matched = matchedKeys.get(row.productId) || new Set<string>();
       matched.add(key);
       matchedKeys.set(row.productId, matched);
+      const rowKindSet =
+        matchedRowKinds.get(row.productId) || new Set<string>();
+      rowKindSet.add(row.kind);
+      matchedRowKinds.set(row.productId, rowKindSet);
       if (term.constraint.mode === "MUST") {
         const set = matchedMust.get(row.productId) || new Set<string>();
         set.add(key);
@@ -268,6 +337,15 @@ export async function retrieveStructuredCandidates(args: {
   const hasMustIdentity = wanted.some(
     ({ kind, constraint }) =>
       kind === "PRODUCT_TYPE" && constraint.mode === "MUST",
+  );
+  const wantedByKey = new Map(
+    wanted.map((term) => [
+      `${term.kind}:${
+        term.constraint.normalizedValue ||
+        normalizeQueryText(term.constraint.value)
+      }`,
+      term,
+    ]),
   );
 
   const ids = [...scores.entries()]
@@ -314,7 +392,54 @@ export async function retrieveStructuredCandidates(args: {
       strongestCeiling,
       floor + relative * 0.12,
     );
+    const matchedTerms = [...matched]
+      .map((key) => wantedByKey.get(key))
+      .filter((term): term is WantedTerm => Boolean(term));
+    const matchedKinds = [
+      ...new Set(matchedTerms.map((term) => term.kind)),
+    ];
+    const matchedAnchorKinds = [
+      ...new Set(
+        matchedTerms
+          .filter(isRetrievalAnchor)
+          .map((term) => term.kind),
+      ),
+    ];
+    const rowKinds = [...(matchedRowKinds.get(id) ?? new Set<string>())];
+    const exactCanonicalIdentity =
+      matchedKinds.includes("PRODUCT_TYPE") &&
+      rowKinds.includes("CANONICAL_PRODUCT_TYPE");
+    const hasClosedWorldAnchor = matchedAnchorKinds.some((kind) =>
+      ["IDENTIFIER", "MODEL", "COMPATIBILITY", "MEASUREMENT"].includes(kind),
+    );
+    const exactHighConfidenceIdentity = matchedTerms.some(
+      (term) =>
+        term.kind === "PRODUCT_TYPE" &&
+        term.constraint.confidence >= 0.92 &&
+        ["CODE", "DICTIONARY"].includes(term.constraint.source),
+    );
+    const brandPlusIdentity =
+      matchedAnchorKinds.includes("BRAND") &&
+      matchedAnchorKinds.includes("PRODUCT_TYPE");
+    const guardRescue =
+      hasClosedWorldAnchor ||
+      exactHighConfidenceIdentity ||
+      brandPlusIdentity;
 
-    return [{ ...product, score: calibratedScore }];
+    return [{
+      ...product,
+      score: calibratedScore,
+      structuredScore: calibratedScore,
+      structuredMatchedKinds: matchedKinds,
+      structuredMatchedTerms: matchedTerms.map((term) => ({
+        kind: term.kind,
+        value: term.constraint.normalizedValue || normalizeQueryText(term.constraint.value),
+      })),
+      structuredMatchedRowKinds: rowKinds,
+      structuredAnchorKinds: matchedAnchorKinds,
+      structuredGuardRescue: guardRescue,
+      structuredExactCanonicalIdentity: exactCanonicalIdentity,
+      retrievalSources: ["STRUCTURED" as const],
+    }];
   });
 }

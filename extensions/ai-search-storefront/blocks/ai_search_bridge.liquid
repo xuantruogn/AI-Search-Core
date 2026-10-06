@@ -76,6 +76,16 @@
         return;
       }
 
+      // A theme can temporarily contain duplicate app-embed blocks after
+      // reinstalling or switching development app registrations. Only one
+      // bridge may bootstrap the runtime on a page; the renderer assets have
+      // their own guards, but without this guard every block still requested
+      // runtime-config independently.
+      if (window.__aiSearchBridgeBootStarted === true) {
+        return;
+      }
+      window.__aiSearchBridgeBootStarted = true;
+
       var pathname = window.location.pathname || "";
       var isSearchPage = /\/search\/?$/.test(pathname);
       var currentParams = new URLSearchParams(window.location.search);

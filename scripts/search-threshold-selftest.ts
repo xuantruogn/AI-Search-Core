@@ -51,5 +51,5 @@ assert.equal(computeDiscoveryNoEvidenceThreshold({
   baseThreshold: 0.5,
   hasStrongCatalogEvidence: false,
   expansionGroundedCount: 1,
-}), 0.40);
+}), 0.50);
 console.log("PASS: raw registry-validated similarity threshold is independent of identity ranking boosts");

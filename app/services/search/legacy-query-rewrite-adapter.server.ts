@@ -160,7 +160,24 @@ export function mergeLlmRewriteIntoPlan(
       optionalPreferences: unique(baseline.analysis.optionalPreferences, llm.analysis.optionalPreferences),
       useCases: unique(baseline.analysis.useCases, llm.analysis.useCases),
       compatibility: unique(baseline.analysis.compatibility, llm.analysis.compatibility),
+      attributes: unique(baseline.analysis.attributes, llm.analysis.attributes),
+      negativeAttributes: unique(
+        baseline.analysis.negativeAttributes,
+        llm.analysis.negativeAttributes,
+      ),
       negativeTerms: unique(baseline.analysis.negativeTerms, llm.analysis.negativeTerms),
+      semanticMustTerms: unique(
+        baseline.analysis.semanticMustTerms ?? [],
+        llm.analysis.semanticMustTerms ?? [],
+      ),
+      semanticSourceMustTerms: unique(
+        baseline.analysis.semanticSourceMustTerms ?? [],
+        llm.analysis.semanticSourceMustTerms ?? [],
+      ),
+      semanticMustNotTerms: unique(
+        baseline.analysis.semanticMustNotTerms ?? [],
+        llm.analysis.semanticMustNotTerms ?? [],
+      ),
       matchedCatalogTerms: unique(baseline.analysis.matchedCatalogTerms, llm.analysis.matchedCatalogTerms),
       sortIntent: baseline.analysis.sortIntent === "RELEVANCE" ? llm.analysis.sortIntent : baseline.analysis.sortIntent,
       marketPreference: baseline.analysis.marketPreference === "ANY" ? llm.analysis.marketPreference : baseline.analysis.marketPreference,

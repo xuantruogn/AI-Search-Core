@@ -1,5 +1,6 @@
 import {
   createEmbeddings,
+  getEmbeddingDimensions,
   getEmbeddingModel,
   type EmbeddingRequestDiagnostics,
 } from "./embeddings.server";
@@ -53,6 +54,24 @@ function readDiscoveryMinRecallResults() {
     : 8;
 }
 
+function readDiscoveryBranchRelativeRatio() {
+  const value = Number.parseFloat(
+    process.env.AI_SEARCH_DISCOVERY_BRANCH_RELATIVE_RATIO || "",
+  );
+  return Number.isFinite(value) && value >= 0.75 && value <= 1
+    ? value
+    : 0.92;
+}
+
+function readDiscoveryBranchMinimumScore() {
+  const value = Number.parseFloat(
+    process.env.AI_SEARCH_DISCOVERY_BRANCH_MIN_SCORE || "",
+  );
+  return Number.isFinite(value) && value >= -1 && value <= 1
+    ? value
+    : 0.35;
+}
+
 export function computeDiscoveryNoEvidenceThreshold(args: {
   retrievalMode: "DIRECT" | "DISCOVERY" | "COMPLEMENT";
   baseThreshold: number;
@@ -73,12 +92,11 @@ export function computeDiscoveryNoEvidenceThreshold(args: {
     return Math.max(args.baseThreshold, 0.55);
   }
   if (!args.hasStrongCatalogEvidence && args.expansionGroundedCount > 0) {
-    // Exact catalog-grounded expansion leaves are allowed to rescue a
-    // discovery query at a lower similarity floor because the result set is
-    // restricted to those exact grounded product IDs below. Keep this
-    // materially above the raw retrieval floor so unrelated expansion noise
-    // still fails closed.
-    return Math.min(args.baseThreshold, 0.40);
+    // Expansion-only taxonomy is recall evidence, not proof that the shopper's
+    // requested product family exists. Keep the normal no-evidence floor so an
+    // ambiguous expansion such as "headphones" -> "headset" cannot resurrect
+    // bicycle headsets. Source-grounded context/identity is handled above.
+    return args.baseThreshold;
   }
   return args.baseThreshold;
 }
@@ -159,6 +177,16 @@ function readQueryEmbeddingTimeoutMs() {
     : 5_000;
 }
 
+function readQueryEmbeddingMaxRetries() {
+  const value = Number.parseInt(
+    process.env.AI_SEARCH_QUERY_EMBEDDING_MAX_RETRIES || "",
+    10,
+  );
+  return Number.isSafeInteger(value) && value >= 0
+    ? Math.min(value, 2)
+    : 1;
+}
+
 function shouldLogEmbeddingInput() {
   const value = process.env.AI_SEARCH_LOG_EMBEDDING_INPUT?.trim().toLowerCase();
   return value === "1" || value === "true" || value === "yes" || value === "on";
@@ -184,6 +212,12 @@ function normalizeEmbeddingBranch(value: string) {
     .replace(/[^\p{L}\p{N}]+/gu, " ")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function naturalLanguageList(values: string[]) {
+  if (values.length <= 1) return values[0] ?? "";
+  if (values.length === 2) return `${values[0]} and ${values[1]}`;
+  return `${values.slice(0, -1).join(", ")}, and ${values.at(-1)}`;
 }
 
 const GENERIC_CATALOG_EVIDENCE_TOKENS = new Set([
@@ -353,18 +387,26 @@ export function buildDiscoveryEmbeddingBranches(
     if (seen.has(normalizedExpansion)) continue;
     seen.add(normalizedExpansion);
 
-    const parts = [expansion];
+    const needs: string[] = [];
     for (const context of semanticContext) {
       const normalizedContext = normalizeEmbeddingBranch(context);
       if (
         !normalizedContext ||
-        normalizeEmbeddingBranch(parts.join(" ; ")).includes(normalizedContext)
+        normalizedExpansion.includes(normalizedContext) ||
+        needs.some((value) =>
+          normalizeEmbeddingBranch(value).includes(normalizedContext),
+        )
       ) {
         continue;
       }
-      parts.push(context);
+      needs.push(context);
     }
-    const branch = parts.join(" ; ").slice(0, 260).trim();
+    const branch =
+      needs.length > 0
+        ? `${expansion} suitable for ${naturalLanguageList(needs)}`
+            .slice(0, 260)
+            .trim()
+        : expansion.slice(0, 260).trim();
     if (branch) branches.push(branch);
     // The primary vector already keeps the broad recall horizon. Secondary
     // discovery branches are targeted recall probes, so cap them at four to
@@ -423,6 +465,32 @@ export function buildComplementEmbeddingBranches(
 
   const branches: string[] = [];
   const seen = new Set<string>();
+
+  // COMPLEMENT must remain usable when the LLM times out. The deterministic
+  // planner already extracted the target family and reference item from the
+  // source relation, so preserve that information in a semantic branch rather
+  // than embedding only the stripped target phrase.
+  const targetIdentity = [
+    rewrite.analysis.shopLanguageProductType,
+    rewrite.analysis.productType,
+    ...(rewrite.analysis.productTypes ?? []),
+  ]
+    .map((value) => value?.replace(/\s+/g, " ").trim())
+    .find((value): value is string => Boolean(value));
+  const referenceValue = (rewrite.analysis.referenceTerms ?? [])
+    .map((value) => value.replace(/\s+/g, " ").trim())
+    .find(Boolean);
+  if (referenceValue) {
+    const target = targetIdentity || rewrite.planning?.semanticQuery || rewrite.query;
+    const deterministicBranch =
+      `${target} ; pair with ${referenceValue}`.slice(0, 220).trim();
+    const normalizedBranch = normalizeEmbeddingBranch(deterministicBranch);
+    if (normalizedBranch && normalizedBranch !== primary) {
+      seen.add(normalizedBranch);
+      branches.push(deterministicBranch);
+    }
+  }
+
   for (const item of ordered) {
     if (seen.has(item.normalized)) continue;
     seen.add(item.normalized);
@@ -436,7 +504,11 @@ export function buildDirectEmbeddingPlan(
   rewrite: QueryRewriteResult | null | undefined,
 ) {
   if (!rewrite || retrievalModeOf(rewrite) !== "DIRECT") {
-    return { primary: rewrite?.query ?? "", branches: [] as string[] };
+    return {
+      primary: rewrite?.query ?? "",
+      branches: [] as string[],
+      sourceResidualBranchIndex: null as number | null,
+    };
   }
   const planningContextValues = (rewrite.planning?.resolvedSegments ?? [])
     .filter((segment) => segment.field === "CONTEXT")
@@ -448,6 +520,7 @@ export function buildDirectEmbeddingPlan(
     ...rewrite.analysis.optionalPreferences,
     ...rewrite.analysis.attributes,
     ...rewrite.analysis.audience,
+    ...rewrite.analysis.compatibility,
     ...(rewrite.analysis.useCases ?? []),
     ...planningContextValues,
   ]
@@ -466,11 +539,14 @@ export function buildDirectEmbeddingPlan(
     .map((value) => {
       const identityTokens = normalizeIdentitySignalTokens(value);
       if (!identityTokens.length) return "";
-      const pruned = identityTokens.filter((token) => !facetTokens.has(token));
-      return (pruned.length > 0 ? pruned : identityTokens).join(" ");
+      // Product identity is the retrieval anchor. Never subtract facet tokens
+      // from it: "Phone Case" + facet "Phone" must remain "phone case", not
+      // collapse to the generic word "case". Facets belong in separate
+      // branches and must not mutate the identity representation.
+      return identityTokens.join(" ");
     })
     .find(Boolean);
-  const primary = identity || rewrite.planning?.semanticQuery || rewrite.query;
+  const primary = rewrite.query || rewrite.planning?.semanticQuery || rewrite.analysis.intent || identity || "";
   const negative = new Set(
     (rewrite.analysis.negativeTerms ?? []).map(normalizeEmbeddingBranch),
   );
@@ -480,7 +556,10 @@ export function buildDirectEmbeddingPlan(
   const facets = rawFacetValues
     .map((value) => value.replace(/\s+/g, " ").trim())
     .filter(Boolean)
-    .filter((value) => !/\d/.test(value))
+    // Keep alphanumeric model/compatibility facets such as "iPhone 18 Pro"
+    // and "25.4mm handlebars". Only discard a facet that is effectively a
+    // bare number; typed price/measurement handling owns those separately.
+    .filter((value) => !/^\s*\d+(?:[.,]\d+)?\s*$/.test(value))
     .filter((value) => !negative.has(normalizeEmbeddingBranch(value)))
     .filter((value, index, list) =>
       list.findIndex((candidate) =>
@@ -490,7 +569,7 @@ export function buildDirectEmbeddingPlan(
     .filter((value) => !normalizeEmbeddingBranch(primary).includes(normalizeEmbeddingBranch(value)))
     .slice(0, 4);
   const facetBranch = facets.length > 0
-    ? [primary, ...facets].join(" ; ").slice(0, 260)
+    ? `${primary} with ${naturalLanguageList(facets)}`.slice(0, 260)
     : "";
 
   const coveredTokens = new Set([
@@ -511,10 +590,33 @@ export function buildDirectEmbeddingPlan(
     .filter((token) => !DIRECT_RESIDUAL_STOP_WORDS.has(token));
   const residual = [...new Set(residualTokens)].join(" ");
   const residualBranch = residual
-    ? [primary, residual].join(" ; ").slice(0, 260)
+    ? `${primary} for ${residual}`.slice(0, 260)
     : "";
 
-  const branches = [facetBranch, residualBranch]
+  // LLM expansions are retrieval probes, not truth. Let the first few
+  // expansion phrases open semantic recall for short DIRECT need queries
+  // (e.g. "office bag" -> work/laptop bag) without turning those phrases into
+  // hard catalog evidence.
+  const expansionBranches = (rewrite.analysis.semanticExpansions ?? [])
+    .map((value) => value.replace(/\s+/g, " ").trim())
+    .filter(Boolean)
+    .filter((value) => !negative.has(normalizeEmbeddingBranch(value)))
+    .filter(
+      (value, index, list) =>
+        list.findIndex(
+          (candidate) =>
+            normalizeEmbeddingBranch(candidate) ===
+            normalizeEmbeddingBranch(value),
+        ) === index,
+    )
+    .filter(
+      (value) =>
+        normalizeEmbeddingBranch(value) !== normalizeEmbeddingBranch(primary),
+    )
+    .slice(0, 2);
+
+  const branches = [identity, facetBranch, residualBranch, ...expansionBranches]
+    .filter((value): value is string => Boolean(value))
     .map((value) => value.trim())
     .filter(Boolean)
     .filter(
@@ -526,11 +628,20 @@ export function buildDirectEmbeddingPlan(
             normalizeEmbeddingBranch(value),
         ) === index,
     )
-    .slice(0, 2);
+    .slice(0, 3);
+  const sourceResidualBranchIndex = residualBranch
+    ? branches.findIndex(
+        (value) =>
+          normalizeEmbeddingBranch(value) ===
+          normalizeEmbeddingBranch(residualBranch),
+      ) + 1
+    : 0;
 
   return {
     primary,
     branches,
+    sourceResidualBranchIndex:
+      sourceResidualBranchIndex > 0 ? sourceResidualBranchIndex : null,
   };
 }
 
@@ -544,6 +655,29 @@ export type SearchResult = {
   vectorSimilarity?: number;
   /** Raw cosine similarity to the primary interpreted-query embedding. */
   primaryVectorSimilarity?: number;
+  /** Best relative score within any secondary semantic branch (0..1). */
+  semanticBranchRelativeScore?: number;
+  /** One-based secondary branch index that best supports this candidate. */
+  semanticBranchIndex?: number;
+  semanticBranchInput?: string;
+  /** Qdrant BM25 sparse score; raw scale is not mixed with cosine. */
+  sparseScore?: number;
+  sparseRank?: number;
+  /** Normalized RRF score after dense+sparse rank fusion. */
+  rrfScore?: number;
+  /** Exact lexical-title lane score, kept separate from vector similarity. */
+  lexicalScore?: number;
+  lexicalMatchType?: "EXACT_TITLE" | "TITLE_PHRASE" | "TITLE_TOKENS" | "HANDLE";
+  /** Calibrated score from exact structured facts. */
+  structuredScore?: number;
+  structuredMatchedKinds?: string[];
+  structuredMatchedTerms?: Array<{ kind: string; value: string }>;
+  structuredMatchedRowKinds?: string[];
+  structuredAnchorKinds?: string[];
+  structuredGuardRescue?: boolean;
+  structuredExactCanonicalIdentity?: boolean;
+  /** Final lane provenance for diagnostics; score remains the fused rank score. */
+  retrievalSources?: Array<"SEMANTIC" | "SPARSE" | "STRUCTURED" | "LEXICAL">;
   minVariantPrice?: number;
   maxVariantPrice?: number;
   currencyCode?: string;
@@ -561,8 +695,15 @@ export function fuseSemanticVectorBranches(
       branchHits: number;
       vectorSimilarity: number;
       primaryVectorSimilarity?: number;
+      semanticBranchRelativeScore: number;
+      semanticBranchIndex?: number;
     }
   >();
+  const branchTopScores = resultSets.map((results) =>
+    validTopVectorScore(
+      results.map((result) => result.vectorSimilarity ?? result.score),
+    ) ?? 0,
+  );
 
   resultSets.forEach((results, branchIndex) => {
     // Secondary vectors are recall probes, not independent ranking truth.
@@ -570,7 +711,13 @@ export function fuseSemanticVectorBranches(
     // product that actually matches the primary interpreted need.
     const branchWeight = branchIndex === 0 ? 1 : 0.90;
     for (const result of results) {
+      const rawSimilarity = result.vectorSimilarity ?? result.score;
       const weightedScore = result.score * branchWeight;
+      const branchTopScore = branchTopScores[branchIndex] ?? 0;
+      const branchRelativeScore =
+        branchIndex > 0 && branchTopScore > 0
+          ? Math.max(0, Math.min(1, rawSimilarity / branchTopScore))
+          : 0;
       const current = fused.get(result.productId);
       if (!current) {
         fused.set(result.productId, {
@@ -579,7 +726,9 @@ export function fuseSemanticVectorBranches(
           branchHits: 1,
           vectorSimilarity: result.vectorSimilarity ?? result.score,
           primaryVectorSimilarity:
-            branchIndex === 0 ? (result.vectorSimilarity ?? result.score) : undefined,
+            branchIndex === 0 ? rawSimilarity : undefined,
+          semanticBranchRelativeScore: branchRelativeScore,
+          semanticBranchIndex: branchIndex > 0 ? branchIndex : undefined,
         });
         continue;
       }
@@ -589,7 +738,12 @@ export function fuseSemanticVectorBranches(
         result.vectorSimilarity ?? result.score,
       );
       if (branchIndex === 0) {
-        current.primaryVectorSimilarity = result.vectorSimilarity ?? result.score;
+        current.primaryVectorSimilarity = rawSimilarity;
+      } else if (
+        branchRelativeScore > current.semanticBranchRelativeScore
+      ) {
+        current.semanticBranchRelativeScore = branchRelativeScore;
+        current.semanticBranchIndex = branchIndex;
       }
       if (weightedScore > current.score) {
         current.result = result;
@@ -605,10 +759,14 @@ export function fuseSemanticVectorBranches(
       branchHits,
       vectorSimilarity,
       primaryVectorSimilarity,
+      semanticBranchRelativeScore,
+      semanticBranchIndex,
     }) => ({
       ...result,
       vectorSimilarity,
       primaryVectorSimilarity,
+      semanticBranchRelativeScore,
+      semanticBranchIndex,
       // Tiny consensus bonus helps a product supported by both the general
       // need vector and a product-class branch without allowing broad branch
       // membership to dominate ranking.
@@ -619,6 +777,7 @@ export function fuseSemanticVectorBranches(
 }
 
 export type SemanticSearchDiagnostics = {
+  sourceProductClassAbsent?: boolean;
   primaryEmbeddingInput?: string;
   semanticFacetBranches?: string[];
   retrievalMode: "DIRECT" | "DISCOVERY" | "COMPLEMENT";
@@ -715,6 +874,7 @@ export async function semanticSearch({
   let embeddingCallCount = 0;
   let semanticBranchInputs: string[] = [];
   let semanticBranchVectors: number[][] = [];
+  let directSourceResidualBranchIndex: number | null = null;
   let primaryEmbeddingInputForDiagnostics = cleanQuery;
   let embeddingRequestDiagnostics:
     | EmbeddingRequestDiagnostics
@@ -819,6 +979,10 @@ export async function semanticSearch({
 
     const directPlan = buildDirectEmbeddingPlan(preparedRewrite);
     const preparedMode = retrievalModeOf(preparedRewrite);
+    directSourceResidualBranchIndex =
+      preparedMode === "DIRECT"
+        ? directPlan.sourceResidualBranchIndex
+        : null;
     semanticBranchInputs =
       preparedMode === "DISCOVERY"
         ? buildDiscoveryEmbeddingBranches(preparedRewrite)
@@ -831,7 +995,7 @@ export async function semanticSearch({
       semanticBranchVectors = await createEmbeddings(
         semanticBranchInputs,
         {
-          maxRetries: 0,
+          maxRetries: readQueryEmbeddingMaxRetries(),
           timeoutMs: readQueryEmbeddingTimeoutMs(),
           usageContext: {
             shop,
@@ -1064,6 +1228,10 @@ export async function semanticSearch({
     const primaryEmbeddingInput = directPlan.primary || rewrite.query;
     primaryEmbeddingInputForDiagnostics = primaryEmbeddingInput;
     const currentEmbeddingMode = retrievalModeOf(rewrite);
+    directSourceResidualBranchIndex =
+      currentEmbeddingMode === "DIRECT"
+        ? directPlan.sourceResidualBranchIndex
+        : null;
     semanticBranchInputs =
       currentEmbeddingMode === "DISCOVERY"
         ? buildDiscoveryEmbeddingBranches(rewrite)
@@ -1085,7 +1253,7 @@ export async function semanticSearch({
             getEmbeddingModel(),
 
           dimensions:
-            768,
+            getEmbeddingDimensions(),
 
           input:
             primaryEmbeddingInput,
@@ -1113,7 +1281,7 @@ export async function semanticSearch({
         embeddingInputs,
         {
           maxRetries:
-            0,
+            readQueryEmbeddingMaxRetries(),
 
           timeoutMs:
             readQueryEmbeddingTimeoutMs(),
@@ -1158,7 +1326,7 @@ export async function semanticSearch({
           primaryEmbeddingInput.length,
 
         dimensions:
-          768,
+          getEmbeddingDimensions(),
 
         endToEndMs:
           embeddingDetails
@@ -1608,6 +1776,50 @@ export async function semanticSearch({
     retrievalMode === "DIRECT"
       ? (effectiveRewrite?.context?.directSourceFacetGroundedProductIds ?? [])
       : [];
+  const identityIdSetForSourceResidual = new Set(identityIds);
+  const directSourceResidualCandidateIds = new Set(
+    retrievalMode === "DIRECT" &&
+    directSourceResidualBranchIndex &&
+    identityIdSetForSourceResidual.size > 0
+      ? registryValidatedResults
+          .filter((result) => {
+            if (!identityIdSetForSourceResidual.has(result.productId)) return false;
+            if (result.semanticBranchIndex !== directSourceResidualBranchIndex) {
+              return false;
+            }
+            const raw = result.vectorSimilarity ?? result.score;
+            const primary = result.primaryVectorSimilarity;
+            return (
+              Number.isFinite(raw) &&
+              Number.isFinite(primary) &&
+              (result.semanticBranchRelativeScore ?? 0) >= 0.82 &&
+              raw >= 0.35 &&
+              raw - (primary ?? raw) >= 0.07
+            );
+          })
+          .map((result) => result.productId)
+      : [],
+  );
+  const directSourceResidualSemanticEvidence = Boolean(
+    retrievalMode === "DIRECT" &&
+    directSourceResidualBranchIndex &&
+    identityIdSetForSourceResidual.size > 0 &&
+    registryValidatedResults.some((result) => {
+      if (!identityIdSetForSourceResidual.has(result.productId)) return false;
+      if (result.semanticBranchIndex !== directSourceResidualBranchIndex) {
+        return false;
+      }
+      const raw = result.vectorSimilarity ?? result.score;
+      const primary = result.primaryVectorSimilarity;
+      return (
+        Number.isFinite(raw) &&
+        Number.isFinite(primary) &&
+        (result.semanticBranchRelativeScore ?? 0) >= 0.9 &&
+        raw >= 0.38 &&
+        raw - (primary ?? raw) >= 0.10
+      );
+    }),
+  );
   const discoverySourceGroundedIds =
     retrievalMode === "DISCOVERY"
       ? (effectiveRewrite?.context?.discoverySourceGroundedProductIds ?? [])
@@ -1646,13 +1858,30 @@ export async function semanticSearch({
       normalizeEmbeddingBranch(term.value) === normalizeEmbeddingBranch(cleanQuery),
     ),
   );
+  const negativeEvidenceTerms = [
+    ...(effectiveRewrite?.analysis.negativeTerms ?? []),
+    ...(effectiveRewrite?.analysis.negativeAttributes ?? []),
+    ...(effectiveRewrite?.analysis.semanticMustNotTerms ?? []),
+  ]
+    .map(normalizeEmbeddingBranch)
+    .filter(Boolean);
   const semanticMustTermsForCatalogEvidence =
-    (effectiveRewrite?.analysis.semanticMustTerms ?? []).filter(
-      (value) =>
-        !/\b(?:price|priced|cheap|cheapest|affordable|budget|expensive|priciest|premium|luxury|luxurious|low cost|high end|most expensive)\b/i.test(
-          normalizeEmbeddingBranch(value),
-        ),
-    );
+    (effectiveRewrite?.analysis.semanticMustTerms ?? []).filter((value) => {
+      const normalized = normalizeEmbeddingBranch(value);
+      if (
+        /\b(?:price|priced|cheap|cheapest|affordable|budget|expensive|priciest|premium|luxury|luxurious|low cost|high end|most expensive)\b/i.test(
+          normalized,
+        )
+      ) {
+        return false;
+      }
+      // Negative intent belongs to exclusion filtering, not positive catalog
+      // evidence. "jacket without hood" should prove "jacket" exists and let
+      // the negative facet remove hooded products afterwards.
+      return !negativeEvidenceTerms.some((negative) =>
+        (` ${normalized} `).includes(` ${negative} `),
+      );
+    });
   const directSemanticMustCoverage =
     retrievalMode !== "DIRECT" ||
     catalogEvidenceCoversSemanticMustTerms(
@@ -1704,23 +1933,64 @@ export async function semanticSearch({
   // typed taxonomy match may also ground a translated cross-language need
   // (e.g. Vietnamese "kính mắt" -> CATEGORY=Eyewear). Expansion-only hits do
   // not prove the shopper's need exists in the catalog.
+  //
+  // A transient LLM failure must not erase deterministic evidence that code
+  // already owns. DIRECT relational tails ("bag for daily office use") are
+  // open-world context inside an already grounded product family; negative-only
+  // queries ("jacket without hood") also do not require LLM semantic proof.
+  // By contrast, an unresolved qualifier before the identity ("smart watch")
+  // still needs evidence and therefore remains guarded.
+  const normalizedSourceQuery = normalizeEmbeddingBranch(query);
+  const directFallbackOpenContext = Boolean(
+    transientLlmFallback &&
+    retrievalMode === "DIRECT" &&
+    identityIds.length > 0 &&
+    /\b(?:for|during|when|while|using)\b/.test(normalizedSourceQuery) &&
+    semanticMustTermsForCatalogEvidence.length > 0,
+  );
+  const directFallbackNegativeOnly = Boolean(
+    transientLlmFallback &&
+    retrievalMode === "DIRECT" &&
+    identityIds.length > 0 &&
+    semanticMustTermsForCatalogEvidence.length === 0 &&
+    (effectiveRewrite?.analysis.negativeTerms?.length ?? 0) > 0,
+  );
+  const discoveryFallbackSourceGrounded = Boolean(
+    transientLlmFallback &&
+    retrievalMode === "DISCOVERY" &&
+    discoverySourceGroundedIds.length > 0,
+  );
   const fallbackNeedsSemanticGuard =
     transientLlmFallback &&
     ["LIGHT_LLM", "FULL_LLM"].includes(effectiveRewrite?.planning?.route ?? "") &&
-    (effectiveRewrite?.planning?.unresolvedSegments?.length ?? 0) > 0;
+    (effectiveRewrite?.planning?.unresolvedSegments?.length ?? 0) > 0 &&
+    !directFallbackOpenContext &&
+    !directFallbackNegativeOnly &&
+    !discoveryFallbackSourceGrounded;
+  const exactComplementTargetEvidence =
+    retrievalMode === "COMPLEMENT" &&
+    identityIds.length > 0 &&
+    (effectiveRewrite?.analysis.productTypes?.length ?? 0) > 0;
   const hasStrongCatalogEvidence =
     retrievalMode === "DISCOVERY"
-      ? discoverySourceGroundedIds.length > 0 ||
-        translatedTaxonomyEvidence ||
-        singleTokenSourceIdentityGrounded
-      : (
+      ? !fallbackNeedsSemanticGuard &&
+        (
+          discoverySourceGroundedIds.length > 0 ||
+          translatedTaxonomyEvidence ||
+          singleTokenSourceIdentityGrounded
+        )
+      : exactComplementTargetEvidence ||
+        directFallbackOpenContext ||
+        directFallbackNegativeOnly ||
+        (
           !fallbackNeedsSemanticGuard &&
           ((selectedStrongCatalogEvidence && directSemanticMustCoverage) ||
             sourceExactTaxonomyEvidence ||
             complementExpansionEvidence)
         ) ||
         directExpansionGroundedIds.length > 0 ||
-        directSourceFacetGroundedIds.length > 0;
+        directSourceFacetGroundedIds.length > 0 ||
+        directSourceResidualSemanticEvidence;
   const discoveryMinRecallResults = readDiscoveryMinRecallResults();
   const effectiveMinimumScore = computeDiscoveryRecallThreshold({
     retrievalMode,
@@ -1780,7 +2050,7 @@ export async function semanticSearch({
     cleanQuery.split(/\s+/).filter(Boolean).length >= 7
       ? Math.min(effectiveNoEvidenceTopScore, 0.55)
       : effectiveNoEvidenceTopScore;
-  const weakNoEvidenceVector = shouldRejectNoEvidenceVector({
+  const weakNoEvidenceVector = (effectiveRewrite?.context?.ungroundedSourceProductClass === true || effectiveRewrite?.context?.ungroundedExplicitFeature === true) || shouldRejectNoEvidenceVector({
     hasStrongCatalogEvidence,
     topVectorScore,
     normalThreshold: effectiveNoEvidenceTopScore,
@@ -1801,20 +2071,41 @@ export async function semanticSearch({
     ? new Set(discoveryExpansionGroundedIds)
     : null;
 
+  const discoveryBranchRelativeRatio =
+    readDiscoveryBranchRelativeRatio();
+  const discoveryBranchMinimumScore = Math.max(
+    retrievalMinimumScore,
+    readDiscoveryBranchMinimumScore(),
+  );
   let relevantResults =
     weakNoEvidenceVector
       ? []
-      : registryValidatedResults.filter(
-          (
-            result,
-          ) =>
-            Number.isFinite(
-              result.vectorSimilarity ?? result.score,
+      : registryValidatedResults.filter((result) => {
+          const rawSimilarity = result.vectorSimilarity ?? result.score;
+          const branchRecallEligible =
+            retrievalMode === "DISCOVERY" &&
+            semanticBranchVectors.length > 0 &&
+            (result.semanticBranchRelativeScore ?? 0) >=
+              discoveryBranchRelativeRatio &&
+            rawSimilarity >= discoveryBranchMinimumScore;
+          return (
+            Number.isFinite(rawSimilarity) &&
+            (
+              rawSimilarity >= effectiveMinimumScore ||
+              branchRecallEligible
             ) &&
-            (result.vectorSimilarity ?? result.score) >=
-              effectiveMinimumScore &&
-            (!expansionOnlyIds || expansionOnlyIds.has(result.productId)),
-        );
+            (!expansionOnlyIds || expansionOnlyIds.has(result.productId))
+          );
+        });
+
+  if (directSourceResidualSemanticEvidence) {
+    const explicitFacetIds = new Set(directSourceFacetGroundedIds);
+    relevantResults = relevantResults.filter(
+      (result) =>
+        directSourceResidualCandidateIds.has(result.productId) ||
+        explicitFacetIds.has(result.productId),
+    );
+  }
 
   thresholdFilterCodeMs =
     Date.now() -
@@ -1920,6 +2211,16 @@ export async function semanticSearch({
             ? result.vectorSimilarity
             : undefined),
 
+        semanticBranchRelativeScore:
+          result.semanticBranchRelativeScore,
+
+        semanticBranchIndex:
+          result.semanticBranchIndex,
+        semanticBranchInput:
+          typeof result.semanticBranchIndex === "number" && result.semanticBranchIndex > 0
+            ? semanticBranchInputs[result.semanticBranchIndex - 1]
+            : undefined,
+
         minVariantPrice:
           result.minVariantPrice,
 
@@ -1956,6 +2257,7 @@ export async function semanticSearch({
     primaryEmbeddingInput: primaryEmbeddingInputForDiagnostics.slice(0, 300),
     semanticFacetBranches: semanticBranchInputs.slice(0, 6).map((value) => value.slice(0, 300)),
     retrievalMode,
+    sourceProductClassAbsent: effectiveRewrite?.context?.ungroundedSourceProductClass === true || effectiveRewrite?.context?.ungroundedExplicitFeature === true,
     noEvidenceGuardTriggered: weakNoEvidenceVector,
     noEvidenceThreshold: transientLlmFallback
       ? transientNoEvidenceThreshold

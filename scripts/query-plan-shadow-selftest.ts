@@ -65,9 +65,20 @@ function planRoute(query: string) {
   const deterministic = parseDeterministicQuery(query);
   const matches = matchCatalogTerms(query, dictionary);
   const covered = new Set(matches.flatMap((match) => match.text.split(" ")));
+  const measurementTokens = new Set(
+    deterministic.measurements.flatMap((measurement) =>
+      normalizeQueryText(measurement.value).split(" ").filter(Boolean),
+    ),
+  );
   const unresolved = deterministic.normalizedQuery
     .split(" ")
-    .filter((token) => token.length > 2 && !covered.has(token));
+    .filter(
+      (token) =>
+        token.length > 2 &&
+        !covered.has(token) &&
+        !measurementTokens.has(token) &&
+        token !== "size",
+    );
   return { deterministic, matches, routed: routeQuery({
     deterministic,
     matches,

@@ -3,12 +3,13 @@ import { getShopSettings } from "../commerce/shop-registry.server";
 
 import type { ProductForIndex } from "./product-document.server";
 import { buildProductDocument } from "./product-document.server";
+import { composeProductSparseDocument } from "./product-sparse-document.server";
 import {
   isProductEnrichmentEnabled,
   prepareProductEmbeddingInput,
   PRODUCT_ENRICHMENT_VERSION,
 } from "./product-embedding-input.server";
-import { createEmbedding } from "../search/embeddings.server";
+import { createEmbedding, getEmbeddingDimensions } from "../search/embeddings.server";
 import {
   collectProductContextTerms,
   ensureProductShopContext,
@@ -95,7 +96,7 @@ export function getQdrantPointId(
 }
 
 export const PRODUCT_EMBEDDING_PIPELINE_VERSION =
-  "semantic-product-v5-canonical-shop-type";
+  "semantic-product-v9-supply-demand-dense-bm25";
 
 const ENRICHMENT_RETRY_DELAY_MS = 6 * 60 * 60 * 1_000;
 
@@ -957,12 +958,17 @@ export async function indexProduct({
         document,
         searchLanguage,
         shop,
+        product,
       );
     const embeddingInput = preparedEmbeddingInput;
     preparedSemanticTerms = collectProductContextTerms(
       product,
       embeddingInput.analysis,
     );
+    const sparseDocument = composeProductSparseDocument({
+      product,
+      analysis: embeddingInput.analysis,
+    });
     const semanticPayload =
       buildProductVectorSemanticPayload(preparedSemanticTerms);
 
@@ -1048,7 +1054,7 @@ export async function indexProduct({
     }
 
     if (
-      vector.length !== 768
+      vector.length !== getEmbeddingDimensions()
     ) {
       throw new Error(
         `Unexpected embedding size: ${vector.length}`,
@@ -1058,6 +1064,7 @@ export async function indexProduct({
     await upsertProductVector({
       pointId,
       vector,
+      sparseDocument,
 
       payload: {
         shop,

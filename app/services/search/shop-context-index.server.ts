@@ -2,6 +2,7 @@ import db from "../../db.server";
 import type { ProductForIndex } from "../products/product-document.server";
 import type { ProductSemanticAnalysis } from "../products/product-embedding-input.server";
 import type { QueryRewriteResult } from "./query-rewriter.server";
+import { applyFinalRelevanceCutoff } from "./final-relevance-cutoff.server";
 import {
   normalizeUnicodeQueryText,
   parseDeterministicQuery,
@@ -90,7 +91,10 @@ export type ContextualQueryResult = QueryRewriteResult & {
     identityCandidateProductIds: string[];
     directExpansionGroundedProductIds: string[];
     directSourceFacetGroundedProductIds: string[];
+    directSourceFacetConsensusProductIds: string[];
     discoverySourceIdentityProductIds: string[];
+    ungroundedSourceProductClass: boolean;
+    ungroundedExplicitFeature: boolean;
     discoverySourceGroundedProductIds: string[];
     discoveryExpansionGroundedProductIds: string[];
   };
@@ -1266,110 +1270,11 @@ export function composeContextualEmbeddingInput(
   rewrite: QueryRewriteResult,
   selectedTerms: SelectedShopContext[],
 ) {
-  if (rewrite.planning) {
-    const coreClauses = clean(rewrite.planning.semanticQuery, 500)
-      .split(/\s*;\s*/)
-      .filter(Boolean);
-    const core: string[] = [];
-    for (const clause of coreClauses) {
-      if (core.length >= 3 || [...core, clause].join(" ; ").length > 260) break;
-      core.push(clause);
-    }
-    const base = core.length ? core.join(" ; ") : clean(coreClauses[0], 260);
-    const foldedBase = normalizeContextTerm(base);
-    const retrievalMode = rewrite.planning.retrievalMode;
-    // DISCOVERY already has an explicit need-first semanticQuery plus separate
-    // class+context vector branches. Catalog vocabulary must stay out of the
-    // primary vector; it remains available for grounding and reranking only.
-    if (retrievalMode === "DISCOVERY") {
-      return base;
-    }
-    const additions = selectedTerms
-      .filter(
-        (term) =>
-          [
-            "CANONICAL_PRODUCT_TYPE",
-            "PRODUCT_TYPE",
-            "CATEGORY",
-            "ALIAS",
-            "ATTRIBUTE",
-            "USE_CASE",
-          ].includes(term.kind) && term.score >= 18,
-      )
-      .map((term) => clean(term.value, 220))
-      .filter((term) => term && !foldedBase.includes(normalizeContextTerm(term)));
-    const selected: string[] = [];
-    for (const term of additions) {
-      const normalized = normalizeContextTerm(term);
-      if (selected.some((value) => normalizeContextTerm(value).includes(normalized) || normalized.includes(normalizeContextTerm(value)))) continue;
-      if (selected.length >= 2 || [base, ...selected, term].join(" ; ").length > 300) break;
-      selected.push(term);
-    }
-    return [base, ...selected].filter(Boolean).join(" ; ");
-  }
-  // Only shopper-required attributes belong in the embedding fallback.
-  // LLM-inferred optional preferences are soft ranking evidence and must not
-  // mutate Shop Context vocabulary or the vector query.
-  const semanticAttributes = [
-    ...rewrite.analysis.requiredAttributes,
-  ].filter(
-    (value) => !/\d|\b(?:price|budget|cheap|expensive|gia|giá|re|rẻ|đắt|dat)\b/i.test(value),
-  );
-  const hasStructuredEntities =
-    rewrite.analysis.brands.length + rewrite.analysis.models.length +
-      rewrite.analysis.identifiers.length + rewrite.analysis.audience.length > 0;
-  const sections = [
-    `Shopper query: ${clean(originalQuery, 500)}`,
-    rewrite.analysis.productType
-      ? `Interpreted product type: ${rewrite.analysis.productType}`
-      : null,
-    rewrite.analysis.shopLanguageProductType
-      ? `Product type in shop language: ${rewrite.analysis.shopLanguageProductType}`
-      : null,
-    rewrite.analysis.category
-      ? `Product category: ${rewrite.analysis.category}`
-      : null,
-    rewrite.analysis.brands.length
-      ? `Required brands: ${rewrite.analysis.brands.join(", ")}`
-      : null,
-    rewrite.analysis.models.length
-      ? `Required models: ${rewrite.analysis.models.join(", ")}`
-      : null,
-    rewrite.analysis.identifiers.length
-      ? `Exact identifiers: ${rewrite.analysis.identifiers.join(", ")}`
-      : null,
-    rewrite.analysis.compatibility.length
-      ? `Must be compatible with: ${rewrite.analysis.compatibility.join(", ")}`
-      : null,
-    rewrite.analysis.audience.length
-      ? `Intended audience: ${rewrite.analysis.audience.join(", ")}`
-      : null,
-    rewrite.analysis.useCases.length
-      ? `Use cases: ${rewrite.analysis.useCases.join(", ")}`
-      : null,
-    rewrite.analysis.intent !== "unknown"
-      ? `Shopping intent: ${rewrite.analysis.intent}`
-      : null,
-    !hasStructuredEntities && rewrite.analysis.entities.length
-      ? `Preserved entities: ${rewrite.analysis.entities.join(", ")}`
-      : null,
-    semanticAttributes.length
-      ? `Required product attributes: ${semanticAttributes.join(", ")}`
-      : null,
-    rewrite.analysis.semanticExpansions.length
-      ? `Equivalent product meanings: ${rewrite.analysis.semanticExpansions.join(" | ")}`
-      : null,
-    rewrite.analysis.shopLanguageTerms.length
-      ? `Shop-language forms (${rewrite.analysis.shopLanguage}): ${rewrite.analysis.shopLanguageTerms.join(" | ")}`
-      : null,
-    rewrite.analysis.negativeTerms.length
-      ? `Explicit exclusions: ${rewrite.analysis.negativeTerms.join(", ")}`
-      : null,
-    selectedTerms.length
-      ? `Relevant catalog vocabulary: ${selectedTerms.map((term) => `${term.kind}=${term.value}`).join(" | ")}`
-      : null,
-  ];
-  return sections.filter((value): value is string => Boolean(value)).join("\n");
+  // Catalog facts enrich grounding/reranking, never the primary dense text.
+  const natural = rewrite.query || rewrite.planning?.semanticQuery ||
+    (rewrite.analysis.intent !== "unknown" ? rewrite.analysis.intent : originalQuery);
+  return clean(natural.split(/\s*;\s*/)[0], 500);
+
 }
 
 /**
@@ -1428,6 +1333,26 @@ export async function applyShopContextToQuery({
       }
       matchingIdentityTerms.add(term);
       for (const productId of term.productIds) matchingProductIds.add(productId);
+    }
+  }
+
+  // Family scope is intentionally broader than exact canonical identity.
+  // Merchant PRODUCT_TYPE/CATEGORY/ALIAS may express a parent family such as
+  // "Shoes" while CANONICAL_PRODUCT_TYPE stores leaf types such as loafer or
+  // oxford. Use this scope for facet grounding only; exact identity gating
+  // continues to use matchingProductIds.
+  const familyProductIds = new Set(matchingProductIds);
+  if (hasAnalyzedProductType) {
+    for (const term of identityCandidateTerms) {
+      if (!FALLBACK_PRODUCT_IDENTITY_KINDS.has(term.kind)) continue;
+      if (
+        !identitySignals.some(
+          (signal) => strongIdentityMatch(term, signal) > 0,
+        )
+      ) {
+        continue;
+      }
+      for (const productId of term.productIds) familyProductIds.add(productId);
     }
   }
 
@@ -1491,12 +1416,35 @@ export async function applyShopContextToQuery({
             (term) => !softDiscoveryEvidenceTerms.has(normalizeContextTerm(term)),
           )
       : [];
-  const sourceOwnedDiscoveryIdentityTargets =
+  const rawSourceOwnedDiscoveryIdentityTargets =
     currentContextRetrievalMode === "DISCOVERY"
       ? discoveryEvidenceMustTerms.filter((target) =>
-          Boolean(sourceSemanticTermForCanonical(originalQuery, rewrite, target)),
+          Boolean(sourceSemanticTermForCanonical(originalQuery, rewrite, target)) ||
+          sourceContainsFacet(originalQuery, target),
         )
       : [];
+  // The primary translated query can resolve a compound catalog category.
+  // Keep that complete class instead of independently grounding its parts:
+  // "bicycle accessories" must not become the class "bicycle" when MUST
+  // terms are split or source/translation term arrays have different order.
+  const resolvedPrimaryCategories = (rewrite.planning?.resolvedSegments ?? [])
+    .filter((segment) => segment.field === "CATEGORY" && segment.confidence >= 0.95)
+    .filter((segment) =>
+      normalizeContextTerm(segment.text) ===
+        normalizeContextTerm(rewrite.planning?.semanticQuery ?? rewrite.analysis.intent),
+    )
+    .map((segment) => segment.canonicalValue)
+    .filter((value) => terms.some((term) =>
+      term.kind === "CATEGORY" && term.normalizedValue === normalizeContextTerm(value),
+    ));
+  const sourceOwnedDiscoveryIdentityTargets = currentContextRetrievalMode === "DISCOVERY"
+    ? [...new Set([
+        ...resolvedPrimaryCategories,
+        ...rawSourceOwnedDiscoveryIdentityTargets.filter((target) =>
+          !resolvedPrimaryCategories.some((category) => sourceContainsFacet(category, target)),
+        ),
+      ])]
+    : [];
   const semanticMustFacetTokens = new Set(
     [
       ...(rewrite.analysis.semanticMustTerms ?? []),
@@ -1760,64 +1708,189 @@ export async function applyShopContextToQuery({
     selectedContextTerms.push(term);
     if (selectedTerms.length >= contextLimit) break;
   }
+  const directIdentityTokens = new Set(
+    identitySignals.flatMap((signal) =>
+      signal.tokens.flatMap((token) => [...identityLookupTokenVariants(token)]),
+    ),
+  );
+  const directNeedTokens = new Set(
+    (rewrite.analysis.semanticMustTerms ?? [])
+      .flatMap((value) =>
+        normalizeContextTerm(value).split(" ").filter(Boolean),
+      )
+      .filter((token) => !directIdentityTokens.has(token)),
+  );
+  const directEvidenceExpansionValues =
+    directNeedTokens.size > 0
+      ? semanticExpansionValues.filter((value) => {
+          const tokens = normalizeContextTerm(value).split(" ").filter(Boolean);
+          return tokens.some((token) => directNeedTokens.has(token));
+        })
+      : [];
   const allowDirectExpansionEvidence =
     currentContextRetrievalMode === "DIRECT" &&
-    normalizedOriginalQuery.split(/\s+/).filter(Boolean).length >= 7 &&
-    (rewrite.analysis.semanticMustTerms ?? []).length >= 2;
-  const directExpansionGroundedProductIds =
+    matchingProductIds.size > 0 &&
+    directEvidenceExpansionValues.length > 0;
+  const exactDirectExpansionGroundedProductIds =
     allowDirectExpansionEvidence
       ? [
           ...new Set(
             terms
-              .filter(
-                (term) =>
-                  term.kind === "CANONICAL_PRODUCT_TYPE" &&
-                  discoveryExpansionTypeMatch(
-                    term.tokens,
-                    semanticExpansionValues,
-                  ),
-              )
-              .flatMap((term) => [...term.productIds]),
+              .filter((term) => {
+                if (term.kind !== "CANONICAL_PRODUCT_TYPE") return false;
+                // DIRECT expansion evidence must name a concrete catalog leaf,
+                // not merely contain the broad source identity. Otherwise
+                // hallucinated phrases such as "bag for boiling water" make
+                // CANONICAL_PRODUCT_TYPE=bag look like proof that the need
+                // exists. Require an exact normalized subtype phrase and do not
+                // count the source identity itself.
+                if (
+                  identitySignals.some(
+                    (signal) => signal.normalized === term.normalizedValue,
+                  )
+                ) {
+                  return false;
+                }
+                return directEvidenceExpansionValues.some(
+                  (value) =>
+                    normalizeContextTerm(value) === term.normalizedValue,
+                );
+              })
+              .flatMap((term) =>
+                [...term.productIds].filter((productId) =>
+                  matchingProductIds.has(productId),
+                ),
+              ),
           ),
         ].slice(0, 1_000)
       : [];
+
+  const directExpansionSupportByProduct = new Map<string, Set<string>>();
+  if (
+    currentContextRetrievalMode === "DIRECT" &&
+    familyProductIds.size > 0 &&
+    semanticExpansionValues.length > 0
+  ) {
+    for (const term of terms) {
+      if (
+        ![
+          "CANONICAL_PRODUCT_TYPE",
+          "PRODUCT_TYPE",
+          "ALIAS",
+          "USE_CASE",
+          "SOFT_CONTEXT",
+          "ATTRIBUTE",
+          "COMPATIBILITY",
+        ].includes(term.kind)
+      ) {
+        continue;
+      }
+      const supportingExpansions = semanticExpansionValues
+        .filter((expansion) =>
+          directExpansionFactMatch(
+            expansion,
+            term.value,
+            directIdentityTokens,
+          ),
+        )
+        .map(normalizeContextTerm)
+        .filter(Boolean);
+      if (supportingExpansions.length === 0) continue;
+      for (const productId of term.productIds) {
+        if (!familyProductIds.has(productId)) continue;
+        const support =
+          directExpansionSupportByProduct.get(productId) ?? new Set<string>();
+        supportingExpansions.forEach((value) => support.add(value));
+        directExpansionSupportByProduct.set(productId, support);
+      }
+    }
+  }
+  const multiExpansionGroundedProductIds = [
+    ...directExpansionSupportByProduct.entries(),
+  ]
+    .filter(([, support]) => support.size >= 2)
+    .map(([productId]) => productId);
+  const directExpansionGroundedProductIds = [
+    ...new Set([
+      ...exactDirectExpansionGroundedProductIds,
+      ...multiExpansionGroundedProductIds,
+    ]),
+  ].slice(0, 1_000);
   const directSourceFacetSignals =
     currentContextRetrievalMode === "DIRECT"
       ? sourceGroundedAttributeFacets(originalQuery, rewrite)
       : [];
-  const directSourceFacetGroundedProductIds =
-    directSourceFacetSignals.length > 0
+  const directSourceFacetEvidenceSignals =
+    directSourceFacetSignals.filter((signal) => !isCommerceOnlyValue(signal));
+  const collectDirectFacetProducts = (facet: string) => {
+    const productIds = new Set<string>();
+    for (const term of terms) {
+      if (
+        ![
+          "ATTRIBUTE",
+          "VARIANT_OPTION",
+          "USE_CASE",
+          "SOFT_CONTEXT",
+          "COMPATIBILITY",
+        ].includes(term.kind) ||
+        !sourceContextCatalogValueMatch(term.kind, term.value, facet)
+      ) {
+        continue;
+      }
+      for (const productId of term.productIds) {
+        if (
+          familyProductIds.size === 0 ||
+          familyProductIds.has(productId)
+        ) {
+          productIds.add(productId);
+        }
+      }
+    }
+    return productIds;
+  };
+  const directSourceFacetProductSets =
+    directSourceFacetEvidenceSignals.map(collectDirectFacetProducts);
+  const directSourceFacetGroundedProductIds = [
+    ...new Set(
+      directSourceFacetProductSets.flatMap((set) => [...set]),
+    ),
+  ].slice(0, 1_000);
+
+  // Consensus is reserved for source-owned high-confidence objective/capability
+  // facets. Soft contexts such as "everyday wear" continue to rerank, but do
+  // not become an AND gate with an explicit attribute such as "comfortable".
+  const directConsensusFacetSignals = [
+    ...new Set(
+      (rewrite.planning?.resolvedSegments ?? [])
+        .filter(
+          (segment) =>
+            ["ATTRIBUTE", "COMPATIBILITY"].includes(segment.field) &&
+            segment.confidence >= 0.8 &&
+            sourceContainsFacet(originalQuery, segment.text),
+        )
+        .map((segment) => normalizeContextTerm(segment.canonicalValue))
+        .filter(Boolean)
+        .filter((signal) => directSourceFacetEvidenceSignals.includes(signal))
+        .filter((signal) => !isCommerceOnlyValue(signal)),
+    ),
+  ];
+  const directConsensusFacetProductSets =
+    directConsensusFacetSignals.map(collectDirectFacetProducts);
+  const allDirectConsensusFacetsGrounded =
+    directConsensusFacetProductSets.length > 0 &&
+    directConsensusFacetProductSets.every((set) => set.size > 0);
+  const directSourceFacetConsensusProductIds =
+    allDirectConsensusFacetsGrounded
       ? [
-          ...new Set(
-            terms
-              .filter((term) => {
-                if (
-                  !["ATTRIBUTE", "VARIANT_OPTION", "USE_CASE", "SOFT_CONTEXT"].includes(
-                    term.kind,
-                  )
-                ) {
-                  return false;
-                }
-                if (
-                  matchingProductIds.size > 0 &&
-                  ![...term.productIds].some((productId) =>
-                    matchingProductIds.has(productId),
-                  )
-                ) {
-                  return false;
-                }
-                return directSourceFacetSignals.some((facet) =>
-                  sourceContextCatalogValueMatch(term.kind, term.value, facet),
-                );
-              })
-              .flatMap((term) =>
-                [...term.productIds].filter(
-                  (productId) =>
-                    matchingProductIds.size === 0 ||
-                    matchingProductIds.has(productId),
+          ...directConsensusFacetProductSets
+            .slice(1)
+            .reduce(
+              (intersection, set) =>
+                new Set(
+                  [...intersection].filter((productId) => set.has(productId)),
                 ),
-              ),
-          ),
+              new Set(directConsensusFacetProductSets[0]),
+            ),
         ].slice(0, 1_000)
       : [];
   const discoverySourceIdentityProductIds =
@@ -1839,11 +1912,176 @@ export async function applyShopContextToQuery({
           ),
         ].slice(0, 2_000)
       : [];
+  // A shopper-owned product class needs typed identity evidence. An attribute
+  // shared by another family cannot establish that class, regardless of cosine.
+  const ungroundedSourceProductClass = canonicalTypeCoverageComplete &&
+    sourceOwnedDiscoveryIdentityTargets.some((target) =>
+      discoveryIdentityTargetLooksLikeProductClass(target, semanticExpansionValues) &&
+      !terms.some((term) =>
+        (term.kind === "CATEGORY" && term.normalizedValue === normalizeContextTerm(target)) ||
+        (["USE_CASE", "SOFT_CONTEXT"].includes(term.kind) &&
+          sourceContextCatalogValueMatch(term.kind, term.value, target)) ||
+        discoverySourceIdentityCatalogMatch({
+          kind: term.kind, catalogValue: term.value, semanticTarget: target,
+          expansionValues: semanticExpansionValues,
+        }),
+      ),
+    );
+  // Explicit "with X" denotes a requested feature. If the planner left X
+  // unresolved, neighboring family/context facts do not prove that feature.
+  const explicitFeature = originalQuery.match(/\bwith\s+([^,.;!?]+)$/iu)?.[1]?.trim();
+  const unresolvedFeature = explicitFeature &&
+    !(rewrite.planning?.resolvedSegments ?? []).some((segment) =>
+      normalizeContextTerm(segment.text).includes(normalizeContextTerm(explicitFeature)) ||
+      normalizeContextTerm(segment.canonicalValue).includes(normalizeContextTerm(explicitFeature)),
+    );
+  const ungroundedExplicitFeature = Boolean(unresolvedFeature &&
+    !terms.some((term) =>
+      ["ATTRIBUTE", "VARIANT_OPTION", "USE_CASE", "COMPATIBILITY"].includes(term.kind) &&
+      sourceContextCatalogValueMatch(term.kind, term.value, explicitFeature!),
+    ));
+  const resolvedDiscoverySourceFacetSignals =
+    currentContextRetrievalMode === "DISCOVERY"
+      ? [
+          ...new Set(
+            (rewrite.planning?.resolvedSegments ?? [])
+              .filter(
+                (segment) =>
+                  ["CONTEXT", "ATTRIBUTE", "COMPATIBILITY"].includes(
+                    segment.field,
+                  ) &&
+                  segment.confidence >= 0.7,
+              )
+              .map((segment) =>
+                normalizeContextTerm(segment.canonicalValue),
+              )
+              .filter(Boolean),
+          ),
+        ]
+      : [];
+  const sourceOwnedTranslatedFacetSignals =
+    currentContextRetrievalMode === "DISCOVERY"
+      ? (() => {
+          const source = sourceTargetText(originalQuery, rewrite);
+          const targetTerms = rewrite.analysis.semanticMustTerms ?? [];
+          const sourceTerms = rewrite.analysis.semanticSourceMustTerms ?? [];
+          const length = Math.min(targetTerms.length, sourceTerms.length);
+          const signals = new Set<string>();
+          for (let index = 0; index < length; index += 1) {
+            const target = normalizeContextTerm(targetTerms[index] ?? "");
+            const sourceTerm = sourceTerms[index] ?? "";
+            if (
+              !target ||
+              !sourceTerm ||
+              !sourceContainsFacet(source, sourceTerm) ||
+              isCommerceOnlyValue(target)
+            ) {
+              continue;
+            }
+            const tokens = meaningfulTokens(target);
+            if (
+              tokens.length === 0 ||
+              tokens.every((token) => GENERIC_SOURCE_CONTEXT_TOKENS.has(token))
+            ) {
+              continue;
+            }
+            // If the translated target itself looks like a product class
+            // ("tai nghe" -> "headphones"), it must be proven by identity/
+            // taxonomy evidence. Do not let an accessory COMPATIBILITY or
+            // incidental ATTRIBUTE mentioning that class establish existence.
+            if (
+              discoveryIdentityTargetLooksLikeProductClass(
+                target,
+                semanticExpansionValues,
+              )
+            ) {
+              continue;
+            }
+            signals.add(target);
+          }
+          return [...signals];
+        })()
+      : [];
+  const translatedFacetSignalSet = new Set(sourceOwnedTranslatedFacetSignals);
+  const resolvedFacetSignalSet = new Set(resolvedDiscoverySourceFacetSignals);
+  const discoverySourceFacetSignals =
+    currentContextRetrievalMode === "DISCOVERY"
+      ? [
+          ...new Set([
+            ...resolvedDiscoverySourceFacetSignals,
+            ...sourceOwnedTranslatedFacetSignals,
+          ]),
+        ]
+      : [];
+  const discoverySourceFacetProductIds =
+    discoverySourceFacetSignals.length > 0
+      ? [
+          ...new Set(
+            terms
+              .filter(
+                (term) =>
+                  [
+                    "ATTRIBUTE",
+                    "VARIANT_OPTION",
+                    "USE_CASE",
+                    "SOFT_CONTEXT",
+                    "COMPATIBILITY",
+                  ].includes(term.kind) &&
+                  discoverySourceFacetSignals.some((signal) => {
+                    const translatedOnly =
+                      translatedFacetSignalSet.has(signal) &&
+                      !resolvedFacetSignalSet.has(signal);
+                    if (
+                      translatedOnly &&
+                      meaningfulTokens(signal).length === 1 &&
+                      ["ATTRIBUTE", "VARIANT_OPTION", "COMPATIBILITY"].includes(
+                        term.kind,
+                      )
+                    ) {
+                      // A translated one-word open-world need ("print",
+                      // "weekend", "hiking") may ground through explicit
+                      // use-case/context facts, but not through an incidental
+                      // attribute or compatibility mention.
+                      return false;
+                    }
+                    return sourceContextCatalogValueMatch(
+                      term.kind,
+                      term.value,
+                      signal,
+                    );
+                  }),
+              )
+              .flatMap((term) => [...term.productIds]),
+          ),
+        ].slice(0, 2_000)
+      : [];
+  // A context adjunct alone cannot establish a multi-part functional need.
+  // Validate source evidence on each product, independent of display budgets.
+  const discriminativeDiscoveryNeeds = (rewrite.analysis.semanticMustTerms ?? []).filter(
+    (value) => meaningfulTokens(value).some(
+      (token) => !GENERIC_SOURCE_CONTEXT_TOKENS.has(token),
+    ),
+  );
+  const sourceNeedSupport = new Map<string, Set<number>>();
+  if (discriminativeDiscoveryNeeds.length >= 3) {
+    for (const term of terms) {
+      if (!["USE_CASE", "SOFT_CONTEXT", "COMPATIBILITY"].includes(term.kind)) continue;
+      discriminativeDiscoveryNeeds.forEach((need, index) => {
+        if (!sourceContextCatalogValueMatch(term.kind, term.value, need)) return;
+        for (const id of term.productIds) {
+          const support = sourceNeedSupport.get(id) ?? new Set<number>();
+          support.add(index);
+          sourceNeedSupport.set(id, support);
+        }
+      });
+    }
+  }
   const discoverySourceGroundedProductIds =
     currentContextRetrievalMode === "DISCOVERY"
       ? [
           ...new Set([
             ...discoverySourceIdentityProductIds,
+            ...discoverySourceFacetProductIds,
             ...selectedContextTerms
               .filter((term) => {
                 if (term.score < 25) return false;
@@ -1888,7 +2126,12 @@ export async function applyShopContextToQuery({
               })
               .flatMap((term) => [...term.productIds]),
           ]),
-        ].slice(0, 1_000)
+        ].filter((id) =>
+          discriminativeDiscoveryNeeds.length < 3 ||
+          discoverySourceIdentityProductIds.includes(id) ||
+          (sourceNeedSupport.get(id)?.size ?? 0) >=
+            Math.ceil(discriminativeDiscoveryNeeds.length / 2),
+        ).slice(0, 1_000)
       : [];
   const discoveryExpansionGroundedProductIds =
     retrievalModeOf(originalQuery, rewrite) === "DISCOVERY"
@@ -1981,7 +2224,10 @@ export async function applyShopContextToQuery({
       identityCandidateProductIds: [...matchingProductIds],
       directExpansionGroundedProductIds,
       directSourceFacetGroundedProductIds,
+      directSourceFacetConsensusProductIds,
       discoverySourceIdentityProductIds,
+      ungroundedSourceProductClass,
+      ungroundedExplicitFeature,
       discoverySourceGroundedProductIds,
       discoveryExpansionGroundedProductIds,
     },
@@ -2084,7 +2330,34 @@ function sourceSemanticTermForCanonical(
   return null;
 }
 
-function sourceContextCatalogValueMatch(
+function objectiveFacetAssignmentValue(value: string) {
+  const match = value.match(
+    /^\s*(?:color|colour|material|fabric|finish|pattern)\s*=\s*(.+?)\s*$/i,
+  );
+  return match?.[1] ? normalizeContextTerm(match[1]) : null;
+}
+
+function directExpansionFactMatch(
+  expansion: string,
+  catalogValue: string,
+  identityTokens: Set<string>,
+) {
+  const expansionTokens = meaningfulTokens(expansion).filter(
+    (token) =>
+      !identityTokens.has(token) &&
+      !GENERIC_SOURCE_CONTEXT_TOKENS.has(token),
+  );
+  const catalogTokens = new Set(meaningfulTokens(catalogValue));
+  const overlap = [
+    ...new Set(expansionTokens.filter((token) => catalogTokens.has(token))),
+  ];
+  if (overlap.length >= 2) return true;
+  if (overlap.length !== 1) return false;
+  const token = overlap[0];
+  return token.length >= 5 && !GENERIC_DISCOVERY_LEAF_TOKENS.has(token);
+}
+
+export function sourceContextCatalogValueMatch(
   kind: string,
   catalogValue: string,
   sourceSignal: string,
@@ -2095,6 +2368,30 @@ function sourceContextCatalogValueMatch(
 
   const signalTokens = meaningfulTokens(normalizedSignal);
   const valueTokens = meaningfulTokens(normalizedValue);
+
+  if (kind === "ATTRIBUTE") {
+    const assigned = objectiveFacetAssignmentValue(catalogValue);
+    if (assigned) {
+      const assignedTokens = meaningfulTokens(assigned);
+      return (
+        assignedTokens.length === signalTokens.length &&
+        signalTokens.every((token) => assignedTokens.includes(token))
+      );
+    }
+    // Shopper-owned multi-token attributes are specific facts. A broader
+    // catalog value must not prove a narrower request: "100% cotton" does not
+    // prove "100% cotton lining". Token order may differ ("lining: 100% cotton").
+    if (signalTokens.length > 1) {
+      return signalTokens.every((token) => valueTokens.includes(token));
+    }
+    // A one-token catalog attribute can be elaborated by the merchant/profile
+    // with its affected component ("waterproof synthetic sole"). Treat the
+    // shopper-owned token as factual evidence when it appears as a standalone
+    // token; family scoping is enforced separately so "waterproof jacket"
+    // cannot prove "waterproof shoes".
+    return valueTokens.includes(signalTokens[0]);
+  }
+
   if (
     ["USE_CASE", "SOFT_CONTEXT"].includes(kind) &&
     signalTokens.length === 1 &&
@@ -2103,7 +2400,14 @@ function sourceContextCatalogValueMatch(
     // For a one-word need, prefer contexts where that word is the semantic
     // head ("road running", "carrying a laptop"), not an unrelated phrase
     // that merely starts with it ("running errands").
-    return valueTokens[valueTokens.length - 1] === signalTokens[0];
+    const discriminativeValueTokens = valueTokens.filter(
+      (token) => !GENERIC_SOURCE_CONTEXT_TOKENS.has(token),
+    );
+    return (
+      valueTokens[valueTokens.length - 1] === signalTokens[0] ||
+      (discriminativeValueTokens.length === 1 &&
+        discriminativeValueTokens[0] === signalTokens[0])
+    );
   }
 
   return (
@@ -2118,17 +2422,76 @@ function sourceGroundedAttributeFacets(
 ) {
   const source = sourceTargetText(originalQuery, rewrite);
   const facets = new Set<string>();
-  for (const segment of rewrite.planning?.resolvedSegments ?? []) {
-    if (!["ATTRIBUTE", "CONTEXT"].includes(segment.field)) continue;
+  const negativeFacetSignals = [
+    ...(rewrite.analysis.negativeTerms ?? []),
+    ...(rewrite.analysis.negativeAttributes ?? []),
+  ]
+    .map(normalizeContextTerm)
+    .filter(Boolean);
+  const isNegativeFacet = (value: string) => {
+    const normalized = normalizeContextTerm(value);
+    return negativeFacetSignals.some(
+      (negative) =>
+        normalized === negative ||
+        sourceContainsFacet(normalized, negative) ||
+        sourceContainsFacet(negative, normalized),
+    );
+  };
+  const resolvedSegments = rewrite.planning?.resolvedSegments ?? [];
+  for (const segment of resolvedSegments) {
+    if (!["ATTRIBUTE", "CONTEXT", "COMPATIBILITY"].includes(segment.field)) continue;
+    const nestedInsideIdentity =
+      segment.field !== "CONTEXT" &&
+      segment.confidence < 0.8 &&
+      typeof segment.start === "number" &&
+      typeof segment.end === "number" &&
+      resolvedSegments.some(
+        (identity) =>
+          identity.field === "PRODUCT_TYPE" &&
+          typeof identity.start === "number" &&
+          typeof identity.end === "number" &&
+          identity.start <= segment.start! &&
+          identity.end >= segment.end! &&
+          (identity.start < segment.start! || identity.end > segment.end!),
+      );
+    if (nestedInsideIdentity) continue;
+    if (isNegativeFacet(segment.canonicalValue)) continue;
     if (sourceContainsFacet(source, segment.text)) {
       facets.add(normalizeContextTerm(segment.canonicalValue));
     }
   }
+  const identityInternalLowConfidenceSignals = new Set(
+    resolvedSegments
+      .filter(
+        (segment) =>
+          segment.field !== "CONTEXT" &&
+          segment.confidence < 0.8 &&
+          typeof segment.start === "number" &&
+          typeof segment.end === "number" &&
+          resolvedSegments.some(
+            (identity) =>
+              identity.field === "PRODUCT_TYPE" &&
+              typeof identity.start === "number" &&
+              typeof identity.end === "number" &&
+              identity.start <= segment.start! &&
+              identity.end >= segment.end! &&
+              (identity.start < segment.start! || identity.end > segment.end!),
+          ),
+      )
+      .map((segment) => normalizeContextTerm(segment.canonicalValue)),
+  );
   for (const value of [
     ...(rewrite.analysis.requiredAttributes ?? []),
     ...(rewrite.analysis.optionalPreferences ?? []),
     ...(rewrite.analysis.attributes ?? []),
+    ...(rewrite.analysis.compatibility ?? []),
   ]) {
+    if (identityInternalLowConfidenceSignals.has(normalizeContextTerm(value))) {
+      continue;
+    }
+    if (isNegativeFacet(value)) {
+      continue;
+    }
     if (
       sourceContainsFacet(source, value) ||
       sourceSemanticTermForCanonical(source, rewrite, value)
@@ -2179,6 +2542,13 @@ function isCommerceOnlyValue(value: string) {
   return /\d|\b(?:gia|re|dat|price|budget|cheap|expensive|premium|luxury)\b/.test(
     normalized,
   );
+}
+
+function applyBoundedRerankBoost(baseScore: number, bonus: number) {
+  const ceiling = 0.995;
+  const base = Math.max(0, Math.min(ceiling, baseScore));
+  const strength = Math.max(0, Math.min(0.7, bonus));
+  return Math.min(ceiling, base + (ceiling - base) * strength);
 }
 
 function matchSemanticSignal(
@@ -2444,7 +2814,32 @@ export async function filterResultsByExplicitGender<
   ].map(normalizeContextTerm).filter(Boolean))];
   const currentRetrievalMode =
     retrievalModeOf(originalQuery, rewrite);
-  const strictAttributes = readStrictTargetAttributes(originalQuery, rewrite);
+  const shopperStrictAttributes = readStrictTargetAttributes(originalQuery, rewrite);
+  const sourceFacetPreferences = sourceGroundedAttributeFacets(originalQuery, rewrite);
+  const objectiveClosedWorldAttributes = sourceFacetPreferences.filter((signal) =>
+    rows.some((row) => {
+      if (!["ATTRIBUTE", "VARIANT_OPTION"].includes(row.kind)) return false;
+      const assigned = objectiveFacetAssignmentValue(row.value);
+      return Boolean(
+        assigned &&
+        (
+          sourceContainsFacet(assigned, signal) ||
+          sourceContainsFacet(signal, assigned)
+        ),
+      );
+    }),
+  );
+  const strictAttributes = [
+    ...new Set([
+      ...shopperStrictAttributes,
+    ]),
+  ].filter(
+    (value) =>
+      !negativeSignals.some(
+        (negative) =>
+          normalizeContextTerm(negative) === normalizeContextTerm(value),
+      ),
+  );
   const planningContextSignals = (rewrite.planning?.resolvedSegments ?? [])
     .filter((segment) => segment.field === "CONTEXT")
     .map((segment) => segment.canonicalValue);
@@ -2455,7 +2850,7 @@ export async function filterResultsByExplicitGender<
     ...(rewrite.analysis.useCases ?? []),
     ...planningContextSignals,
   ].filter((value) => !isCommerceOnlyValue(value));
-  const preferredAttributes = sourceGroundedAttributeFacets(originalQuery, rewrite)
+  const preferredAttributes = sourceFacetPreferences
     .filter((value) => !strictAttributes.includes(value))
     .filter((value) => !negativeSignals.includes(value));
   const genericSemanticFacetTokens = new Set([
@@ -2513,6 +2908,16 @@ export async function filterResultsByExplicitGender<
             sourceContainsFacet(value, audience),
         ),
     );
+  // Deduplicate overlapping source needs so "office" and "office use"
+  // cannot count twice. Identity and commerce signals are handled separately.
+  const sourceCoverageSignals = [...new Set([
+    ...sourceContextNeedSignals,
+    ...sourceFacetPreferences,
+  ].map(normalizeContextTerm))].filter((signal, _, all) =>
+    meaningfulTokens(signal).some((token) => !GENERIC_SOURCE_CONTEXT_TOKENS.has(token)) &&
+    !identitySignals.some((identity) => normalizeContextTerm(identity.value) === signal) &&
+    !all.some((other) => other !== signal && sourceContainsFacet(other, signal)),
+  );
   const sourceGroundedSignals = (signals: string[]) => signals.filter((signal) =>
     sourceContainsFacet(originalQuery, signal) ||
     (rewrite.planning?.resolvedSegments ?? []).some((segment) =>
@@ -2598,6 +3003,10 @@ export async function filterResultsByExplicitGender<
     currentRetrievalMode === "DIRECT"
       ? new Set(rewrite.context?.directSourceFacetGroundedProductIds ?? [])
       : new Set<string>();
+  const sourceGroundedDirectConsensusProductIds =
+    currentRetrievalMode === "DIRECT"
+      ? new Set(rewrite.context?.directSourceFacetConsensusProductIds ?? [])
+      : new Set<string>();
   const sourceGroundedDiscoveryIdentityProductIds =
     currentRetrievalMode === "DISCOVERY"
       ? new Set(rewrite.context?.discoverySourceIdentityProductIds ?? [])
@@ -2612,7 +3021,7 @@ export async function filterResultsByExplicitGender<
       : new Set<string>();
   const normalizedSourceQuery = normalizeContextTerm(originalQuery);
   const versionedEntitySignals =
-    currentRetrievalMode === "DISCOVERY"
+    currentRetrievalMode !== "COMPLEMENT"
       ? [
           ...new Set([
             ...(rewrite.analysis.semanticSourceMustTerms ?? []),
@@ -2753,13 +3162,25 @@ export async function filterResultsByExplicitGender<
             }
             return sum + best;
           }, 0) / sourceContextNeedSignals.length;
+    const sourceNeedCoverage = sourceCoverageSignals.length === 0 ? 0 :
+      sourceCoverageSignals.filter((signal) =>
+        ["ATTRIBUTE", "VARIANT_OPTION", "USE_CASE", "SOFT_CONTEXT", "COMPATIBILITY"]
+          .some((kind) => (byKind.get(kind) ?? []).some((value: string) =>
+            sourceContextCatalogValueMatch(kind, value, signal),
+          )),
+      ).length / sourceCoverageSignals.length;
     const rawVectorSimilarity = Number(
       (result as T & { vectorSimilarity?: number }).vectorSimilarity,
     );
     const rawPrimaryVectorSimilarity = Number(
       (result as T & { primaryVectorSimilarity?: number }).primaryVectorSimilarity,
     );
+    const branchInput = (result as T & { semanticBranchInput?: string }).semanticBranchInput;
+    const identityOnlyBranch = Boolean(branchInput && identitySignals.some((signal) =>
+      normalizeIdentitySignalTokens(branchInput).join(" ") === signal.normalized,
+    ));
     const semanticBranchLift =
+      !identityOnlyBranch &&
       Number.isFinite(rawVectorSimilarity) &&
       Number.isFinite(rawPrimaryVectorSimilarity)
         ? Math.max(0, rawVectorSimilarity - rawPrimaryVectorSimilarity)
@@ -2874,18 +3295,39 @@ export async function filterResultsByExplicitGender<
     const exactFacetValues = valuesForKinds([
       "ATTRIBUTE", "VARIANT_OPTION", "VARIANT", "PRODUCT_TITLE",
     ]);
+    const objectiveClosedWorldSet = new Set(
+      objectiveClosedWorldAttributes.map(normalizeContextTerm),
+    );
+    const exactObjectiveFacetMatch = (signal: string) => {
+      const normalizedSignal = normalizeContextTerm(signal);
+      return exactFacetValues.some((value) => {
+        const assigned = objectiveFacetAssignmentValue(value);
+        if (assigned) {
+          return normalizeContextTerm(assigned) === normalizedSignal;
+        }
+        return normalizeContextTerm(value) === normalizedSignal;
+      });
+    };
     const exactFacetMatch = (signal: string) =>
-      exactFacetValues.some((value) => sourceContainsFacet(value, signal));
+      objectiveClosedWorldSet.has(normalizeContextTerm(signal))
+        ? exactObjectiveFacetMatch(signal)
+        : exactFacetValues.some((value) =>
+            sourceContextCatalogValueMatch("ATTRIBUTE", value, signal),
+          );
     const preferredFacetMatches = preferredAttributes.reduce((score, signal) => {
       const normalizedSignal = normalizeContextTerm(signal);
       if (!normalizedSignal) return score;
-      const exactValue = exactFacetValues.some(
-        (value) => normalizeContextTerm(value) === normalizedSignal,
-      );
+      const exactValue = objectiveClosedWorldSet.has(normalizedSignal)
+        ? exactObjectiveFacetMatch(signal)
+        : exactFacetValues.some(
+            (value) => normalizeContextTerm(value) === normalizedSignal,
+          );
       if (exactValue) return score + 1;
-      const compoundValue = exactFacetValues.some((value) =>
-        sourceContainsFacet(value, signal),
-      );
+      const compoundValue =
+        !objectiveClosedWorldSet.has(normalizedSignal) &&
+        exactFacetValues.some((value) =>
+          sourceContextCatalogValueMatch("ATTRIBUTE", value, signal),
+        );
       // Exact merchant/source facet values should outrank compound variants
       // such as Black over Navy/Black, while compound values remain useful
       // recall rather than being discarded.
@@ -2904,6 +3346,8 @@ export async function filterResultsByExplicitGender<
         expansionGroundedDirectProductIds.has(result.productId),
       directSourceFacetGrounding:
         sourceGroundedDirectProductIds.has(result.productId),
+      directSourceFacetConsensusGrounding:
+        sourceGroundedDirectConsensusProductIds.has(result.productId),
       sourceDiscoveryIdentityGrounding:
         sourceGroundedDiscoveryIdentityProductIds.has(result.productId),
       sourceDiscoveryGrounding:
@@ -2913,6 +3357,7 @@ export async function filterResultsByExplicitGender<
       attributeMatch,
       semanticMustFacetMatch,
       directContextNeedMatch,
+      sourceNeedCoverage,
       semanticBranchLift,
       discoveryExpansionPreferenceMatch,
       preferredFacetMatches,
@@ -2930,6 +3375,24 @@ export async function filterResultsByExplicitGender<
       hasKnownCategory: categoryValues.length > 0,
     };
   });
+  const hasDirectSourceFacetConsensus =
+    sourceGroundedDirectConsensusProductIds.size > 0;
+  const strongDirectSourceFacetEvidenceCount =
+    currentRetrievalMode === "DIRECT"
+      ? (hasDirectSourceFacetConsensus
+          ? sourceGroundedDirectConsensusProductIds.size
+          : sourceGroundedDirectProductIds.size)
+      : 0;
+  // Grounding is catalog evidence, not dependent on whether dense retrieval
+  // happened to return a proven item. Missing the matching item must not turn
+  // off this precision guard and fill the page with generic siblings.
+  const enforceSparseDirectSourceFacetEvidence =
+    currentRetrievalMode === "DIRECT" &&
+    sourceFacetPreferences.length > 0 &&
+    strongDirectSourceFacetEvidenceCount > 0 &&
+    strongDirectSourceFacetEvidenceCount <=
+      Math.max(12, Math.ceil(scored.length * 0.35));
+
   const strongDirectContextEvidenceCount =
     currentRetrievalMode === "DIRECT"
       ? scored.filter(
@@ -2945,16 +3408,9 @@ export async function filterResultsByExplicitGender<
     strongDirectContextEvidenceCount <=
       Math.max(8, Math.ceil(scored.length * 0.35));
 
-  const strongDiscoveryExpansionEvidenceCount =
-    currentRetrievalMode === "DISCOVERY"
-      ? scored.filter((item) => item.discoveryExpansionPreferenceMatch >= 0.75).length
-      : 0;
-  const enforceDiscoveryExpansionEvidence =
-    currentRetrievalMode === "DISCOVERY" &&
-    semanticMustFacetSignals.length >= 2 &&
-    strongDiscoveryExpansionEvidenceCount >= 3 &&
-    strongDiscoveryExpansionEvidenceCount >= Math.ceil(scored.length * 0.2);
-
+  // LLM semantic expansions are retrieval probes and ranking hints only.
+  // They must never become a hard eligibility filter: a product may satisfy
+  // the shopper need without storing every word from an expansion phrase.
   const hasIdentityMatch = scored.some((item) => item.identityMatch >= 0.5);
   const directIdentityGrounded = shouldEnforceDirectIdentity({
     retrievalMode: currentRetrievalMode,
@@ -3014,13 +3470,6 @@ export async function filterResultsByExplicitGender<
       return [];
     }
     if (
-      enforceDiscoveryExpansionEvidence &&
-      item.discoveryExpansionPreferenceMatch < 0.75
-    ) {
-      exactConstraintFilteredCount += 1;
-      return [];
-    }
-    if (
       complementaryReferenceSignals.length > 0 &&
       item.complementaryReferenceMatch >= 0.75
     ) {
@@ -3033,6 +3482,23 @@ export async function filterResultsByExplicitGender<
       item.identityMatch < 0.34
     ) {
       identityFilteredCount += 1;
+      return [];
+    }
+    if (
+      enforceSparseDirectSourceFacetEvidence &&
+      !(
+        hasDirectSourceFacetConsensus
+          ? item.directSourceFacetConsensusGrounding
+          : item.directSourceFacetGrounding
+      ) &&
+      item.semanticBranchLift < 0.025
+    ) {
+      // A shopper-owned explicit facet that exists on only a small subset of
+      // the requested family is high-precision evidence. Do not fill the page
+      // with generic siblings merely because the family vector is strong.
+      // A meaningful secondary-branch lift can still rescue a product whose
+      // semantic profile is incomplete.
+      exactConstraintFilteredCount += 1;
       return [];
     }
     if (
@@ -3082,6 +3548,7 @@ export async function filterResultsByExplicitGender<
         item.identityMatch * (directIdentityGrounded ? 0.22 : 0.12),
       ) +
       Math.min(0.03, item.attributeMatch * 0.03) +
+      (sourceCoverageSignals.length >= 2 ? Math.min(0.08, item.sourceNeedCoverage * 0.08) : 0) +
       // Exact typed/merchant facet evidence outranks nearby vector shades,
       // but never outweighs a grounded product identity.
       Math.min(0.08, item.preferredFacetMatches * 0.08) +
@@ -3103,7 +3570,11 @@ export async function filterResultsByExplicitGender<
       // vector similarity, but remains a ranking signal rather than a hard
       // filter. This keeps color/material soft while allowing relational needs
       // such as "bag for laptop" to outrank grooming/lunch bags.
-      (item.directSourceFacetGrounding ? 0.12 : 0) +
+      (item.directSourceFacetConsensusGrounding
+        ? 0.14
+        : item.directSourceFacetGrounding
+          ? 0.06
+          : 0) +
       // Catalog-grounded category/type evidence is a soft ranking signal for
       // discovery, never a closed-world filter from expansion prose.
       Math.min(0.16, item.discoveryGroundingMatch * 0.16) +
@@ -3121,9 +3592,13 @@ export async function filterResultsByExplicitGender<
       ) +
       0;
     typedFacetMatchCount += item.preferredFacetMatches;
+    const typedRerankScore = applyBoundedRerankBoost(
+      result.score,
+      lexicalBonus,
+    );
     return [{
       ...result,
-      score: Math.min(1, result.score + lexicalBonus),
+      score: typedRerankScore,
       // DIRECT search uses a tiered internal sort: first keep strongly grounded
       // product identity, then prefer exact merchant/source facets, and only
       // then compare semantic/vector score. This keeps ordinary color/material
@@ -3136,9 +3611,14 @@ export async function filterResultsByExplicitGender<
           ? 1
           : 0,
       _directSourceFacetTier:
-        currentRetrievalMode === "DIRECT" && item.directSourceFacetGrounding
+        currentRetrievalMode === "DIRECT" &&
+        (
+          item.directSourceFacetConsensusGrounding ||
+          (!hasDirectSourceFacetConsensus && item.directSourceFacetGrounding)
+        )
           ? 1
           : 0,
+      _sourceNeedCoverage: item.sourceNeedCoverage,
       _preferredFacetMatches: item.preferredFacetMatches,
       _sourceDiscoveryTier:
         currentRetrievalMode === "DISCOVERY" && item.sourceDiscoveryGrounding
@@ -3162,13 +3642,15 @@ export async function filterResultsByExplicitGender<
         item.expansionDiscoveryGrounding
           ? 1
           : 0,
-      _typedRerankScore: result.score + lexicalBonus,
+      _typedRerankScore: typedRerankScore,
     }];
   });
   filtered.sort((left, right) =>
     right._identityTier - left._identityTier ||
-    right._directExpansionTier - left._directExpansionTier ||
     right._directSourceFacetTier - left._directSourceFacetTier ||
+    (currentRetrievalMode === "DISCOVERY" && sourceCoverageSignals.length >= 2
+      ? Number(right._sourceNeedCoverage === 1) - Number(left._sourceNeedCoverage === 1)
+      : 0) ||
     (
       directIdentityGrounded
         ? right._preferredFacetMatches - left._preferredFacetMatches
@@ -3203,6 +3685,82 @@ export async function filterResultsByExplicitGender<
     right._typedRerankScore - left._typedRerankScore ||
     right.score - left.score,
   );
+
+  const semanticThreshold = (() => {
+    const parsed = Number.parseFloat(
+      process.env.AI_SEARCH_VECTOR_SCORE_THRESHOLD || "",
+    );
+    return Number.isFinite(parsed) && parsed >= -1 && parsed <= 1
+      ? parsed
+      : 0.35;
+  })();
+  const relevanceFiltered = applyFinalRelevanceCutoff({
+    results: filtered,
+    retrievalMode: currentRetrievalMode,
+    semanticThreshold,
+  });
+  filtered.splice(0, filtered.length, ...relevanceFiltered);
+
+  // Broad DISCOVERY should represent several independently grounded semantic
+  // branches near the top instead of letting one high-cosine family monopolize
+  // the first page. Keep the original #1, promote at most one strong champion
+  // per secondary branch, then preserve the existing typed-rerank order.
+  if (
+    currentRetrievalMode === "DISCOVERY" &&
+    sourceGroundedDiscoveryIdentityProductIds.size === 0 &&
+    (rewrite.analysis.semanticExpansions ?? []).length >= 3 &&
+    filtered.length >= 4
+  ) {
+    type DiscoveryBranchResult = T & {
+      semanticBranchIndex?: number;
+      semanticBranchRelativeScore?: number;
+    };
+    const topRankScore = filtered[0]?._typedRerankScore ?? filtered[0]?.score ?? 0;
+    const branchChampions = new Map<
+      number,
+      { item: (typeof filtered)[number]; index: number }
+    >();
+
+    filtered.slice(0, 50).forEach((item, index) => {
+      const result = item as DiscoveryBranchResult;
+      const branch = Number(result.semanticBranchIndex);
+      const relative = Number(result.semanticBranchRelativeScore);
+      if (
+        !Number.isSafeInteger(branch) ||
+        branch <= 0 ||
+        !Number.isFinite(relative) ||
+        relative < 0.9 ||
+        (sourceCoverageSignals.length >= 2 &&
+          item._sourceNeedCoverage < filtered[0]._sourceNeedCoverage) ||
+        item._typedRerankScore < topRankScore * 0.72
+      ) {
+        return;
+      }
+      if (!branchChampions.has(branch)) {
+        branchChampions.set(branch, { item, index });
+      }
+    });
+
+    if (branchChampions.size >= 2) {
+      const diversified: typeof filtered = [];
+      const used = new Set<string>();
+      const push = (item: (typeof filtered)[number]) => {
+        if (used.has(item.productId)) return;
+        used.add(item.productId);
+        diversified.push(item);
+      };
+
+      push(filtered[0]);
+      [...branchChampions.values()]
+        .sort((left, right) => left.index - right.index)
+        .forEach(({ item }) => {
+          if (diversified.length < 4) push(item);
+        });
+      filtered.forEach(push);
+      filtered.splice(0, filtered.length, ...diversified);
+    }
+  }
+
   const filterCodeMs = Date.now() - filterStartedAt;
   onDiagnostics?.({
     requestedGender,
@@ -3224,6 +3782,7 @@ export async function filterResultsByExplicitGender<
     _identityTier: _identityTierIgnored,
     _directExpansionTier: _directExpansionTierIgnored,
     _directSourceFacetTier: _directSourceFacetTierIgnored,
+    _sourceNeedCoverage: _sourceNeedCoverageIgnored,
     _preferredFacetMatches: _preferredFacetMatchesIgnored,
     _sourceDiscoveryTier: _sourceDiscoveryTierIgnored,
     _semanticNeedTier: _semanticNeedTierIgnored,

@@ -109,11 +109,19 @@ export function matchCatalogTerms(
       }
     }
   }
-  const candidates = [...candidateSet].sort(
-    (left, right) =>
+  const candidates = [...candidateSet].sort((left, right) => {
+    // Resolve the longest exact catalog phrase first. Otherwise a short model
+    // token such as "Pro" can occupy the tail of a real compatibility phrase
+    // such as "iPhone 18 Pro" before the full phrase is considered.
+    const widthDelta =
+      right.normalized.split(" ").filter(Boolean).length -
+      left.normalized.split(" ").filter(Boolean).length;
+    if (widthDelta !== 0) return widthDelta;
+    return (
       (dictionary.matchIndex.rank.get(left) ?? Number.MAX_SAFE_INTEGER) -
-      (dictionary.matchIndex.rank.get(right) ?? Number.MAX_SAFE_INTEGER),
-  );
+      (dictionary.matchIndex.rank.get(right) ?? Number.MAX_SAFE_INTEGER)
+    );
+  });
 
   for (const entry of candidates) {
     const span = phraseTokenSpan(
@@ -155,7 +163,7 @@ export function matchCatalogTerms(
             match.entry.field === "PRODUCT_TYPE" &&
             span.start >= match.start &&
             span.end <= match.end &&
-            span.end - span.start < match.end - match.start,
+            span.end - span.start <= match.end - match.start,
         )
       : null;
     const allowNestedFact = Boolean(
@@ -201,11 +209,18 @@ export function matchCatalogTerms(
       ...(dictionary.matchIndex.fuzzySingleTokenByLength.get(token.length - 1) ?? []),
       ...(dictionary.matchIndex.fuzzySingleTokenByLength.get(token.length) ?? []),
       ...(dictionary.matchIndex.fuzzySingleTokenByLength.get(token.length + 1) ?? []),
-    ].filter(
-      (entry) =>
-        fuzzySafeFields.has(entry.field) &&
-        editDistanceAtMostOne(token, entry.normalized),
-    );
+    ].filter((entry) => {
+      if (!editDistanceAtMostOne(token, entry.normalized)) return false;
+      if (fuzzySafeFields.has(entry.field)) return true;
+
+      // A missing/extra character is a common proper-name typo (Keirn ->
+      // Keirin). Allow that narrow case for BRAND/MODEL, but never same-length
+      // substitutions: those turned ordinary words such as daily into Daisy.
+      return (
+        ["BRAND", "MODEL"].includes(entry.field) &&
+        Math.abs(token.length - entry.normalized.length) === 1
+      );
+    });
     const uniqueCandidates = [...new Set(fuzzyCandidates)];
     if (uniqueCandidates.length !== 1) continue;
     const entry = uniqueCandidates[0];

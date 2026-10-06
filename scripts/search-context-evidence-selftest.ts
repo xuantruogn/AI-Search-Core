@@ -6,6 +6,7 @@ import {
   matchesExplicitNegativeFacet,
   preferTypedContextEvidence,
   semanticMustSignalMatch,
+  sourceContextCatalogValueMatch,
   shouldEnforceDirectIdentity,
 } from "../app/services/search/shop-context-index.server";
 const selected = preferTypedContextEvidence([
@@ -55,3 +56,11 @@ assert.ok(!matchesExplicitNegativeFacet(["red lining", "blue shell"], "red shell
 assert.equal(shouldEnforceDirectIdentity({ retrievalMode: "DIRECT", signals: [{ fallback: true }], hasIdentityMatch: true }), false);
 assert.equal(shouldEnforceDirectIdentity({ retrievalMode: "DIRECT", signals: [{ fallback: false }], hasIdentityMatch: true }), true);
 console.log("PASS: typed identity provenance and explicit negative facet morphology");
+
+// Generic activity prose must not change source-owned context grounding.
+assert.equal(sourceContextCatalogValueMatch("USE_CASE", "weekend wear", "weekend"), true);
+assert.equal(sourceContextCatalogValueMatch("SOFT_CONTEXT", "weekend use", "weekend"), true);
+assert.equal(sourceContextCatalogValueMatch("USE_CASE", "running errands", "running"), false);
+assert.equal(sourceContextCatalogValueMatch("USE_CASE", "home printing", "home"), false);
+assert.equal(sourceContextCatalogValueMatch("ATTRIBUTE", "weekend wear", "weekend"), true);
+assert.equal(sourceContextCatalogValueMatch("USE_CASE", "office use", "office"), true);
