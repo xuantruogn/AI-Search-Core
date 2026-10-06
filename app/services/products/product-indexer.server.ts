@@ -218,8 +218,8 @@ export async function indexProduct({
     registryProduct,
     semanticProfileState,
   ] = await Promise.all([
-    // Normal sync only needs payload metadata. Pulling the 768D vector for
-    // every unchanged webhook/catalog pass wastes Qdrant bandwidth and heap.
+    // Normal sync only needs payload metadata. Pulling the full dense vector
+    // for every unchanged webhook/catalog pass wastes Qdrant bandwidth and heap.
     getProductVectorForShop({
       shop,
       productId: product.id,
@@ -388,35 +388,50 @@ export async function indexProduct({
     };
   }
 
+  // A schema/pipeline migration must not consume the merchant's monthly
+  // vector-update quota when the Shopify source document itself is unchanged.
+  // With a versioned Qdrant collection the new collection can be empty while
+  // the authoritative DB registry still records the previous vector/hash, so
+  // migration detection must use either source instead of requiring a point in
+  // the current collection.
+  const previousDocumentHash =
+    existingVector?.documentHash ??
+    registryProduct?.documentHash ??
+    "";
+
   const isPipelineMigration =
-    Boolean(
-      existingVector &&
-        [
-          createLegacyProductDocumentHash(
-            document,
-          ),
+    [
+      createLegacyProductDocumentHash(
+        document,
+      ),
 
-          createProductDocumentHashForVersion(
-            document,
-            searchLanguage,
-            "semantic-product-v2",
-          ),
+      createProductDocumentHashForVersion(
+        document,
+        searchLanguage,
+        "semantic-product-v2",
+      ),
 
-          createProductDocumentHashForVersion(
-            document,
-            searchLanguage,
-            "semantic-product-v3-shop-context",
-          ),
+      createProductDocumentHashForVersion(
+        document,
+        searchLanguage,
+        "semantic-product-v3-shop-context",
+      ),
 
-          createProductDocumentHashForVersion(
-            document,
-            searchLanguage,
-            "semantic-product-v4-general-commerce",
-          ),
-        ].includes(
-          existingVector.documentHash ??
-            "",
-        ),
+      createProductDocumentHashForVersion(
+        document,
+        searchLanguage,
+        "semantic-product-v4-general-commerce",
+      ),
+
+      // This is the last pipeline version that was deployed before the
+      // supply/demand dense + BM25 migration.
+      createProductDocumentHashForVersion(
+        document,
+        searchLanguage,
+        "semantic-product-v5-canonical-shop-type",
+      ),
+    ].includes(
+      previousDocumentHash,
     );
 
   const entitlement =
