@@ -36,10 +36,10 @@ try {
     },
   };
   const candidates = [
-    { productId: "partial", score: 0.52, semanticBranchIndex: 1, semanticBranchRelativeScore: 1 },
-    { productId: "complete", score: 0.48, semanticBranchIndex: 2, semanticBranchRelativeScore: 1 },
-    { productId: "alternative", score: 0.50, semanticBranchIndex: 3, semanticBranchRelativeScore: 1 },
-    { productId: "extra", score: 0.45, semanticBranchIndex: 4, semanticBranchRelativeScore: 1 },
+    { productId: "partial", score: 0.52, vectorSimilarity: 0.52, primaryVectorSimilarity: 0.52, retrievalSources: ["SEMANTIC"], semanticBranchIndex: 1, semanticBranchRelativeScore: 1 },
+    { productId: "complete", score: 0.48, vectorSimilarity: 0.48, primaryVectorSimilarity: 0.48, retrievalSources: ["SEMANTIC"], semanticBranchIndex: 2, semanticBranchRelativeScore: 1 },
+    { productId: "alternative", score: 0.50, vectorSimilarity: 0.50, primaryVectorSimilarity: 0.50, retrievalSources: ["SEMANTIC"], semanticBranchIndex: 3, semanticBranchRelativeScore: 1 },
+    { productId: "extra", score: 0.45, vectorSimilarity: 0.45, primaryVectorSimilarity: 0.45, retrievalSources: ["SEMANTIC"], semanticBranchIndex: 4, semanticBranchRelativeScore: 1 },
   ];
   const results = await filterResultsByExplicitGender({
     shop: "source-coverage-fixture", originalQuery: rewrite.query, rewrite, results: candidates,
@@ -61,9 +61,9 @@ try {
   const identityBranchResults = await filterResultsByExplicitGender({
     shop: "source-coverage-fixture", originalQuery: direct.query, rewrite: direct,
     results: [
-      { productId: "source-jacket", score: 0.45, vectorSimilarity: 0.45, primaryVectorSimilarity: 0.45 },
+      { productId: "source-jacket", score: 0.45, vectorSimilarity: 0.45, primaryVectorSimilarity: 0.45, retrievalSources: ["SEMANTIC"] },
       { productId: "generic-jacket", score: 0.65, vectorSimilarity: 0.65, primaryVectorSimilarity: 0.40,
-        semanticBranchInput: "jacket", semanticBranchIndex: 1 },
+        retrievalSources: ["SEMANTIC"], semanticBranchInput: "jacket", semanticBranchIndex: 1 },
     ],
   });
   assert.deepEqual(identityBranchResults.map(r => r.productId), ["source-jacket"],
@@ -71,7 +71,7 @@ try {
   const missingGroundedResults = await filterResultsByExplicitGender({
     shop: "source-coverage-fixture", originalQuery: direct.query, rewrite: direct,
     results: [{ productId: "generic-jacket", score: 0.65, vectorSimilarity: 0.65,
-      primaryVectorSimilarity: 0.40, semanticBranchInput: "jacket", semanticBranchIndex: 1 }],
+      primaryVectorSimilarity: 0.40, retrievalSources: ["SEMANTIC"], semanticBranchInput: "jacket", semanticBranchIndex: 1 }],
   });
   assert.deepEqual(missingGroundedResults, [],
     "missing the catalog-proven candidate must not disable the facet precision guard");
@@ -83,7 +83,10 @@ try {
       planning: { ...direct.planning, resolvedSegments: [], unresolvedSegments: ["evenings"] },
       context: { directExpansionGroundedProductIds: ["generic-jacket"] },
     },
-    results: [{ productId: "source-jacket", score: 0.6 }, { productId: "generic-jacket", score: 0.55 }],
+    results: [
+      { productId: "source-jacket", score: 0.6, vectorSimilarity: 0.6, primaryVectorSimilarity: 0.6, retrievalSources: ["SEMANTIC"] },
+      { productId: "generic-jacket", score: 0.55, vectorSimilarity: 0.55, primaryVectorSimilarity: 0.55, retrievalSources: ["SEMANTIC"] },
+    ],
   });
   assert.equal(expansionOnly.length, 2,
     "LLM expansion evidence remains a ranking hint and cannot hard-exclude a valid source-family candidate");
