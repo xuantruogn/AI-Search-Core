@@ -2050,15 +2050,22 @@ export async function semanticSearch({
     cleanQuery.split(/\s+/).filter(Boolean).length >= 7
       ? Math.min(effectiveNoEvidenceTopScore, 0.55)
       : effectiveNoEvidenceTopScore;
-  const weakNoEvidenceVector = (effectiveRewrite?.context?.ungroundedSourceProductClass === true || effectiveRewrite?.context?.ungroundedExplicitFeature === true) || shouldRejectNoEvidenceVector({
-    hasStrongCatalogEvidence,
-    topVectorScore,
-    normalThreshold: effectiveNoEvidenceTopScore,
-    transientFallback: transientLlmFallback,
-    transientThreshold: fallbackNeedsSemanticGuard
-      ? fallbackGuardThreshold
-      : transientNoEvidenceThreshold,
-  });
+  // Context grounding may report that a shopper-owned product class is not
+  // currently grounded, but that signal is open-world uncertainty rather than
+  // a closed-world absence proof. Do not let it independently zero the result
+  // set. Certain absence is owned by absence-proof.server; semantic quality
+  // still has to pass the normal vector evidence guard below.
+  const weakNoEvidenceVector =
+    effectiveRewrite?.context?.ungroundedExplicitFeature === true ||
+    shouldRejectNoEvidenceVector({
+      hasStrongCatalogEvidence,
+      topVectorScore,
+      normalThreshold: effectiveNoEvidenceTopScore,
+      transientFallback: transientLlmFallback,
+      transientThreshold: fallbackNeedsSemanticGuard
+        ? fallbackGuardThreshold
+        : transientNoEvidenceThreshold,
+    });
   const expansionOnlyRescue =
     retrievalMode === "DISCOVERY" &&
     !hasStrongCatalogEvidence &&
