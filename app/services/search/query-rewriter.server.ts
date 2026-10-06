@@ -92,9 +92,18 @@ export type QueryRewriteTiming = {
   complexityRoute?: "SIMPLE" | "COMPLEX";
 };
 
+export type SemanticMandatoryConcept = {
+  /** Canonical concept in the configured shop/search language. */
+  target: string;
+  /** Same shopper-owned concept copied/translated from the source query. */
+  source: string;
+};
+
 export type QueryRewriteAnalysis = {
   /** LLM semantic meaning only; exact enforcement remains code-owned. */
   semanticDemand?: SemanticDemandProfile;
+  /** Aligned source/canonical mandatory concepts; preserves provenance. */
+  semanticMandatoryConcepts?: SemanticMandatoryConcept[];
   // Keep PREMIUM/BUDGET in this legacy field for downstream compatibility.
   // marketPreference is the cleaner semantic signal for new consumers.
   sortIntent: "RELEVANCE" | "PRICE_ASC" | "PRICE_DESC" | "PREMIUM" | "BUDGET";
@@ -137,6 +146,10 @@ export type QueryRewriteAnalysis = {
 
 type FastQueryAnalysis = {
   semanticDemand?: SemanticDemandProfile;
+  mandatoryConcepts?: Array<{
+    target?: unknown;
+    source?: unknown;
+  }>;
   detectedLanguage: string;
   retrievalMode?: "DIRECT" | "DISCOVERY" | "COMPLEMENT";
   referenceTerms?: string[];
@@ -148,7 +161,7 @@ type FastQueryAnalysis = {
 };
 
 const QUERY_REWRITE_CACHE_VERSION =
-  "semantic-normalize-v40-supply-demand-context";
+  "semantic-normalize-v41-aligned-mandatory-concepts";
 const rewrittenQueryCache = new Map<string, CacheEntry<QueryRewriteResult>>();
 const pendingRewrites = new Map<string, Promise<QueryRewriteResult>>();
 
@@ -398,6 +411,24 @@ function parseNonPriceStringArray(
   );
 }
 
+function parseMandatoryConcepts(value: unknown) {
+  if (!Array.isArray(value)) return [] as SemanticMandatoryConcept[];
+  const result: SemanticMandatoryConcept[] = [];
+  const seen = new Set<string>();
+  for (const item of value.slice(0, 3)) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const record = item as Record<string, unknown>;
+    const target = parseShortString(record.target, 96);
+    const source = parseShortString(record.source, 96);
+    if (!target || !source) continue;
+    const key = `${normalizeCommerceText(target)}\u0000${normalizeCommerceText(source)}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push({ target, source });
+  }
+  return result;
+}
+
 function normalizeCommerceText(value: string) {
   return value
     .toLocaleLowerCase("vi-VN")
@@ -505,11 +536,14 @@ export function parseRewrittenQuery(
     (value) =>
       normalizeCommerceText(value) !== normalizeCommerceText(semanticQuery),
   );
-  const semanticMustTerms = parseShortStringArray(parsed.mustTerms, 3, 96);
-  const semanticSourceMustTerms = parseShortStringArray(
-    parsed.sourceMustTerms,
-    3,
-    96,
+  const semanticMandatoryConcepts = parseMandatoryConcepts(
+    parsed.mandatoryConcepts,
+  );
+  const semanticMustTerms = semanticMandatoryConcepts.map(
+    (concept) => concept.target,
+  );
+  const semanticSourceMustTerms = semanticMandatoryConcepts.map(
+    (concept) => concept.source,
   );
   const semanticMustNotTerms =
     hasExplicitNegationIntent(originalQuery)
@@ -536,6 +570,7 @@ export function parseRewrittenQuery(
       sortIntent: "RELEVANCE",
       marketPreference: "ANY",
       semanticDemand,
+      semanticMandatoryConcepts,
       intent: normalizedEmbeddingQuery,
       detectedLanguage,
       complexity: complexityRoute,
@@ -717,12 +752,12 @@ async function performRewrite({ shop, cleanQuery, searchLanguage, model, backupM
   try {
     const instructions = [
       `Detect SHOPPER_QUERY language. Target language: ${searchLanguage}.`,
-      `Return detectedLanguage plus semanticQuery and expansions. semanticQuery, expansions, mustTerms, mustNotTerms and referenceTerms MUST all be in target language ${searchLanguage}; translate when needed. sourceMustTerms is the only field allowed to stay in the shopper's original language.`,
+      `Return detectedLanguage plus semanticQuery and expansions. semanticQuery, expansions, mandatoryConcepts.target, mustNotTerms and referenceTerms MUST all be in target language ${searchLanguage}; translate when needed. mandatoryConcepts.source is the only field allowed to stay in the shopper's original language.`,
       "Choose retrievalMode by source-query relation, not by how broad the catalog term is. Use DIRECT whenever the shopper explicitly names the target product or product class they want (a broad class such as pants, eyewear, jackets or backpacks is still DIRECT). Use DISCOVERY only when the shopper states a need, activity, occasion, recipient, environment or desired outcome without naming the target product class. Use COMPLEMENT only when the shopper asks for a product to pair/use/wear with a referenced item.",
       "For relational shopping queries equivalent to 'what should I wear with X', 'Y to wear with X', 'pair with X', or Vietnamese 'mặc gì với X', use COMPLEMENT and put ONLY the referenced item X in referenceTerms. Never put the requested target Y in referenceTerms. referenceTerms is extraction/translation evidence; do not invent additional referenced products.",
-      "In COMPLEMENT mode, mustTerms and sourceMustTerms belong to the requested TARGET product only. Never copy the reference item or reference-only qualifiers into mustTerms/sourceMustTerms. Example: for 'what goes well with a navy coat', coat/navy coat/navy describe the reference and must not become target requirements; referenceTerms should identify the coat while expansions describe plausible complementary products.",
-      "Return mustTerms for semantic conditions whose absence makes a product unacceptable. Required use, season, environment, surface, compatibility, and capability phrases belong in mustTerms; preferences do not. Example: 'snowboard for summer training on artificial slope' requires snowboard, summer, and artificial slope.",
-      "Return sourceMustTerms with the same mandatory concepts in the original shopper-query language when it differs from the target language; otherwise return the same short concepts.",
+      "In COMPLEMENT mode, mandatoryConcepts belong to the requested TARGET product only. Never copy the reference item or reference-only qualifiers into mandatoryConcepts. Example: for 'what goes well with a navy coat', coat/navy coat/navy describe the reference and must not become target requirements; referenceTerms should identify the coat while expansions describe plausible complementary products.",
+      "Return mandatoryConcepts as aligned {target, source} pairs for semantic conditions whose absence makes a product unacceptable. target is the canonical concept in the configured target language; source is the same concept as expressed in the original shopper query. Required target identity, use, season, environment, surface, compatibility, and capability phrases belong here; preferences do not. Example: 'snowboard for summer training on artificial slope' requires aligned pairs for snowboard, summer, and artificial slope.",
+      "mandatoryConcepts preserves provenance: each pair MUST describe one and the same concept. Never reorder or pair an identity target with an occasion/context source phrase.",
       "Return mustNotTerms ONLY when the shopper explicitly excludes something with wording like without/not/exclude/không/loại trừ. Never infer an exclusion from audience, recipient, occasion, gender, style, or preference.",
       "Keep semanticQuery short and faithful. If the shopper explicitly names a product identity, semanticQuery must preserve that identity. If retrievalMode is DISCOVERY and the shopper does NOT name an exact product identity, semanticQuery must be NEED-FIRST and CATEGORY-NEUTRAL: state the required use/context/attribute without choosing one product family as the answer. Put plausible purchasable product classes only in expansions. Generic 'wear all day' must not become footwear unless the source explicitly mentions feet/shoes/footwear; generic activity/occasion needs must not become apparel unless the source explicitly names wearing/clothing/fashion. Add up to 6 high-value retrieval expansions.",
       "If the shopper names an exact product identity, every expansion must preserve that identity and may only be a direct synonym/equivalent form.",
@@ -755,15 +790,18 @@ async function performRewrite({ shop, cleanQuery, searchLanguage, model, backupM
           items: { type: "string" },
           maxItems: 6,
         },
-        mustTerms: {
+        mandatoryConcepts: {
           type: "array",
-          items: { type: "string" },
           maxItems: 3,
-        },
-        sourceMustTerms: {
-          type: "array",
-          items: { type: "string" },
-          maxItems: 3,
+          items: {
+            type: "object",
+            properties: {
+              target: { type: "string" },
+              source: { type: "string" },
+            },
+            required: ["target", "source"],
+            additionalProperties: false,
+          },
         },
         mustNotTerms: {
           type: "array",
@@ -778,8 +816,7 @@ async function performRewrite({ shop, cleanQuery, searchLanguage, model, backupM
         "referenceTerms",
         "semanticQuery",
         "expansions",
-        "mustTerms",
-        "sourceMustTerms",
+        "mandatoryConcepts",
         "mustNotTerms",
       ],
       additionalProperties: false,
