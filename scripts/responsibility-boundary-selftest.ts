@@ -44,6 +44,17 @@ assert.deepEqual(
   "reference/family words must not be promoted when canonical MUST meaning disagrees",
 );
 
+assert.deepEqual(
+  sourceOwnedSemanticDemandIdentities({
+    originalQuery: "quà tặng cho mùa đông",
+    identities: ["gift box"],
+    semanticMustTerms: ["gift box", "winter"],
+    semanticSourceMustTerms: ["mùa đông", "quà tặng"],
+  }),
+  [],
+  "an unrelated source MUST at another position must not launder expanded identity",
+);
+
 const signature = currentSearchPipelineSignature();
 assert.ok(signature.includes("qdrant:"), "cache signature must include resolved collection");
 assert.ok(signature.includes("dense:1536"), "cache signature must include embedding dimension");
