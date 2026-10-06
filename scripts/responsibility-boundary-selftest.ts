@@ -15,8 +15,7 @@ assert.deepEqual(
   sourceOwnedSemanticDemandIdentities({
     originalQuery: "tôi muốn xe đạp để đi cuối tuần",
     identities: ["bicycle"],
-    semanticMustTerms: ["bicycle"],
-    semanticSourceMustTerms: ["xe đạp"],
+    mandatoryConcepts: [{ target: "bicycle", source: "xe đạp" }],
   }),
   ["bicycle"],
   "translated shopper-owned identity must survive the legacy adapter",
@@ -26,8 +25,7 @@ assert.deepEqual(
   sourceOwnedSemanticDemandIdentities({
     originalQuery: "quà tặng giáng sinh",
     identities: ["gift box"],
-    semanticMustTerms: ["Christmas celebration"],
-    semanticSourceMustTerms: ["giáng sinh"],
+    mandatoryConcepts: [{ target: "Christmas celebration", source: "giáng sinh" }],
   }),
   [],
   "LLM-expanded product identity must not become shopper-owned identity",
@@ -37,8 +35,7 @@ assert.deepEqual(
   sourceOwnedSemanticDemandIdentities({
     originalQuery: "bicycle accessories",
     identities: ["bicycle"],
-    semanticMustTerms: ["accessories"],
-    semanticSourceMustTerms: ["bicycle accessories"],
+    mandatoryConcepts: [{ target: "accessories", source: "bicycle accessories" }],
   }),
   [],
   "reference/family words must not be promoted when canonical MUST meaning disagrees",
@@ -48,8 +45,10 @@ assert.deepEqual(
   sourceOwnedSemanticDemandIdentities({
     originalQuery: "quà tặng cho mùa đông",
     identities: ["gift box"],
-    semanticMustTerms: ["gift box", "winter"],
-    semanticSourceMustTerms: ["mùa đông", "quà tặng"],
+    mandatoryConcepts: [
+      { target: "gift box", source: "mùa đông" },
+      { target: "winter", source: "quà tặng" },
+    ],
   }),
   [],
   "an unrelated source MUST at another position must not launder expanded identity",
