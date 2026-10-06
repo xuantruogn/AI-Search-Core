@@ -200,8 +200,9 @@ function exactSemanticTermMatches(
  * DISCOVERY intentionally does not promote LLM-expanded identities into hard
  * QueryPlan constraints. That must not erase an identity the shopper actually
  * named (including a translated source phrase) from downstream evidence
- * assessment. sourceMustTerms prove source ownership; mustTerms tie that source
- * meaning to the canonical semantic identity.
+ * assessment. Aligned mandatoryConcepts keep the shopper-source phrase paired
+ * with the canonical target concept so translation provenance survives without
+ * relying on parallel array order.
  */
 export function sourceOwnedSemanticDemandIdentities(args: {
   originalQuery: string;
