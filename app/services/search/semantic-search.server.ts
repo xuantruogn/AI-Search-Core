@@ -220,6 +220,54 @@ function naturalLanguageList(values: string[]) {
   return `${values.slice(0, -1).join(", ")}, and ${values.at(-1)}`;
 }
 
+function semanticDemandRecallContext(
+  rewrite: QueryRewriteResult,
+  limit = 5,
+) {
+  const demand = rewrite.analysis.semanticDemand;
+  const legacy = [
+    ...(rewrite.analysis.semanticMustTerms ?? []),
+    ...rewrite.analysis.requiredAttributes,
+    ...(rewrite.analysis.useCases ?? []),
+    ...rewrite.analysis.compatibility,
+  ];
+  const values = demand
+    ? [
+        ...demand.desiredOutcomes,
+        ...demand.useCases,
+        ...demand.contexts,
+        ...demand.qualities,
+        ...demand.audience,
+        ...demand.styles,
+      ]
+    : legacy;
+
+  const seen = new Set<string>();
+  const blocked = new Set(
+    (demand?.negativeConstraints ?? [])
+      .map(normalizeEmbeddingBranch)
+      .filter(Boolean),
+  );
+  return values
+    .map((value) => value.replace(/\s+/g, " ").trim())
+    .filter(Boolean)
+    .filter((value) => !/\d/.test(value))
+    .filter((value) => {
+      const normalized = normalizeEmbeddingBranch(value);
+      if (!normalized || blocked.has(normalized) || seen.has(normalized)) return false;
+      const tokens = normalized.split(" ").filter(Boolean);
+      if (
+        tokens.length === 0 ||
+        tokens.every((token) => GENERIC_DISCOVERY_BRANCH_CONTEXT.has(token))
+      ) {
+        return false;
+      }
+      seen.add(normalized);
+      return true;
+    })
+    .slice(0, limit);
+}
+
 const GENERIC_CATALOG_EVIDENCE_TOKENS = new Set([
   "apparel", "clothing", "fashion", "style", "styles", "gear", "equipment",
   "accessory", "accessories", "item", "items", "product", "products", "goods",
@@ -328,23 +376,11 @@ export function buildDiscoveryEmbeddingBranches(
       rewrite.planning?.semanticQuery ||
       rewrite.query,
   );
-  const semanticContext = [
-    ...(rewrite.analysis.semanticMustTerms ?? []),
-    ...rewrite.analysis.requiredAttributes,
-    ...(rewrite.analysis.useCases ?? []),
-    ...rewrite.analysis.compatibility,
-  ]
-    .map((value) => value.replace(/\s+/g, " ").trim())
-    .filter(Boolean)
-    .filter((value) => !/\d/.test(value))
-    .filter((value) => {
-      const tokens = normalizeEmbeddingBranch(value).split(" ").filter(Boolean);
-      return (
-        tokens.length > 0 &&
-        !tokens.every((token) => GENERIC_DISCOVERY_BRANCH_CONTEXT.has(token))
-      );
-    })
-    .slice(0, 3);
+  // Secondary expansion vectors are recall probes, but each probe must still
+  // carry the shopper's complete open-world Demand meaning. This keeps
+  // expansion recall aligned with desired outcome/use-case/context/quality/
+  // audience/style instead of reducing it to legacy MUST-term overlap.
+  const semanticContext = semanticDemandRecallContext(rewrite, 5);
 
   const groundedCanonicalTypes =
     rewrite.context?.selectedTerms
@@ -599,6 +635,7 @@ export function buildDirectEmbeddingPlan(
   // expansion phrases open semantic recall for short DIRECT need queries
   // (e.g. "office bag" -> work/laptop bag) without turning those phrases into
   // hard catalog evidence.
+  const directDemandContext = semanticDemandRecallContext(rewrite, 4);
   const expansionBranches = (rewrite.analysis.semanticExpansions ?? [])
     .map((value) => value.replace(/\s+/g, " ").trim())
     .filter(Boolean)
@@ -615,7 +652,14 @@ export function buildDirectEmbeddingPlan(
       (value) =>
         normalizeEmbeddingBranch(value) !== normalizeEmbeddingBranch(primary),
     )
-    .slice(0, 2);
+    .slice(0, 2)
+    .map((value) =>
+      directDemandContext.length > 0
+        ? `${value} suitable for ${naturalLanguageList(directDemandContext)}`
+            .slice(0, 300)
+            .trim()
+        : value,
+    );
 
   const branches = [identity, facetBranch, residualBranch, ...expansionBranches]
     .filter((value): value is string => Boolean(value))
