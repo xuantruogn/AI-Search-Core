@@ -64,6 +64,34 @@ assert.deepEqual(
 );
 
 assert.deepEqual(
+  sourceOwnedSemanticDemandIdentities({
+    originalQuery: "quần áo mặc mùa đông",
+    identities: ["winter apparel"],
+    mandatoryConcepts: [
+      { target: "winter apparel", source: "quần áo" },
+      { target: "winter", source: "mùa đông" },
+    ],
+    modifiers: ["winter"],
+  }),
+  ["apparel"],
+  "generic family must stay generic after stripping semantic context",
+);
+
+assert.deepEqual(
+  sourceOwnedSemanticDemandIdentities({
+    originalQuery: "áo trắng",
+    identities: ["white shirt"],
+    mandatoryConcepts: [
+      { target: "shirt", source: "áo" },
+      { target: "white", source: "trắng" },
+    ],
+    exactConstraints: ["white"],
+  }),
+  ["shirt"],
+  "exact modifier may wrap, but must not replace, the source-owned target noun",
+);
+
+assert.deepEqual(
   sourceOwnedSemanticExactConstraints({
     originalQuery: "áo xanh",
     exactConstraints: ["blue"],
