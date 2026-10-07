@@ -1743,6 +1743,28 @@ export async function semanticSearch({
   // result contract.
   let results: SearchResult[] = retrieval.value as SearchResult[];
 
+  // When the shopper-owned target identity is itself the primary vector and
+  // there are no secondary branches, batch fusion is skipped. Preserve the
+  // same dedicated target-identity evidence contract on this single-vector
+  // path so downstream family validation does not depend on PSF completeness.
+  if (targetIdentityUsesPrimary && semanticBranchVectors.length === 0) {
+    const topIdentityScore =
+      validTopVectorScore(
+        results.map((result) => result.vectorSimilarity ?? result.score),
+      ) ?? 0;
+    results = results.map((result) => {
+      const similarity = result.vectorSimilarity ?? result.score;
+      return {
+        ...result,
+        targetIdentityVectorSimilarity: similarity,
+        targetIdentityRelativeScore:
+          topIdentityScore > 0
+            ? Math.max(0, Math.min(1, similarity / topIdentityScore))
+            : 0,
+      };
+    });
+  }
+
   // Retrieval has already passed the authoritative registry guard. Capture
   // raw similarity before identity boosts/synthetic evidence scores are merged;
   // ranking bonuses must not raise the relative similarity cutoff.
