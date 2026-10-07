@@ -175,6 +175,10 @@ export function fuseHybridRetrieval(args: {
   lexical: SearchResult[];
   semanticNoEvidence: boolean;
   sourceProductClassAbsent?: boolean;
+  /** Shopper-owned target identity exists after source-provenance validation. */
+  hasSourceOwnedTargetIdentity?: boolean;
+  /** Exact PSF/taxonomy family members for target-scoped structured authority. */
+  sourceOwnedTargetProductIds?: string[];
   semanticThreshold: number;
   limit: number;
 }) {
@@ -227,7 +231,10 @@ export function fuseHybridRetrieval(args: {
   // sparse token overlap must not resurrect sibling products. Exact lexical
   // title/handle evidence and closed-world PSF facts still have their own
   // explicit rescue paths below.
-  if (!args.semanticNoEvidence && !args.sourceProductClassAbsent) {
+  if (!args.sourceProductClassAbsent) {
+    // Dense no-evidence is not a proof that BM25 has no value. Keep sparse as
+    // an independent recall lane and let final evidence policy reject weak
+    // sparse-only tails. Only a proven class absence may suppress it.
     addRrfLane(sparse, "SPARSE");
   } else {
     diagnostics.sparseRecallAdded = 0;
@@ -255,7 +262,7 @@ export function fuseHybridRetrieval(args: {
       diagnostics.lexicalRecallAdded += 1;
       continue;
     }
-    const combined = mergeMetadata(current, result);
+    const combined = mergeMetadata(current, scopedResult);
     combined.score = Math.max(
       current.score,
       result.lexicalScore ?? result.score,
@@ -272,11 +279,29 @@ export function fuseHybridRetrieval(args: {
   // Structured/PSF is a truth/evidence layer. It can rescue closed-world exact
   // facts, or confirm/rerank already-retrieved candidates, but must not behave
   // like a generic third semantic ranker.
+  const sourceOwnedTargetProductIds = new Set(
+    args.sourceOwnedTargetProductIds ?? [],
+  );
   for (const result of args.structured) {
     const current = merged.get(result.productId);
+    const targetScopeSatisfied =
+      !args.hasSourceOwnedTargetIdentity ||
+      sourceOwnedTargetProductIds.has(result.productId);
+    const scopedResult =
+      targetScopeSatisfied
+        ? result
+        : {
+            ...result,
+            // A size/model/compatibility fact is authority only for the
+            // requested target family. Outside that family it remains useful
+            // metadata but cannot rescue or bypass semantic relevance.
+            structuredGuardRescue: false,
+            structuredAnchorKinds: [],
+          };
     const canRescue =
       !args.sourceProductClassAbsent &&
-      structuredCanRescueGuard(result, args.plan);
+      targetScopeSatisfied &&
+      structuredCanRescueGuard(scopedResult, args.plan);
 
     if (!current && args.semanticNoEvidence && !canRescue) {
       diagnostics.structuredSuppressedByGuard += 1;
@@ -284,19 +309,19 @@ export function fuseHybridRetrieval(args: {
     }
 
     if (!current) {
-      const matchedKinds = new Set(result.structuredMatchedKinds ?? []);
+      const matchedKinds = new Set(scopedResult.structuredMatchedKinds ?? []);
       const multiFact = matchedKinds.size >= 2;
       const informativeStandalone =
         canRescue ||
-        isClosedWorldStructured(result) ||
+        isClosedWorldStructured(scopedResult) ||
         (multiFact &&
           coversPositiveSemanticFacets(result, args.plan) &&
-          result.structuredExactCanonicalIdentity === true);
+          scopedResult.structuredExactCanonicalIdentity === true);
       if (!informativeStandalone) {
         diagnostics.structuredSuppressedByGuard += 1;
         continue;
       }
-      const standaloneCeiling = structuredStandaloneCeiling(result);
+      const standaloneCeiling = structuredStandaloneCeiling(scopedResult);
       const score = canRescue
         ? Math.min(result.structuredScore ?? result.score, standaloneCeiling)
         : Math.min(
@@ -304,7 +329,7 @@ export function fuseHybridRetrieval(args: {
             Math.min(standaloneCeiling, semanticFloor + 0.03),
           );
       merged.set(result.productId, {
-        ...result,
+        ...scopedResult,
         score,
         retrievalSources: uniqueSources(result.retrievalSources, ["STRUCTURED"]),
       });
