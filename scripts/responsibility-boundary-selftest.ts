@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   sourceOwnedSemanticDemandIdentities,
   sourceOwnedSemanticExactConstraints,
+  resolveCodeOwnedRetrievalMode,
   QUERY_EMBEDDING_PIPELINE_VERSION,
   QUERY_SEMANTIC_PROFILE_VERSION,
 } from "../app/services/search/query-semantic-profile.server";
@@ -60,6 +61,31 @@ assert.deepEqual(
   }),
   ["blue"],
   "validated multilingual exact values must preserve source ownership",
+);
+
+assert.deepEqual(
+  sourceOwnedSemanticExactConstraints({
+    originalQuery: "shirt to wear with blue skirt",
+    exactConstraints: ["blue"],
+    mandatoryConcepts: [
+      { target: "blue", source: "blue" },
+    ],
+    rawPlan: {
+      retrievalMode: "COMPLEMENT",
+      referenceTerms: ["skirt"],
+    } as any,
+  }),
+  [],
+  "reference-item exact facets must not leak into complement target authority",
+);
+
+assert.equal(
+  resolveCodeOwnedRetrievalMode({
+    rawRetrievalMode: "DISCOVERY",
+    hasDirectTargetIdentity: true,
+  }),
+  "DIRECT",
+  "a shopper-named translated target must use DIRECT semantics",
 );
 
 assert.deepEqual(
