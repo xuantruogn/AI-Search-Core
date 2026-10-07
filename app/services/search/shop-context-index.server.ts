@@ -2912,6 +2912,28 @@ export async function filterResultsByExplicitGender<
           );
         });
 
+  // The primary dense vector represents the complete Semantic Demand against
+  // product Semantic Supply. When the shopper expresses open-world meaning
+  // beyond identity (purpose/use-case/context/quality/audience/style), keep
+  // that joint dense evidence as the leading semantic ranking signal after
+  // exact/family authority. PSF lexical overlap remains a soft explanation
+  // signal only and must not substitute for Supply↔Demand similarity.
+  const semanticDemand = rewrite.analysis.semanticDemand;
+  const jointSemanticDemandSignals = semanticDemand
+    ? [
+        ...semanticDemand.desiredOutcomes,
+        ...semanticDemand.useCases,
+        ...semanticDemand.contexts,
+        ...semanticDemand.qualities,
+        ...semanticDemand.audience,
+        ...semanticDemand.styles,
+      ]
+        .map((value) => value.replace(/\s+/g, " ").trim())
+        .filter(Boolean)
+        .filter((value) => !isCommerceOnlyValue(value))
+    : [];
+  const hasJointSemanticDemand = jointSemanticDemandSignals.length > 0;
+
   const brandSignals = rewrite.analysis.brands;
   const modelSignals = rewrite.analysis.models;
   const identifierSignals = rewrite.analysis.identifiers;
@@ -3395,11 +3417,20 @@ export async function filterResultsByExplicitGender<
       targetIdentityVectorSimilarity >= configuredSemanticThreshold &&
       Number.isFinite(targetIdentityRelativeScore) &&
       targetIdentityRelativeScore >= 0.8;
+    const primaryDemandSimilarity = Number(
+      (result as T & { primaryVectorSimilarity?: number })
+        .primaryVectorSimilarity,
+    );
+    const jointSemanticDemandEvidence =
+      hasJointSemanticDemand && Number.isFinite(primaryDemandSimilarity)
+        ? primaryDemandSimilarity
+        : Number.NEGATIVE_INFINITY;
     return {
       result,
       identityMatch,
       hasKnownIdentity: identityValues.length > 0,
       targetIdentitySemanticEvidence,
+      jointSemanticDemandEvidence,
       complementaryReferenceMatch,
       complementaryPreferenceMatch,
       discoveryGroundingMatch,
@@ -3693,6 +3724,7 @@ export async function filterResultsByExplicitGender<
           : 0,
       _sourceNeedCoverage: item.sourceNeedCoverage,
       _preferredFacetMatches: item.preferredFacetMatches,
+      _jointSemanticDemandEvidence: item.jointSemanticDemandEvidence,
       _sourceDiscoveryTier:
         currentRetrievalMode === "DISCOVERY" && item.sourceDiscoveryGrounding
           ? 1
@@ -3727,6 +3759,11 @@ export async function filterResultsByExplicitGender<
     (
       directIdentityGrounded || hasSourceOwnedTargetIdentity
         ? right._preferredFacetMatches - left._preferredFacetMatches
+        : 0
+    ) ||
+    (
+      hasJointSemanticDemand
+        ? right._jointSemanticDemandEvidence - left._jointSemanticDemandEvidence
         : 0
     ) ||
     (
@@ -3803,6 +3840,8 @@ export async function filterResultsByExplicitGender<
         branch <= 0 ||
         !Number.isFinite(relative) ||
         relative < 0.9 ||
+        (hasJointSemanticDemand &&
+          !Number.isFinite(item._jointSemanticDemandEvidence)) ||
         (sourceCoverageSignals.length >= 2 &&
           item._sourceNeedCoverage < filtered[0]._sourceNeedCoverage) ||
         item._typedRerankScore < topRankScore * 0.72
@@ -3857,6 +3896,7 @@ export async function filterResultsByExplicitGender<
     _directSourceFacetTier: _directSourceFacetTierIgnored,
     _sourceNeedCoverage: _sourceNeedCoverageIgnored,
     _preferredFacetMatches: _preferredFacetMatchesIgnored,
+    _jointSemanticDemandEvidence: _jointSemanticDemandEvidenceIgnored,
     _sourceDiscoveryTier: _sourceDiscoveryTierIgnored,
     _semanticNeedTier: _semanticNeedTierIgnored,
     _semanticNeedCoverage: _semanticNeedCoverageIgnored,
