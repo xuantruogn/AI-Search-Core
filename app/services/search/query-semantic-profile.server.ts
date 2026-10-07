@@ -236,10 +236,11 @@ export function sourceOwnedSemanticDemandIdentities(args: {
       // to the shopper query. This keeps translation provenance without
       // trusting array position or unrelated occasion/context MUSTs.
       return concepts.some((concept) => {
+        // Source ownership must describe the same canonical target,
+        // not merely contain the same family token. "bicycle accessories"
+        // cannot launder "bicycle" into target identity.
         const identityMatchesTarget =
-          concept.target === normalizedIdentity ||
-          concept.target.includes(normalizedIdentity) ||
-          normalizedIdentity.includes(concept.target);
+          concept.target === normalizedIdentity;
         return identityMatchesTarget && sourceContains(concept.source);
       });
     }),
@@ -288,9 +289,7 @@ export function sourceOwnedSemanticExactConstraints(args: {
       if (!normalizedConstraint) return false;
       return concepts.some((concept) => {
         const targetMatches =
-          concept.target === normalizedConstraint ||
-          concept.target.includes(normalizedConstraint) ||
-          normalizedConstraint.includes(concept.target);
+          concept.target === normalizedConstraint;
         return (
           targetMatches &&
           sourceContains(concept.source) &&
