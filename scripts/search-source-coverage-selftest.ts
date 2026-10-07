@@ -9,6 +9,8 @@ const profiles = [
   { productId: "alternative", terms: [["USE_CASE", "commuting"]] },
   { productId: "source-jacket", terms: [["CANONICAL_PRODUCT_TYPE", "jacket"], ["ATTRIBUTE", "waterproof"]] },
   { productId: "generic-jacket", terms: [["CANONICAL_PRODUCT_TYPE", "jacket"]] },
+  { productId: "hiker-jacket", terms: [["CANONICAL_PRODUCT_TYPE", "jacket"], ["AUDIENCE", "hikers"]] },
+  { productId: "unknown-audience-jacket", terms: [["CANONICAL_PRODUCT_TYPE", "jacket"]] },
 ];
 (db.aiSearchProductSemanticProfile as any).findMany = async () => profiles.map(({ productId, terms }) => ({
   productId, updatedAt: new Date(), profile: {
@@ -85,6 +87,34 @@ try {
     ["generic-jacket"],
     "missing open-world facet evidence must not become a hidden hard filter",
   );
+
+  const audienceRewrite: any = {
+    ...direct,
+    query: "jacket for hikers",
+    analysis: {
+      ...direct.analysis,
+      attributes: [],
+      optionalPreferences: [],
+      audience: ["hikers"],
+      semanticExpansions: [],
+    },
+    planning: { ...direct.planning, resolvedSegments: [], unresolvedSegments: [] },
+    context: {},
+  };
+  const audienceResults = await filterResultsByExplicitGender({
+    shop: "source-coverage-fixture",
+    originalQuery: audienceRewrite.query,
+    rewrite: audienceRewrite,
+    results: [
+      { productId: "hiker-jacket", score: 0.48, vectorSimilarity: 0.48, primaryVectorSimilarity: 0.48, retrievalSources: ["SEMANTIC"] },
+      { productId: "unknown-audience-jacket", score: 0.47, vectorSimilarity: 0.47, primaryVectorSimilarity: 0.47, retrievalSources: ["SEMANTIC"] },
+    ],
+  });
+  assert.deepEqual(
+    new Set(audienceResults.map(r => r.productId)),
+    new Set(["hiker-jacket", "unknown-audience-jacket"]),
+  );
+  assert.equal(audienceResults[0]?.productId, "hiker-jacket");
 
   const expansionOnly = await filterResultsByExplicitGender({
     shop: "source-coverage-fixture", originalQuery: "jacket for evenings", rewrite: {
