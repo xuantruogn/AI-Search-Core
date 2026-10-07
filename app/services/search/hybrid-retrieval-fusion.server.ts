@@ -262,7 +262,7 @@ export function fuseHybridRetrieval(args: {
       diagnostics.lexicalRecallAdded += 1;
       continue;
     }
-    const combined = mergeMetadata(current, scopedResult);
+    const combined = mergeMetadata(current, result);
     combined.score = Math.max(
       current.score,
       result.lexicalScore ?? result.score,
@@ -331,13 +331,13 @@ export function fuseHybridRetrieval(args: {
       merged.set(result.productId, {
         ...scopedResult,
         score,
-        retrievalSources: uniqueSources(result.retrievalSources, ["STRUCTURED"]),
+        retrievalSources: uniqueSources(scopedResult.retrievalSources, ["STRUCTURED"]),
       });
       diagnostics.structuredRecallAdded += 1;
       continue;
     }
 
-    const combined = mergeMetadata(current, result);
+    const combined = mergeMetadata(current, scopedResult);
     const matchedKinds = new Set(combined.structuredMatchedKinds ?? []);
     const multiFact = matchedKinds.size >= 2;
     const directIdentityBoost =
