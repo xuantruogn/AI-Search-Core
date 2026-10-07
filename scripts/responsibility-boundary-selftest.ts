@@ -9,6 +9,7 @@ import {
 } from "../app/services/search/query-semantic-profile.server";
 import {
   buildDirectEmbeddingPlan,
+  buildDiscoveryEmbeddingBranches,
   fuseSemanticVectorBranches,
   resolveSemanticRetrievalScope,
 } from "../app/services/search/semantic-search.server";
@@ -210,6 +211,46 @@ assert.equal(
     ?.targetIdentityVectorSimilarity,
   0.55,
   "target-family semantic evidence must stay distinct from generic query similarity",
+);
+
+const discoveryBranches = buildDiscoveryEmbeddingBranches({
+  query: "Looking for outerwear. The goal is staying warm. To use in winter. With insulated and wind resistant. For women. With a style of classic.",
+  planning: {
+    retrievalMode: "DISCOVERY",
+    semanticQuery: "Looking for outerwear. The goal is staying warm.",
+    resolvedSegments: [],
+  },
+  context: { selectedTerms: [] },
+  analysis: {
+    semanticDemand: {
+      identity: ["outerwear"],
+      desiredOutcomes: ["staying warm"],
+      useCases: ["cold-weather commuting"],
+      contexts: ["winter"],
+      qualities: ["insulated", "wind resistant"],
+      audience: ["women"],
+      styles: ["classic"],
+      negativeConstraints: [],
+      exactConstraints: [],
+    },
+    semanticMustTerms: ["outerwear"],
+    requiredAttributes: [],
+    useCases: [],
+    compatibility: [],
+    semanticExpansions: ["wool coat"],
+    intent: "Looking for warm winter outerwear",
+  },
+} as any);
+assert.equal(discoveryBranches.length, 1);
+assert.match(discoveryBranches[0] ?? "", /wool coat/i);
+assert.match(discoveryBranches[0] ?? "", /staying warm/i);
+assert.match(discoveryBranches[0] ?? "", /winter/i);
+assert.match(discoveryBranches[0] ?? "", /insulated/i);
+assert.match(discoveryBranches[0] ?? "", /women/i);
+assert.match(
+  discoveryBranches[0] ?? "",
+  /classic/i,
+  "secondary recall branches must carry the full open-world Demand axes",
 );
 
 const parsedRewrite = parseRewrittenQuery(
