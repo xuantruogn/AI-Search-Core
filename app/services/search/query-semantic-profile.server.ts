@@ -12,9 +12,9 @@ import {
 import { normalizeQueryText } from "./deterministic-query-parser.server";
 
 export const QUERY_SEMANTIC_PROFILE_VERSION =
-  "query-semantic-profile-v2-source-owned-identity";
+  "query-semantic-profile-v3-source-owned-target-authority";
 export const QUERY_EMBEDDING_PIPELINE_VERSION =
-  "semantic-expansion-v13-aligned-demand-evidence";
+  "semantic-expansion-v14-source-owned-target-branches";
 
 export type QuerySemanticProfile = {
   rawPlan: QueryPlan;
@@ -639,6 +639,11 @@ export function buildQuerySemanticProfile(args: {
 
   const targetSemanticMustTerms =
     safeLlm.analysis.semanticMustTerms ?? [];
+  const sourceOwnedDemandIdentities = sourceOwnedSemanticDemandIdentities({
+    originalQuery: args.originalQuery,
+    identities: safeLlm.analysis.semanticDemand?.identity ?? [],
+    mandatoryConcepts: safeLlm.analysis.semanticMandatoryConcepts ?? [],
+  });
   const semanticIdentityTerms = targetSemanticMustTerms.filter(
     (term) =>
       !expandedNonIdentityConstraints.some((constraint) =>
@@ -692,7 +697,8 @@ export function buildQuerySemanticProfile(args: {
         (item) => item.confidence >= 0.9,
       )
     ) ||
-    sourceGroundedDirectTarget;
+    sourceGroundedDirectTarget ||
+    sourceOwnedDemandIdentities.length > 0;
 
   // Retrieval relation is code-owned. Gemini may translate/expand a query,
   // but it must never invent COMPLEMENT/DISCOVERY semantics that are absent
@@ -746,21 +752,23 @@ export function buildQuerySemanticProfile(args: {
   };
   const baseline = queryPlanToLegacyRewrite(finalPlan, args.originalQuery);
   const mergedRewriteBase = mergeLlmRewriteIntoPlan(baseline, safeLlm);
-  const sourceOwnedDemandIdentities = sourceOwnedSemanticDemandIdentities({
-    originalQuery: args.originalQuery,
-    identities: safeLlm.analysis.semanticDemand?.identity ?? [],
-    mandatoryConcepts: safeLlm.analysis.semanticMandatoryConcepts ?? [],
-  });
   // Keep source-owned identity available to legacy evidence consumers without
   // converting it into a QueryPlan MUST. This is semantic provenance, not a
   // closed-world filter.
   const mergedRewriteBaseWithDemand =
     sourceOwnedDemandIdentities.length === 0
-      ? mergedRewriteBase
+      ? {
+          ...mergedRewriteBase,
+          analysis: {
+            ...mergedRewriteBase.analysis,
+            sourceOwnedTargetIdentities: [],
+          },
+        }
       : {
           ...mergedRewriteBase,
           analysis: {
             ...mergedRewriteBase.analysis,
+            sourceOwnedTargetIdentities: sourceOwnedDemandIdentities,
             productType:
               mergedRewriteBase.analysis.productType ||
               sourceOwnedDemandIdentities[0] ||
