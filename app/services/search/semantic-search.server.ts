@@ -508,6 +508,8 @@ export function buildDirectEmbeddingPlan(
       primary: rewrite?.query ?? "",
       branches: [] as string[],
       sourceResidualBranchIndex: null as number | null,
+      targetIdentityBranchIndex: null as number | null,
+      targetIdentityUsesPrimary: false,
     };
   }
   const planningContextValues = (rewrite.planning?.resolvedSegments ?? [])
@@ -637,11 +639,25 @@ export function buildDirectEmbeddingPlan(
       ) + 1
     : 0;
 
+  const targetIdentityBranchIndex = identity
+    ? branches.findIndex(
+        (value) =>
+          normalizeEmbeddingBranch(value) === normalizeEmbeddingBranch(identity),
+      ) + 1
+    : 0;
+  const targetIdentityUsesPrimary = Boolean(
+    identity &&
+    normalizeEmbeddingBranch(primary) === normalizeEmbeddingBranch(identity),
+  );
+
   return {
     primary,
     branches,
     sourceResidualBranchIndex:
       sourceResidualBranchIndex > 0 ? sourceResidualBranchIndex : null,
+    targetIdentityBranchIndex:
+      targetIdentityBranchIndex > 0 ? targetIdentityBranchIndex : null,
+    targetIdentityUsesPrimary,
   };
 }
 
@@ -657,6 +673,12 @@ export type SearchResult = {
   primaryVectorSimilarity?: number;
   /** Best relative score within any secondary semantic branch (0..1). */
   semanticBranchRelativeScore?: number;
+  /**
+   * Dense evidence for the shopper-owned target identity branch. This is
+   * semantic family evidence, not a PSF/exact fact.
+   */
+  targetIdentityVectorSimilarity?: number;
+  targetIdentityRelativeScore?: number;
   /** One-based secondary branch index that best supports this candidate. */
   semanticBranchIndex?: number;
   semanticBranchInput?: string;
@@ -686,6 +708,10 @@ export type SearchResult = {
 export function fuseSemanticVectorBranches(
   resultSets: SearchResult[][],
   limit: number,
+  options?: {
+    targetIdentityBranchIndex?: number | null;
+    targetIdentityUsesPrimary?: boolean;
+  },
 ) {
   const fused = new Map<
     string,
@@ -697,6 +723,8 @@ export function fuseSemanticVectorBranches(
       primaryVectorSimilarity?: number;
       semanticBranchRelativeScore: number;
       semanticBranchIndex?: number;
+      targetIdentityVectorSimilarity?: number;
+      targetIdentityRelativeScore?: number;
     }
   >();
   const branchTopScores = resultSets.map((results) =>
@@ -718,6 +746,17 @@ export function fuseSemanticVectorBranches(
         branchIndex > 0 && branchTopScore > 0
           ? Math.max(0, Math.min(1, rawSimilarity / branchTopScore))
           : 0;
+      const targetIdentityBranch =
+        options?.targetIdentityUsesPrimary === true
+          ? branchIndex === 0
+          : typeof options?.targetIdentityBranchIndex === "number" &&
+            options.targetIdentityBranchIndex > 0 &&
+            branchIndex === options.targetIdentityBranchIndex;
+      const targetIdentityRelativeScore = targetIdentityBranch
+        ? branchTopScore > 0
+          ? Math.max(0, Math.min(1, rawSimilarity / branchTopScore))
+          : 0
+        : undefined;
       const current = fused.get(result.productId);
       if (!current) {
         fused.set(result.productId, {
@@ -729,6 +768,9 @@ export function fuseSemanticVectorBranches(
             branchIndex === 0 ? rawSimilarity : undefined,
           semanticBranchRelativeScore: branchRelativeScore,
           semanticBranchIndex: branchIndex > 0 ? branchIndex : undefined,
+          targetIdentityVectorSimilarity:
+            targetIdentityBranch ? rawSimilarity : undefined,
+          targetIdentityRelativeScore,
         });
         continue;
       }
@@ -739,7 +781,19 @@ export function fuseSemanticVectorBranches(
       );
       if (branchIndex === 0) {
         current.primaryVectorSimilarity = rawSimilarity;
-      } else if (
+      }
+      if (targetIdentityBranch) {
+        current.targetIdentityVectorSimilarity = Math.max(
+          current.targetIdentityVectorSimilarity ?? Number.NEGATIVE_INFINITY,
+          rawSimilarity,
+        );
+        current.targetIdentityRelativeScore = Math.max(
+          current.targetIdentityRelativeScore ?? 0,
+          targetIdentityRelativeScore ?? 0,
+        );
+      }
+      if (
+        branchIndex > 0 &&
         branchRelativeScore > current.semanticBranchRelativeScore
       ) {
         current.semanticBranchRelativeScore = branchRelativeScore;
@@ -761,12 +815,16 @@ export function fuseSemanticVectorBranches(
       primaryVectorSimilarity,
       semanticBranchRelativeScore,
       semanticBranchIndex,
+      targetIdentityVectorSimilarity,
+      targetIdentityRelativeScore,
     }) => ({
       ...result,
       vectorSimilarity,
       primaryVectorSimilarity,
       semanticBranchRelativeScore,
       semanticBranchIndex,
+      targetIdentityVectorSimilarity,
+      targetIdentityRelativeScore,
       // Tiny consensus bonus helps a product supported by both the general
       // need vector and a product-class branch without allowing broad branch
       // membership to dominate ranking.
@@ -878,6 +936,8 @@ export async function semanticSearch({
   let semanticBranchInputs: string[] = [];
   let semanticBranchVectors: number[][] = [];
   let directSourceResidualBranchIndex: number | null = null;
+  let targetIdentityBranchIndex: number | null = null;
+  let targetIdentityUsesPrimary = false;
   let primaryEmbeddingInputForDiagnostics = cleanQuery;
   let embeddingRequestDiagnostics:
     | EmbeddingRequestDiagnostics
@@ -986,6 +1046,13 @@ export async function semanticSearch({
       preparedMode === "DIRECT"
         ? directPlan.sourceResidualBranchIndex
         : null;
+    targetIdentityBranchIndex =
+      preparedMode === "DIRECT"
+        ? directPlan.targetIdentityBranchIndex
+        : null;
+    targetIdentityUsesPrimary =
+      preparedMode === "DIRECT" &&
+      directPlan.targetIdentityUsesPrimary;
     semanticBranchInputs =
       preparedMode === "DISCOVERY"
         ? buildDiscoveryEmbeddingBranches(preparedRewrite)
@@ -1235,6 +1302,13 @@ export async function semanticSearch({
       currentEmbeddingMode === "DIRECT"
         ? directPlan.sourceResidualBranchIndex
         : null;
+    targetIdentityBranchIndex =
+      currentEmbeddingMode === "DIRECT"
+        ? directPlan.targetIdentityBranchIndex
+        : null;
+    targetIdentityUsesPrimary =
+      currentEmbeddingMode === "DIRECT" &&
+      directPlan.targetIdentityUsesPrimary;
     semanticBranchInputs =
       currentEmbeddingMode === "DISCOVERY"
         ? buildDiscoveryEmbeddingBranches(rewrite)
@@ -1521,8 +1595,6 @@ export async function semanticSearch({
   const identityIds = effectiveRewrite?.context?.identityCandidateProductIds ?? [];
   const directExpansionScopeIds =
     effectiveRewrite?.context?.directExpansionGroundedProductIds ?? [];
-  const discoverySourceIdentityIds =
-    effectiveRewrite?.context?.discoverySourceIdentityProductIds ?? [];
   const hasExactCanonicalIdentityEvidence = Boolean(
     effectiveRewrite?.context?.selectedTerms.some(
       (term) =>
@@ -1546,14 +1618,13 @@ export async function semanticSearch({
         ? Math.min(minimumScore, discoveryMinimumScore)
         : minimumScore;
 
+  // Only an exact, source-grounded DIRECT identity may narrow the Qdrant
+  // candidate universe before retrieval. Discovery/context grounding is recall
+  // evidence and must never collapse parent-family recall before dense/BM25.
   const retrievalScopeIds =
     exactIdentityScope
       ? [...new Set([...identityIds, ...directExpansionScopeIds])]
-      : retrievalMode === "DISCOVERY" &&
-          discoverySourceIdentityIds.length > 0 &&
-          discoverySourceIdentityIds.length <= 2_000
-        ? [...new Set(discoverySourceIdentityIds)]
-        : undefined;
+      : undefined;
 
   const onQdrantDiagnostics = (
     diagnostics: {
@@ -1591,7 +1662,10 @@ export async function semanticSearch({
           onDiagnostics:
             onQdrantDiagnostics,
         }).then((resultSets) =>
-          fuseSemanticVectorBranches(resultSets, limit),
+          fuseSemanticVectorBranches(resultSets, limit, {
+            targetIdentityBranchIndex,
+            targetIdentityUsesPrimary,
+          }),
         )
       : searchProductVectors({
           shop,
@@ -2223,6 +2297,12 @@ export async function semanticSearch({
 
         semanticBranchRelativeScore:
           result.semanticBranchRelativeScore,
+
+        targetIdentityVectorSimilarity:
+          result.targetIdentityVectorSimilarity,
+
+        targetIdentityRelativeScore:
+          result.targetIdentityRelativeScore,
 
         semanticBranchIndex:
           result.semanticBranchIndex,
