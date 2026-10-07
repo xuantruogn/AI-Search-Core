@@ -187,17 +187,6 @@ function semanticTermMatches(
   });
 }
 
-function exactSemanticTermMatches(
-  constraint: QueryConstraint,
-  terms: string[],
-) {
-  const value = keyOf(constraint);
-  if (!value) return false;
-  return terms.some(
-    (term) => normalizeQueryText(term) === value,
-  );
-}
-
 /**
  * Preserve only shopper-owned semantic identity across the legacy adapter.
  *
