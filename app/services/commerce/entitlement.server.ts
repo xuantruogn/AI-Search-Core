@@ -86,7 +86,6 @@ export async function getShopEntitlement(
       subscription.status === "ACTIVE" ||
       (
         subscription.status === "CANCELLED" &&
-        subscription.cancellationStatus === "NON_RENEWING" &&
         subscription.billingPeriodEnd !== null &&
         subscription.billingPeriodEnd > new Date()
       )

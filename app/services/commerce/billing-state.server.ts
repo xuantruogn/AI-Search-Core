@@ -121,7 +121,6 @@ function getCommercialStatus(
   if (status === "ACTIVE") return trialStatus === "ACTIVE" ? "TRIAL" : "PAID";
   if (
     status === "CANCELLED" &&
-    cancellationStatus === "NON_RENEWING" &&
     currentPeriodEndsAt &&
     currentPeriodEndsAt > new Date()
   ) {
@@ -141,7 +140,6 @@ function getAccessStatus(
     status === "ACTIVE" ||
     (
       status === "CANCELLED" &&
-      cancellationStatus === "NON_RENEWING" &&
       currentPeriodEndsAt &&
       currentPeriodEndsAt > new Date()
     );
@@ -323,27 +321,64 @@ export async function ensureBillingV2State(shop: string) {
       })
     : null;
 
-  // A Shopify non-prorated cancellation is CANCELLED immediately,
-  // but the merchant keeps the already-paid entitlement until the cached
-  // currentPeriodEndsAt.
+  // Shopify cancels the app subscription when the app is uninstalled.
+  // The merchant may still use the already-paid remainder until currentPeriodEndsAt.
+  // Once that period has ended, remove the subscription from the current
+  // entitlement pointer so the app is truly in the "no plan" state. The
+  // BillingSubscription row itself is kept as immutable billing history.
   if (
     subscription?.status === "CANCELLED" &&
-    subscription.cancellationStatus === "NON_RENEWING" &&
     subscription.currentPeriodEndsAt &&
     subscription.currentPeriodEndsAt <= new Date()
   ) {
-    await db.billingSubscription.update({
-      where: { id: subscription.id },
-      data: {
-        cancellationStatus: "EFFECTIVE",
-        accessStatus: "NONE",
-      },
+    const expiredSubscriptionId = subscription.id;
+    const expiredSubscriptionGid = subscription.shopifySubscriptionGid;
+
+    await db.$transaction(async (tx) => {
+      await tx.billingSubscription.update({
+        where: { id: expiredSubscriptionId },
+        data: {
+          cancellationStatus: "EFFECTIVE",
+          accessStatus: "NONE",
+          reconciliationStatus: "SYNCED",
+          reconciliationReason: "BILLING_PERIOD_ENDED",
+          repairRequiredAt: null,
+        },
+      });
+
+      await tx.aiSearchShop.updateMany({
+        where: {
+          shop,
+          currentSubscriptionGid: expiredSubscriptionGid,
+        },
+        data: {
+          currentPlanHandle: null,
+          currentSubscriptionGid: null,
+        },
+      });
+
+      await tx.aiSearchSubscription.updateMany({
+        where: { shop },
+        data: {
+          plan: "NONE",
+          status: "INACTIVE",
+          planHandle: null,
+          shopifySubscriptionId: null,
+          billingPeriodStart: null,
+          billingPeriodEnd: null,
+          source: "BILLING_V2",
+          lastSyncedAt: new Date(),
+        },
+      });
     });
+
     subscription = null;
   }
 
   // If the pointer is stale/missing, recover from an actual ACTIVE/FROZEN
-  // record, or from a still-valid NON_RENEWING cancellation window.
+  // record, or from any still-valid CANCELLED subscription. Shopify marks
+  // subscriptions CANCELLED when the app is uninstalled, while the merchant
+  // can reinstall and use the already-paid remainder of the billing period.
   if (
     !subscription ||
     (
@@ -365,7 +400,6 @@ export async function ensureBillingV2State(shop: string) {
           { status: "FROZEN" },
           {
             status: "CANCELLED",
-            cancellationStatus: "NON_RENEWING",
             currentPeriodEndsAt: { gt: new Date() },
           },
         ],
