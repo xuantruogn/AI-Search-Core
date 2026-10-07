@@ -376,7 +376,9 @@ export async function ensureBillingV2State(shop: string) {
   }
 
   // If the pointer is stale/missing, recover from an actual ACTIVE/FROZEN
-  // record, or from a still-valid NON_RENEWING cancellation window.
+  // record, or from any still-valid CANCELLED subscription. Shopify marks
+  // subscriptions CANCELLED when the app is uninstalled, while the merchant
+  // can reinstall and use the already-paid remainder of the billing period.
   if (
     !subscription ||
     (
@@ -398,7 +400,6 @@ export async function ensureBillingV2State(shop: string) {
           { status: "FROZEN" },
           {
             status: "CANCELLED",
-            cancellationStatus: "NON_RENEWING",
             currentPeriodEndsAt: { gt: new Date() },
           },
         ],
