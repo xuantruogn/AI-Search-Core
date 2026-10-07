@@ -60,11 +60,6 @@ export function applyFinalRelevanceCutoff<T extends { score: number }>(args: {
   if (args.results.length === 0) return args.results;
 
   const shaped = args.results as Array<T & CutoffShape>;
-  const sparseScores = shaped
-    .map((result) => result.sparseScore)
-    .filter((value): value is number => Number.isFinite(value) && value! > 0);
-  const topSparse = sparseScores.length > 0 ? Math.max(...sparseScores) : 0;
-
   return shaped.filter((result) => {
     if (hasExactAuthority(result)) return true;
 
@@ -76,20 +71,27 @@ export function applyFinalRelevanceCutoff<T extends { score: number }>(args: {
       primaryDemandCosine >= args.semanticThreshold;
 
     if (sources.size >= 2) {
-      // Lane agreement is corroboration, not proof of the whole request. In
-      // DISCOVERY the primary dense vector represents the joint Semantic
-      // Demand, so BM25/structured agreement cannot replace it. Exact
-      // authority was already handled above.
-      if (args.retrievalMode === "DISCOVERY") {
+      // Lane agreement is corroboration, not proof of the whole request.
+      // DISCOVERY and COMPLEMENT both carry open-world joint meaning in the
+      // primary dense vector, so BM25/structured agreement cannot replace
+      // full Demand/relation evidence. Exact authority was handled above.
+      if (
+        args.retrievalMode === "DISCOVERY" ||
+        args.retrievalMode === "COMPLEMENT"
+      ) {
         return sources.has("SEMANTIC") && hasPrimaryDemandEvidence;
       }
       return true;
     }
 
     if (sources.has("SEMANTIC")) {
-      if (args.retrievalMode === "DISCOVERY") {
-        // Expansion vectors are recall probes. A branch-only hit is not final
-        // evidence that the product satisfies the complete shopper Demand.
+      if (
+        args.retrievalMode === "DISCOVERY" ||
+        args.retrievalMode === "COMPLEMENT"
+      ) {
+        // Secondary expansion vectors are recall probes. A branch-only hit is
+        // not final evidence that the product satisfies the complete shopper
+        // Demand or the target/reference complement relation.
         return hasPrimaryDemandEvidence;
       }
       const cosine = result.vectorSimilarity;
@@ -113,17 +115,10 @@ export function applyFinalRelevanceCutoff<T extends { score: number }>(args: {
     }
 
     if (sources.has("SPARSE")) {
-      const rank = result.sparseRank ?? Number.POSITIVE_INFINITY;
-      const score = result.sparseScore ?? 0;
-      const relative = topSparse > 0 ? score / topSparse : 0;
-
-      if (args.retrievalMode === "DIRECT") {
-        return rank <= 20 && relative >= 0.35;
-      }
-
-      // BM25 is recall/corroboration, never open-world truth. Exact
-      // authority was already handled above, so sparse-only DISCOVERY or
-      // COMPLEMENT candidates cannot prove the shopper's semantic need.
+      // BM25 is recall/corroboration, never truth by itself. DIRECT exact
+      // authority has its own lexical/structured path above; open-world modes
+      // require primary Semantic Demand evidence. A sparse-only candidate is
+      // therefore never sufficient at the final precision gate.
       return false;
     }
 

@@ -21,8 +21,8 @@ const direct = applyFinalRelevanceCutoff({
   ],
 });
 assert.deepEqual(direct.map((r: any) => r.productId), [
-  "exact", "semantic-good", "hybrid", "sparse-top", "closed-world",
-]);
+  "exact", "semantic-good", "hybrid", "closed-world",
+], "DIRECT BM25-only recall cannot become final truth without semantic/exact authority");
 
 const discovery = applyFinalRelevanceCutoff({
   retrievalMode: "DISCOVERY",
@@ -83,6 +83,45 @@ assert.deepEqual(
   discoveryJointDemand.map((r: any) => r.productId),
   ["joint-primary", "exact-authority"],
   "DISCOVERY sparse/branch agreement cannot replace full primary Supply↔Demand evidence",
+);
+
+const complementJointDemand = applyFinalRelevanceCutoff({
+  retrievalMode: "COMPLEMENT",
+  semanticThreshold: 0.35,
+  results: [
+    {
+      ...base("relation-primary"),
+      vectorSimilarity: 0.44,
+      primaryVectorSimilarity: 0.4,
+      sparseScore: 6,
+      sparseRank: 1,
+      retrievalSources: ["SEMANTIC" as const, "SPARSE" as const],
+    },
+    {
+      ...base("relation-branch-only"),
+      vectorSimilarity: 0.49,
+      sparseScore: 9,
+      sparseRank: 1,
+      retrievalSources: ["SEMANTIC" as const, "SPARSE" as const],
+    },
+    {
+      ...base("relation-weak-primary"),
+      vectorSimilarity: 0.47,
+      primaryVectorSimilarity: 0.31,
+      structuredScore: 0.7,
+      retrievalSources: ["SEMANTIC" as const, "STRUCTURED" as const],
+    },
+    {
+      ...base("relation-exact"),
+      structuredAnchorKinds: ["COMPATIBILITY"],
+      retrievalSources: ["STRUCTURED" as const],
+    },
+  ],
+});
+assert.deepEqual(
+  complementJointDemand.map((r: any) => r.productId),
+  ["relation-primary", "relation-exact"],
+  "COMPLEMENT requires primary relation/Demand evidence unless exact authority independently proves the result",
 );
 
 console.log("PASS: final relevance cutoff preserves authority/semantic evidence and removes weak sparse tail");

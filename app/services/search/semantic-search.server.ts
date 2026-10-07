@@ -1798,6 +1798,20 @@ export async function semanticSearch({
   // result contract.
   let results: SearchResult[] = retrieval.value as SearchResult[];
 
+  // On the single-vector path the only cosine is, by definition, the primary
+  // full-query/full-Demand cosine. Preserve that provenance explicitly so
+  // DISCOVERY/COMPLEMENT final relevance cannot confuse a missing field with
+  // missing semantic evidence.
+  if (semanticBranchVectors.length === 0) {
+    results = results.map((result) => ({
+      ...result,
+      primaryVectorSimilarity:
+        result.primaryVectorSimilarity ??
+        result.vectorSimilarity ??
+        result.score,
+    }));
+  }
+
   // When the shopper-owned target identity is itself the primary vector and
   // there are no secondary branches, batch fusion is skipped. Preserve the
   // same dedicated target-identity evidence contract on this single-vector
