@@ -63,6 +63,7 @@ export type QueryRewriteResult = {
     composeCodeMs: number;
     canonicalTypeCoverageComplete?: boolean;
     identityCandidateProductIds?: string[];
+    targetFamilyProductIds?: string[];
     directExpansionGroundedProductIds?: string[];
     directSourceFacetGroundedProductIds?: string[];
     directSourceFacetConsensusProductIds?: string[];
