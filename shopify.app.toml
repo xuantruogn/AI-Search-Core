@@ -44,3 +44,8 @@ automatically_update_urls_on_dev = true
 namespace = "ai_search"
 key = "theme_map"
 access = "public_read"
+
+
+[[webhooks.subscriptions]]
+topics = [ "app/uninstalled" ]
+uri = "/webhooks/app/uninstalled"

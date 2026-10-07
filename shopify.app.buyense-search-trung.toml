@@ -41,3 +41,6 @@ subpath = "ai-search"
 redirect_urls = [ "https://example.com/api/auth" ]
 
 
+[[webhooks.subscriptions]]
+topics = [ "app/uninstalled" ]
+uri = "/webhooks/app/uninstalled"
