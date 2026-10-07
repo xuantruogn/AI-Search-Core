@@ -506,8 +506,7 @@ export default function BillingPage() {
       ? String(subscribeFetcher.data.message)
       : null;
   const isNonRenewing = data.entitlement.cancellationStatus === "NON_RENEWING";
-  const isActive =
-    data.entitlement.subscriptionStatus === "ACTIVE" || isNonRenewing;
+  const isActive = data.entitlement.active;
 
   return (
     <div
