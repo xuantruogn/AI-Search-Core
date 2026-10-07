@@ -89,6 +89,8 @@ export type ContextualQueryResult = QueryRewriteResult & {
     composeCodeMs: number;
     canonicalTypeCoverageComplete: boolean;
     identityCandidateProductIds: string[];
+    /** Source-owned target family scope for exact-authority validation only. */
+    targetFamilyProductIds: string[];
     directExpansionGroundedProductIds: string[];
     directSourceFacetGroundedProductIds: string[];
     directSourceFacetConsensusProductIds: string[];
@@ -2157,10 +2159,12 @@ export async function applyShopContextToQuery({
   const filterMs = Date.now() - filterStartedAt;
   const composeStartedAt = Date.now();
   const query = composeContextualEmbeddingInput(originalQuery, rewrite, selectedTerms);
-  const catalogRelevant =
-    rewrite.catalogRelevant &&
-    (terms.length === 0 || !hasAnalyzedProductType ||
-      !canonicalTypeCoverageComplete || matchingProductIds.size > 0);
+  // Shop context is open-world grounding, not absence proof. A translated
+  // shopper target may be semantically equivalent to catalog leaf types without
+  // sharing a literal taxonomy term (for example bicycle light vs headlight /
+  // taillight). Keep retrieval enabled; absence-proof.server is the only layer
+  // allowed to turn complete closed-world evidence into certain no-result.
+  const catalogRelevant = rewrite.catalogRelevant;
   const composeCodeMs = Date.now() - composeStartedAt;
   const totalMs = Date.now() - totalStartedAt;
 
@@ -2203,7 +2207,7 @@ export async function applyShopContextToQuery({
           : !canonicalTypeCoverageComplete
             ? "Canonical product-type context is rebuilding; hard catalog rejection is deferred."
           : hasAnalyzedProductType && matchingProductIds.size === 0
-            ? "The analyzed product type is not present in the sync-time shop context."
+            ? "The shopper-owned target is not literally grounded in shop context; semantic retrieval remains enabled and absence proof owns certainty."
           : selectedTerms.length > 0
             ? "Code matched the analyzed query against the sync-time shop context."
             : "Code found no matching term in the sync-time shop context.",
@@ -2222,6 +2226,10 @@ export async function applyShopContextToQuery({
       composeCodeMs,
       canonicalTypeCoverageComplete,
       identityCandidateProductIds: [...matchingProductIds],
+      targetFamilyProductIds:
+        (rewrite.analysis.sourceOwnedTargetIdentities?.length ?? 0) > 0
+          ? [...familyProductIds]
+          : [],
       directExpansionGroundedProductIds,
       directSourceFacetGroundedProductIds,
       directSourceFacetConsensusProductIds,
@@ -2485,6 +2493,7 @@ function sourceGroundedAttributeFacets(
     ...(rewrite.analysis.optionalPreferences ?? []),
     ...(rewrite.analysis.attributes ?? []),
     ...(rewrite.analysis.compatibility ?? []),
+    ...(rewrite.analysis.sourceOwnedExactConstraints ?? []),
   ]) {
     if (identityInternalLowConfidenceSignals.has(normalizeContextTerm(value))) {
       continue;
@@ -2816,7 +2825,27 @@ export async function filterResultsByExplicitGender<
     retrievalModeOf(originalQuery, rewrite);
   const shopperStrictAttributes = readStrictTargetAttributes(originalQuery, rewrite);
   const sourceFacetPreferences = sourceGroundedAttributeFacets(originalQuery, rewrite);
-  const objectiveClosedWorldAttributes = sourceFacetPreferences.filter((signal) =>
+  const sourceOwnedExactDemandAttributes = [
+    ...new Set(
+      (rewrite.analysis.sourceOwnedExactConstraints ?? [])
+        .map((value) => value.replace(/\s+/g, " ").trim())
+        .filter(Boolean)
+        // Exact provenance is not exact authority yet. Promote only values
+        // that the catalog can type as an ATTRIBUTE/VARIANT fact.
+        .filter((value) =>
+          rows.some((row) =>
+            ["ATTRIBUTE", "VARIANT_OPTION"].includes(row.kind) &&
+            sourceContextCatalogValueMatch(row.kind, row.value, value),
+          ),
+        ),
+    ),
+  ];
+  const objectiveClosedWorldAttributes = [
+    ...new Set([
+      ...sourceFacetPreferences,
+      ...sourceOwnedExactDemandAttributes,
+    ]),
+  ].filter((signal) =>
     rows.some((row) => {
       if (!["ATTRIBUTE", "VARIANT_OPTION"].includes(row.kind)) return false;
       const assigned = objectiveFacetAssignmentValue(row.value);
@@ -2848,9 +2877,18 @@ export async function filterResultsByExplicitGender<
     ...(rewrite.analysis.optionalPreferences ?? []),
     ...(rewrite.analysis.attributes ?? []),
     ...(rewrite.analysis.useCases ?? []),
+    ...(rewrite.analysis.sourceOwnedExactConstraints ?? []),
     ...planningContextSignals,
   ].filter((value) => !isCommerceOnlyValue(value));
-  const preferredAttributes = sourceFacetPreferences
+  const preferredAttributes = [
+    ...new Set([
+      ...sourceFacetPreferences,
+      // Source-owned translated exact values (for example xanh -> blue) are
+      // strong typed preferences unless code independently marks them strict.
+      // Size/measurement MUSTs remain owned by the deterministic parser.
+      ...sourceOwnedExactDemandAttributes,
+    ]),
+  ]
     .filter((value) => !strictAttributes.includes(value))
     .filter((value) => !negativeSignals.includes(value));
   const genericSemanticFacetTokens = new Set([
@@ -2874,26 +2912,6 @@ export async function filterResultsByExplicitGender<
           );
         });
 
-  // Demand axes are recall/ranking meaning, never closed-world facts. Keep a
-  // separate joint semantic coverage signal so qualities/use-cases/context can
-  // affect final evidence assessment without being converted into PSF MUSTs.
-  const semanticDemand = rewrite.analysis.semanticDemand;
-  const semanticDemandSignals = semanticDemand
-    ? [
-        ...new Set([
-          ...semanticDemand.identity,
-          ...semanticDemand.desiredOutcomes,
-          ...semanticDemand.useCases,
-          ...semanticDemand.contexts,
-          ...semanticDemand.qualities,
-          ...semanticDemand.audience,
-          ...semanticDemand.styles,
-        ]),
-      ]
-        .map((value) => value.replace(/\s+/g, " ").trim())
-        .filter(Boolean)
-        .filter((value) => !isCommerceOnlyValue(value))
-    : [];
   const brandSignals = rewrite.analysis.brands;
   const modelSignals = rewrite.analysis.models;
   const identifierSignals = rewrite.analysis.identifiers;
@@ -3158,11 +3176,6 @@ export async function filterResultsByExplicitGender<
       semanticMustFacetTokens,
       semanticMustFacetSignals,
     );
-    const semanticDemandCoverage = semanticSignalCoverage(
-      softRecallValues,
-      softRecallTokens,
-      semanticDemandSignals,
-    );
     const directContextNeedMatch =
       sourceContextNeedSignals.length === 0
         ? 0
@@ -3361,10 +3374,32 @@ export async function filterResultsByExplicitGender<
     }, 0);
     const strictFacetMatch = strictAttributes.every(exactFacetMatch);
     const excluded = negativeSignals.some(negative => matchesExplicitNegativeFacet(explicitFilterValues, negative));
+    const targetIdentityVectorSimilarity = Number(
+      (result as T & { targetIdentityVectorSimilarity?: number })
+        .targetIdentityVectorSimilarity,
+    );
+    const targetIdentityRelativeScore = Number(
+      (result as T & { targetIdentityRelativeScore?: number })
+        .targetIdentityRelativeScore,
+    );
+    const configuredSemanticThreshold = (() => {
+      const parsed = Number.parseFloat(
+        process.env.AI_SEARCH_VECTOR_SCORE_THRESHOLD || "",
+      );
+      return Number.isFinite(parsed) && parsed >= -1 && parsed <= 1
+        ? parsed
+        : 0.35;
+    })();
+    const targetIdentitySemanticEvidence =
+      Number.isFinite(targetIdentityVectorSimilarity) &&
+      targetIdentityVectorSimilarity >= configuredSemanticThreshold &&
+      Number.isFinite(targetIdentityRelativeScore) &&
+      targetIdentityRelativeScore >= 0.8;
     return {
       result,
       identityMatch,
       hasKnownIdentity: identityValues.length > 0,
+      targetIdentitySemanticEvidence,
       complementaryReferenceMatch,
       complementaryPreferenceMatch,
       discoveryGroundingMatch,
@@ -3382,7 +3417,6 @@ export async function filterResultsByExplicitGender<
         expansionGroundedDiscoveryProductIds.has(result.productId),
       attributeMatch,
       semanticMustFacetMatch,
-      semanticDemandCoverage,
       directContextNeedMatch,
       sourceNeedCoverage,
       semanticBranchLift,
@@ -3444,6 +3478,9 @@ export async function filterResultsByExplicitGender<
     signals: identitySignals,
     hasIdentityMatch,
   });
+  const hasSourceOwnedTargetIdentity =
+    currentRetrievalMode === "DIRECT" &&
+    (rewrite.analysis.sourceOwnedTargetIdentities?.length ?? 0) > 0;
   const hasFamilyCategoryMatch =
     familyCategorySignals.length > 0 &&
     scored.some((item) => item.categoryMatch >= 0.75);
@@ -3489,14 +3526,6 @@ export async function filterResultsByExplicitGender<
       return [];
     }
     if (
-      currentRetrievalMode === "DISCOVERY" &&
-      sourceGroundedDiscoveryIdentityProductIds.size > 0 &&
-      !item.sourceDiscoveryIdentityGrounding
-    ) {
-      identityFilteredCount += 1;
-      return [];
-    }
-    if (
       complementaryReferenceSignals.length > 0 &&
       item.complementaryReferenceMatch >= 0.75
     ) {
@@ -3504,9 +3533,22 @@ export async function filterResultsByExplicitGender<
       return [];
     }
     if (
+      hasSourceOwnedTargetIdentity &&
+      (!item.hasKnownIdentity || item.identityMatch < 0.34) &&
+      !item.targetIdentitySemanticEvidence
+    ) {
+      // Shopper-owned target identity scopes the whole query. Missing PSF
+      // identity is uncertainty, not permission for an exact size/model fact
+      // to admit another family; dedicated target-identity dense evidence may
+      // still rescue cross-taxonomy synonyms or incompletely profiled items.
+      identityFilteredCount += 1;
+      return [];
+    }
+    if (
       directIdentityGrounded &&
       item.hasKnownIdentity &&
-      item.identityMatch < 0.34
+      item.identityMatch < 0.34 &&
+      !item.targetIdentitySemanticEvidence
     ) {
       identityFilteredCount += 1;
       return [];
@@ -3584,9 +3626,6 @@ export async function filterResultsByExplicitGender<
       // This prevents open-world concepts such as style/use-case from
       // becoming accidental hard filters.
       Math.min(0.10, item.semanticMustFacetMatch * 0.10) +
-      // Joint Demand coverage is semantic evidence only. It can improve order
-      // and final confidence, but cannot manufacture exact fact authority.
-      Math.min(0.12, item.semanticDemandCoverage * 0.12) +
       Math.min(0.08, item.discoveryExpansionPreferenceMatch * 0.08) +
       Math.min(0.12, item.complementaryPreferenceMatch * 0.12) +
       // For long DIRECT need-style queries, an LLM expansion may resolve the
@@ -3635,7 +3674,11 @@ export async function filterResultsByExplicitGender<
       // soft (nearby alternatives remain) while making an exact typed facet
       // reliably outrank nearby shades/styles within the same product family.
       _identityTier:
-        directIdentityGrounded && item.identityMatch >= 0.75 ? 1 : 0,
+        directIdentityGrounded && item.identityMatch >= 0.75
+          ? 2
+          : hasSourceOwnedTargetIdentity && item.targetIdentitySemanticEvidence
+            ? 1
+            : 0,
       _directExpansionTier:
         currentRetrievalMode === "DIRECT" && item.directExpansionGrounding
           ? 1
@@ -3663,14 +3706,6 @@ export async function filterResultsByExplicitGender<
         currentRetrievalMode === "DISCOVERY"
           ? item.semanticMustFacetMatch
           : 0,
-      _semanticDemandCoverage:
-        currentRetrievalMode === "DISCOVERY"
-          ? item.semanticDemandCoverage
-          : 0,
-      semanticDemandCoverage:
-        item.semanticDemandCoverage,
-      semanticDemandSignalCount:
-        semanticDemandSignals.length,
       _discoveryExpansionPreference:
         currentRetrievalMode === "DISCOVERY"
           ? item.discoveryExpansionPreferenceMatch
@@ -3690,18 +3725,13 @@ export async function filterResultsByExplicitGender<
       ? Number(right._sourceNeedCoverage === 1) - Number(left._sourceNeedCoverage === 1)
       : 0) ||
     (
-      directIdentityGrounded
+      directIdentityGrounded || hasSourceOwnedTargetIdentity
         ? right._preferredFacetMatches - left._preferredFacetMatches
         : 0
     ) ||
     (
       currentRetrievalMode === "DISCOVERY"
         ? right._semanticNeedTier - left._semanticNeedTier
-        : 0
-    ) ||
-    (
-      currentRetrievalMode === "DISCOVERY"
-        ? right._semanticDemandCoverage - left._semanticDemandCoverage
         : 0
     ) ||
     (
@@ -3775,9 +3805,6 @@ export async function filterResultsByExplicitGender<
         relative < 0.9 ||
         (sourceCoverageSignals.length >= 2 &&
           item._sourceNeedCoverage < filtered[0]._sourceNeedCoverage) ||
-        (semanticDemandSignals.length >= 2 &&
-          item._semanticDemandCoverage + 0.15 <
-            filtered[0]._semanticDemandCoverage) ||
         item._typedRerankScore < topRankScore * 0.72
       ) {
         return;
@@ -3833,7 +3860,6 @@ export async function filterResultsByExplicitGender<
     _sourceDiscoveryTier: _sourceDiscoveryTierIgnored,
     _semanticNeedTier: _semanticNeedTierIgnored,
     _semanticNeedCoverage: _semanticNeedCoverageIgnored,
-    _semanticDemandCoverage: _semanticDemandCoverageIgnored,
     _discoveryExpansionPreference: _discoveryExpansionPreferenceIgnored,
     _expansionDiscoveryTier: _expansionDiscoveryTierIgnored,
     _typedRerankScore: _typedRerankScoreIgnored,

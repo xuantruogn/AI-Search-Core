@@ -76,8 +76,8 @@ const discoveryDemandAware = applyFinalRelevanceCutoff({
 });
 assert.deepEqual(
   discoveryDemandAware.map((r: any) => r.productId),
-  ["joint-good", "joint-weak-strong-dense"],
-  "multi-lane agreement must not replace joint Demand evidence",
+  ["joint-good", "joint-weak", "joint-weak-strong-dense", "sparse-weak-demand"],
+  "PSF term coverage must not become a hidden hard filter for open-world Demand",
 );
 
 console.log("PASS: final relevance cutoff preserves authority/semantic evidence and removes weak sparse tail");

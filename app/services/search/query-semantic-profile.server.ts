@@ -12,9 +12,9 @@ import {
 import { normalizeQueryText } from "./deterministic-query-parser.server";
 
 export const QUERY_SEMANTIC_PROFILE_VERSION =
-  "query-semantic-profile-v2-source-owned-identity";
+  "query-semantic-profile-v3-source-owned-target-authority";
 export const QUERY_EMBEDDING_PIPELINE_VERSION =
-  "semantic-expansion-v13-aligned-demand-evidence";
+  "semantic-expansion-v14-source-owned-target-branches";
 
 export type QuerySemanticProfile = {
   rawPlan: QueryPlan;
@@ -221,8 +221,8 @@ export function sourceOwnedSemanticDemandIdentities(args: {
     Boolean(
       value &&
       (
-        sourceQuery.includes(value) ||
-        value.includes(sourceQuery)
+        ` ${sourceQuery} `.includes(` ${value} `) ||
+        value === sourceQuery
       ),
     );
 
@@ -236,11 +236,65 @@ export function sourceOwnedSemanticDemandIdentities(args: {
       // to the shopper query. This keeps translation provenance without
       // trusting array position or unrelated occasion/context MUSTs.
       return concepts.some((concept) => {
+        // Source ownership must describe the same canonical target,
+        // not merely contain the same family token. "bicycle accessories"
+        // cannot launder "bicycle" into target identity.
         const identityMatchesTarget =
-          concept.target === normalizedIdentity ||
-          concept.target.includes(normalizedIdentity) ||
-          normalizedIdentity.includes(concept.target);
+          concept.target === normalizedIdentity;
         return identityMatchesTarget && sourceContains(concept.source);
+      });
+    }),
+  )];
+}
+
+export function sourceOwnedSemanticExactConstraints(args: {
+  originalQuery: string;
+  exactConstraints: string[];
+  mandatoryConcepts: Array<{ target: string; source: string }>;
+  rawPlan?: QueryPlan;
+}) {
+  const sourceQuery = normalizeQueryText(args.originalQuery);
+  const complementScope = args.rawPlan
+    ? complementReferenceTokenScope(args.originalQuery, args.rawPlan)
+    : null;
+  const concepts = args.mandatoryConcepts.map((concept) => ({
+    target: normalizeQueryText(concept.target),
+    source: normalizeQueryText(concept.source),
+  }));
+
+  const sourceContains = (value: string) =>
+    Boolean(
+      value &&
+      (
+        ` ${sourceQuery} `.includes(` ${value} `) ||
+        value === sourceQuery
+      ),
+    );
+  const belongsToComplementTarget = (value: string) => {
+    if (!complementScope) return true;
+    const tokens = value.split(" ").filter(Boolean);
+    if (tokens.length === 0) return false;
+    const onlyReference = tokens.every((token) =>
+      complementScope.referenceTokens.has(token),
+    );
+    const targetOwned = tokens.some((token) =>
+      complementScope.targetTokens.has(token),
+    );
+    return !onlyReference || targetOwned;
+  };
+
+  return [...new Set(
+    args.exactConstraints.filter((constraint) => {
+      const normalizedConstraint = normalizeQueryText(constraint);
+      if (!normalizedConstraint) return false;
+      return concepts.some((concept) => {
+        const targetMatches =
+          concept.target === normalizedConstraint;
+        return (
+          targetMatches &&
+          sourceContains(concept.source) &&
+          belongsToComplementTarget(concept.source)
+        );
       });
     }),
   )];
@@ -639,6 +693,17 @@ export function buildQuerySemanticProfile(args: {
 
   const targetSemanticMustTerms =
     safeLlm.analysis.semanticMustTerms ?? [];
+  const sourceOwnedDemandIdentities = sourceOwnedSemanticDemandIdentities({
+    originalQuery: args.originalQuery,
+    identities: safeLlm.analysis.semanticDemand?.identity ?? [],
+    mandatoryConcepts: safeLlm.analysis.semanticMandatoryConcepts ?? [],
+  });
+  const sourceOwnedExactConstraints = sourceOwnedSemanticExactConstraints({
+    originalQuery: args.originalQuery,
+    exactConstraints: safeLlm.analysis.semanticDemand?.exactConstraints ?? [],
+    mandatoryConcepts: safeLlm.analysis.semanticMandatoryConcepts ?? [],
+    rawPlan: args.rawPlan,
+  });
   const semanticIdentityTerms = targetSemanticMustTerms.filter(
     (term) =>
       !expandedNonIdentityConstraints.some((constraint) =>
@@ -692,7 +757,8 @@ export function buildQuerySemanticProfile(args: {
         (item) => item.confidence >= 0.9,
       )
     ) ||
-    sourceGroundedDirectTarget;
+    sourceGroundedDirectTarget ||
+    sourceOwnedDemandIdentities.length > 0;
 
   // Retrieval relation is code-owned. Gemini may translate/expand a query,
   // but it must never invent COMPLEMENT/DISCOVERY semantics that are absent
@@ -746,21 +812,25 @@ export function buildQuerySemanticProfile(args: {
   };
   const baseline = queryPlanToLegacyRewrite(finalPlan, args.originalQuery);
   const mergedRewriteBase = mergeLlmRewriteIntoPlan(baseline, safeLlm);
-  const sourceOwnedDemandIdentities = sourceOwnedSemanticDemandIdentities({
-    originalQuery: args.originalQuery,
-    identities: safeLlm.analysis.semanticDemand?.identity ?? [],
-    mandatoryConcepts: safeLlm.analysis.semanticMandatoryConcepts ?? [],
-  });
   // Keep source-owned identity available to legacy evidence consumers without
   // converting it into a QueryPlan MUST. This is semantic provenance, not a
   // closed-world filter.
   const mergedRewriteBaseWithDemand =
     sourceOwnedDemandIdentities.length === 0
-      ? mergedRewriteBase
+      ? {
+          ...mergedRewriteBase,
+          analysis: {
+            ...mergedRewriteBase.analysis,
+            sourceOwnedTargetIdentities: [],
+            sourceOwnedExactConstraints,
+          },
+        }
       : {
           ...mergedRewriteBase,
           analysis: {
             ...mergedRewriteBase.analysis,
+            sourceOwnedTargetIdentities: sourceOwnedDemandIdentities,
+            sourceOwnedExactConstraints,
             productType:
               mergedRewriteBase.analysis.productType ||
               sourceOwnedDemandIdentities[0] ||

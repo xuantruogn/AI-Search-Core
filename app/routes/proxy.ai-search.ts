@@ -2741,6 +2741,10 @@ let resultCacheStatus: "HIT" | "MISS" = "MISS";
             structured,
             lexical,
             semanticNoEvidence: false,
+            hasSourceOwnedTargetIdentity:
+              (preparedRewrite.analysis.sourceOwnedTargetIdentities?.length ?? 0) > 0,
+            sourceOwnedTargetProductIds:
+              preparedRewrite.context?.targetFamilyProductIds ?? [],
             semanticThreshold: Number.parseFloat(
               process.env.AI_SEARCH_VECTOR_SCORE_THRESHOLD || "0.35",
             ),
@@ -2772,6 +2776,10 @@ let resultCacheStatus: "HIT" | "MISS" = "MISS";
             semanticNoEvidence:
               (searchDiagnostics as SemanticSearchDiagnostics | null)
                 ?.noEvidenceGuardTriggered === true,
+            hasSourceOwnedTargetIdentity:
+              (preparedRewrite.analysis.sourceOwnedTargetIdentities?.length ?? 0) > 0,
+            sourceOwnedTargetProductIds:
+              preparedRewrite.context?.targetFamilyProductIds ?? [],
             semanticThreshold:
               (searchDiagnostics as SemanticSearchDiagnostics | null)
                 ?.vectorThreshold ??
@@ -2804,6 +2812,10 @@ let resultCacheStatus: "HIT" | "MISS" = "MISS";
           // Certain absence already short-circuits above via finalProof. Do not
           // let open-world context uncertainty suppress the sparse lane here.
           sourceProductClassAbsent: false,
+          hasSourceOwnedTargetIdentity:
+            (preparedRewrite.analysis.sourceOwnedTargetIdentities?.length ?? 0) > 0,
+          sourceOwnedTargetProductIds:
+            preparedRewrite.context?.targetFamilyProductIds ?? [],
           semanticThreshold:
             semanticDiagnostics?.vectorThreshold ??
             Number.parseFloat(
