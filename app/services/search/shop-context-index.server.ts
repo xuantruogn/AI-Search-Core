@@ -2159,10 +2159,12 @@ export async function applyShopContextToQuery({
   const filterMs = Date.now() - filterStartedAt;
   const composeStartedAt = Date.now();
   const query = composeContextualEmbeddingInput(originalQuery, rewrite, selectedTerms);
-  const catalogRelevant =
-    rewrite.catalogRelevant &&
-    (terms.length === 0 || !hasAnalyzedProductType ||
-      !canonicalTypeCoverageComplete || matchingProductIds.size > 0);
+  // Shop context is open-world grounding, not absence proof. A translated
+  // shopper target may be semantically equivalent to catalog leaf types without
+  // sharing a literal taxonomy term (for example bicycle light vs headlight /
+  // taillight). Keep retrieval enabled; absence-proof.server is the only layer
+  // allowed to turn complete closed-world evidence into certain no-result.
+  const catalogRelevant = rewrite.catalogRelevant;
   const composeCodeMs = Date.now() - composeStartedAt;
   const totalMs = Date.now() - totalStartedAt;
 
@@ -2205,7 +2207,7 @@ export async function applyShopContextToQuery({
           : !canonicalTypeCoverageComplete
             ? "Canonical product-type context is rebuilding; hard catalog rejection is deferred."
           : hasAnalyzedProductType && matchingProductIds.size === 0
-            ? "The analyzed product type is not present in the sync-time shop context."
+            ? "The shopper-owned target is not literally grounded in shop context; semantic retrieval remains enabled and absence proof owns certainty."
           : selectedTerms.length > 0
             ? "Code matched the analyzed query against the sync-time shop context."
             : "Code found no matching term in the sync-time shop context.",
