@@ -3374,6 +3374,10 @@ export async function filterResultsByExplicitGender<
     }, 0);
     const strictFacetMatch = strictAttributes.every(exactFacetMatch);
     const excluded = negativeSignals.some(negative => matchesExplicitNegativeFacet(explicitFilterValues, negative));
+    const primaryDemandVectorSimilarity = Number(
+      (result as T & { primaryVectorSimilarity?: number })
+        .primaryVectorSimilarity,
+    );
     const targetIdentityVectorSimilarity = Number(
       (result as T & { targetIdentityVectorSimilarity?: number })
         .targetIdentityVectorSimilarity,
@@ -3399,6 +3403,10 @@ export async function filterResultsByExplicitGender<
       result,
       identityMatch,
       hasKnownIdentity: identityValues.length > 0,
+      primaryDemandVectorSimilarity:
+        Number.isFinite(primaryDemandVectorSimilarity)
+          ? primaryDemandVectorSimilarity
+          : 0,
       targetIdentitySemanticEvidence,
       complementaryReferenceMatch,
       complementaryPreferenceMatch,
@@ -3625,7 +3633,9 @@ export async function filterResultsByExplicitGender<
       // they were independently resolved into a closed-world typed facet.
       // This prevents open-world concepts such as style/use-case from
       // becoming accidental hard filters.
-      Math.min(0.10, item.semanticMustFacetMatch * 0.10) +
+      (currentRetrievalMode === "DISCOVERY"
+        ? 0
+        : Math.min(0.10, item.semanticMustFacetMatch * 0.10)) +
       Math.min(0.08, item.discoveryExpansionPreferenceMatch * 0.08) +
       Math.min(0.12, item.complementaryPreferenceMatch * 0.12) +
       // For long DIRECT need-style queries, an LLM expansion may resolve the
@@ -3692,6 +3702,12 @@ export async function filterResultsByExplicitGender<
           ? 1
           : 0,
       _sourceNeedCoverage: item.sourceNeedCoverage,
+      // The primary vector is the full Supply↔Demand semantic assessment.
+      // Keep it distinct from branch recall and PSF lexical overlap.
+      _jointDemandEvidence:
+        currentRetrievalMode === "DISCOVERY"
+          ? item.primaryDemandVectorSimilarity
+          : 0,
       _preferredFacetMatches: item.preferredFacetMatches,
       _sourceDiscoveryTier:
         currentRetrievalMode === "DISCOVERY" && item.sourceDiscoveryGrounding
@@ -3721,6 +3737,9 @@ export async function filterResultsByExplicitGender<
   filtered.sort((left, right) =>
     right._identityTier - left._identityTier ||
     right._directSourceFacetTier - left._directSourceFacetTier ||
+    (currentRetrievalMode === "DISCOVERY"
+      ? right._jointDemandEvidence - left._jointDemandEvidence
+      : 0) ||
     (currentRetrievalMode === "DISCOVERY" && sourceCoverageSignals.length >= 2
       ? Number(right._sourceNeedCoverage === 1) - Number(left._sourceNeedCoverage === 1)
       : 0) ||
@@ -3731,17 +3750,7 @@ export async function filterResultsByExplicitGender<
     ) ||
     (
       currentRetrievalMode === "DISCOVERY"
-        ? right._semanticNeedTier - left._semanticNeedTier
-        : 0
-    ) ||
-    (
-      currentRetrievalMode === "DISCOVERY"
         ? right._sourceDiscoveryTier - left._sourceDiscoveryTier
-        : 0
-    ) ||
-    (
-      currentRetrievalMode === "DISCOVERY"
-        ? right._semanticNeedCoverage - left._semanticNeedCoverage
         : 0
     ) ||
     (
@@ -3798,11 +3807,17 @@ export async function filterResultsByExplicitGender<
       const result = item as DiscoveryBranchResult;
       const branch = Number(result.semanticBranchIndex);
       const relative = Number(result.semanticBranchRelativeScore);
+      const primaryDemandSimilarity = Number(
+        (result as DiscoveryBranchResult & { primaryVectorSimilarity?: number })
+          .primaryVectorSimilarity,
+      );
       if (
         !Number.isSafeInteger(branch) ||
         branch <= 0 ||
         !Number.isFinite(relative) ||
         relative < 0.9 ||
+        !Number.isFinite(primaryDemandSimilarity) ||
+        primaryDemandSimilarity < semanticThreshold ||
         (sourceCoverageSignals.length >= 2 &&
           item._sourceNeedCoverage < filtered[0]._sourceNeedCoverage) ||
         item._typedRerankScore < topRankScore * 0.72
@@ -3856,6 +3871,7 @@ export async function filterResultsByExplicitGender<
     _directExpansionTier: _directExpansionTierIgnored,
     _directSourceFacetTier: _directSourceFacetTierIgnored,
     _sourceNeedCoverage: _sourceNeedCoverageIgnored,
+    _jointDemandEvidence: _jointDemandEvidenceIgnored,
     _preferredFacetMatches: _preferredFacetMatchesIgnored,
     _sourceDiscoveryTier: _sourceDiscoveryTierIgnored,
     _semanticNeedTier: _semanticNeedTierIgnored,
