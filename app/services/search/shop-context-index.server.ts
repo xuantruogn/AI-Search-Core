@@ -3469,36 +3469,6 @@ export async function filterResultsByExplicitGender<
   });
   const hasDirectSourceFacetConsensus =
     sourceGroundedDirectConsensusProductIds.size > 0;
-  const strongDirectSourceFacetEvidenceCount =
-    currentRetrievalMode === "DIRECT"
-      ? (hasDirectSourceFacetConsensus
-          ? sourceGroundedDirectConsensusProductIds.size
-          : sourceGroundedDirectProductIds.size)
-      : 0;
-  // Grounding is catalog evidence, not dependent on whether dense retrieval
-  // happened to return a proven item. Missing the matching item must not turn
-  // off this precision guard and fill the page with generic siblings.
-  const enforceSparseDirectSourceFacetEvidence =
-    currentRetrievalMode === "DIRECT" &&
-    sourceFacetPreferences.length > 0 &&
-    strongDirectSourceFacetEvidenceCount > 0 &&
-    strongDirectSourceFacetEvidenceCount <=
-      Math.max(12, Math.ceil(scored.length * 0.35));
-
-  const strongDirectContextEvidenceCount =
-    currentRetrievalMode === "DIRECT"
-      ? scored.filter(
-          (item) =>
-            item.directContextNeedMatch >= 0.75 ||
-            item.directSourceFacetGrounding,
-        ).length
-      : 0;
-  const enforceSparseDirectContextEvidence =
-    currentRetrievalMode === "DIRECT" &&
-    sourceContextNeedSignals.length > 0 &&
-    strongDirectContextEvidenceCount > 0 &&
-    strongDirectContextEvidenceCount <=
-      Math.max(8, Math.ceil(scored.length * 0.35));
 
   // LLM semantic expansions are retrieval probes and ranking hints only.
   // They must never become a hard eligibility filter: a product may satisfy
@@ -3584,36 +3554,6 @@ export async function filterResultsByExplicitGender<
       identityFilteredCount += 1;
       return [];
     }
-    if (
-      enforceSparseDirectSourceFacetEvidence &&
-      !(
-        hasDirectSourceFacetConsensus
-          ? item.directSourceFacetConsensusGrounding
-          : item.directSourceFacetGrounding
-      ) &&
-      item.semanticBranchLift < 0.025
-    ) {
-      // A shopper-owned explicit facet that exists on only a small subset of
-      // the requested family is high-precision evidence. Do not fill the page
-      // with generic siblings merely because the family vector is strong.
-      // A meaningful secondary-branch lift can still rescue a product whose
-      // semantic profile is incomplete.
-      exactConstraintFilteredCount += 1;
-      return [];
-    }
-    if (
-      enforceSparseDirectContextEvidence &&
-      item.directContextNeedMatch < 0.75 &&
-      !item.directSourceFacetGrounding &&
-      item.semanticBranchLift < 0.025
-    ) {
-      // Once the catalog proves that only a small subset of this DIRECT
-      // product family satisfies the shopper-owned use-case/context, do not
-      // fill the page with generic siblings. A material semantic-branch lift
-      // can still rescue nearby seasonal/open-world alternatives.
-      exactConstraintFilteredCount += 1;
-      return [];
-    }
     if (!item.strictFacetMatch) {
       exactConstraintFilteredCount += 1;
       return [];
@@ -3665,11 +3605,10 @@ export async function filterResultsByExplicitGender<
       // The source still owns the broad identity; the grounded leaf is a strong
       // rerank signal, not a hard filter.
       (item.directExpansionGrounding ? 0.14 : 0) +
-      // A facet/use-case explicitly owned by the shopper and grounded to a
-      // product in the same DIRECT identity family is stronger than generic
-      // vector similarity, but remains a ranking signal rather than a hard
-      // filter. This keeps color/material soft while allowing relational needs
-      // such as "bag for laptop" to outrank grooming/lunch bags.
+      // Shopper-owned facet/use-case/context evidence is a ranking signal only.
+      // Open-world qualities such as waterproof/warm/seasonal use must not
+      // become an accidental AND gate merely because PSF happens to contain a
+      // matching term on a subset of the family.
       (item.directSourceFacetConsensusGrounding
         ? 0.14
         : item.directSourceFacetGrounding
