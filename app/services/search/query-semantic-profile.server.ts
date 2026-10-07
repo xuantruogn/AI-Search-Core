@@ -13,7 +13,7 @@ import { normalizeQueryText } from "./deterministic-query-parser.server";
 import { sourceProductTypeOwnsTarget } from "./query-planner.server";
 
 export const QUERY_SEMANTIC_PROFILE_VERSION =
-  "query-semantic-profile-v4-source-role-ownership";
+  "query-semantic-profile-v5-soft-semantic-polarity";
 export const QUERY_EMBEDDING_PIPELINE_VERSION =
   "semantic-expansion-v16-source-role-joint-demand";
 
@@ -434,38 +434,29 @@ export function shouldPromoteSourceNamedDirectTarget(args: {
   );
 }
 
-function applySemanticPolarity(
+export function applySemanticPolarity(
   plan: QueryPlan,
   llm: QueryRewriteResult,
 ): QueryPlan {
-  const mustTerms = [
-    ...(llm.analysis.semanticMustTerms ?? []),
-    ...(llm.analysis.semanticSourceMustTerms ?? []),
-  ];
   const mustNotTerms = llm.analysis.semanticMustNotTerms ?? [];
-  const apply = <T extends QueryConstraint>(items: T[]) =>
+  const applyNegationOnly = <T extends QueryConstraint>(items: T[]) =>
     items.map((item) => ({
       ...item,
+      // LLM semantic MUST expresses importance for meaning, not closed-world
+      // catalog truth. Never upgrade audience/context/compatibility/attribute
+      // SHOULD values to MUST from semantic prose alone. Explicit negatives
+      // may still exclude because negative intent owns its own filter lane.
       mode: semanticTermMatches(item, mustNotTerms)
         ? "MUST_NOT" as const
-        : exactSemanticTermMatches(item, mustTerms)
-          ? "MUST" as const
-          : item.mode,
+        : item.mode,
     }));
 
   return {
     ...plan,
-    // LLM semantic MUST means important for meaning, not an exact catalog
-    // requirement. Only code/source-owned markers may harden an attribute.
-    attributes: plan.attributes.map((item) => ({
-      ...item,
-      mode: semanticTermMatches(item, mustNotTerms)
-        ? "MUST_NOT" as const
-        : item.mode,
-    })),
-    audiences: apply(plan.audiences),
-    contexts: apply(plan.contexts),
-    compatibility: apply(plan.compatibility),
+    attributes: applyNegationOnly(plan.attributes),
+    audiences: applyNegationOnly(plan.audiences),
+    contexts: applyNegationOnly(plan.contexts),
+    compatibility: applyNegationOnly(plan.compatibility),
   };
 }
 
