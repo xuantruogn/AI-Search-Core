@@ -191,4 +191,40 @@ const compatibility: SearchResult = {
   assert.equal(grounded.results.length, 1, "actual matched warm fact retains structured rescue");
 }
 
+{
+  const size32Pants: SearchResult = {
+    productId: "PANTS32",
+    handle: "pants-32",
+    title: "Trousers Size 32",
+    score: 0.92,
+    structuredScore: 0.92,
+    structuredMatchedKinds: ["MEASUREMENT"],
+    structuredAnchorKinds: ["MEASUREMENT"],
+    structuredGuardRescue: true,
+    retrievalSources: ["STRUCTURED"],
+  };
+  const size32Shoe: SearchResult = {
+    ...size32Pants,
+    productId: "SHOE32",
+    handle: "shoe-32",
+    title: "Shoe Size 32",
+  };
+  const fused = fuseHybridRetrieval({
+    plan: { ...directPlan, unresolvedSegments: [] },
+    semantic: [],
+    structured: [size32Pants, size32Shoe],
+    lexical: [],
+    semanticNoEvidence: true,
+    hasSourceOwnedTargetIdentity: true,
+    sourceOwnedTargetProductIds: ["SHOE32"],
+    semanticThreshold: 0.35,
+    limit: 20,
+  });
+  assert.deepEqual(
+    fused.results.map((result) => result.productId),
+    ["SHOE32"],
+    "measurement authority must be scoped to the shopper-owned target family",
+  );
+}
+
 console.log("PASS: hybrid retrieval fusion preserves lane authority and no-evidence safety");
