@@ -246,6 +246,61 @@ export function sourceOwnedSemanticDemandIdentities(args: {
   )];
 }
 
+export function sourceOwnedSemanticExactConstraints(args: {
+  originalQuery: string;
+  exactConstraints: string[];
+  mandatoryConcepts: Array<{ target: string; source: string }>;
+  rawPlan?: QueryPlan;
+}) {
+  const sourceQuery = normalizeQueryText(args.originalQuery);
+  const complementScope = args.rawPlan
+    ? complementReferenceTokenScope(args.originalQuery, args.rawPlan)
+    : null;
+  const concepts = args.mandatoryConcepts.map((concept) => ({
+    target: normalizeQueryText(concept.target),
+    source: normalizeQueryText(concept.source),
+  }));
+
+  const sourceContains = (value: string) =>
+    Boolean(
+      value &&
+      (
+        ` ${sourceQuery} `.includes(` ${value} `) ||
+        value === sourceQuery
+      ),
+    );
+  const belongsToComplementTarget = (value: string) => {
+    if (!complementScope) return true;
+    const tokens = value.split(" ").filter(Boolean);
+    if (tokens.length === 0) return false;
+    const onlyReference = tokens.every((token) =>
+      complementScope.referenceTokens.has(token),
+    );
+    const targetOwned = tokens.some((token) =>
+      complementScope.targetTokens.has(token),
+    );
+    return !onlyReference || targetOwned;
+  };
+
+  return [...new Set(
+    args.exactConstraints.filter((constraint) => {
+      const normalizedConstraint = normalizeQueryText(constraint);
+      if (!normalizedConstraint) return false;
+      return concepts.some((concept) => {
+        const targetMatches =
+          concept.target === normalizedConstraint ||
+          concept.target.includes(normalizedConstraint) ||
+          normalizedConstraint.includes(concept.target);
+        return (
+          targetMatches &&
+          sourceContains(concept.source) &&
+          belongsToComplementTarget(concept.source)
+        );
+      });
+    }),
+  )];
+}
+
 export function semanticTermsCoverConstraint(
   constraint: QueryConstraint,
   terms: string[],
@@ -644,6 +699,12 @@ export function buildQuerySemanticProfile(args: {
     identities: safeLlm.analysis.semanticDemand?.identity ?? [],
     mandatoryConcepts: safeLlm.analysis.semanticMandatoryConcepts ?? [],
   });
+  const sourceOwnedExactConstraints = sourceOwnedSemanticExactConstraints({
+    originalQuery: args.originalQuery,
+    exactConstraints: safeLlm.analysis.semanticDemand?.exactConstraints ?? [],
+    mandatoryConcepts: safeLlm.analysis.semanticMandatoryConcepts ?? [],
+    rawPlan: args.rawPlan,
+  });
   const semanticIdentityTerms = targetSemanticMustTerms.filter(
     (term) =>
       !expandedNonIdentityConstraints.some((constraint) =>
@@ -762,6 +823,7 @@ export function buildQuerySemanticProfile(args: {
           analysis: {
             ...mergedRewriteBase.analysis,
             sourceOwnedTargetIdentities: [],
+            sourceOwnedExactConstraints,
           },
         }
       : {
@@ -769,6 +831,7 @@ export function buildQuerySemanticProfile(args: {
           analysis: {
             ...mergedRewriteBase.analysis,
             sourceOwnedTargetIdentities: sourceOwnedDemandIdentities,
+            sourceOwnedExactConstraints,
             productType:
               mergedRewriteBase.analysis.productType ||
               sourceOwnedDemandIdentities[0] ||
