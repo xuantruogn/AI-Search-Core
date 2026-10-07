@@ -44,7 +44,11 @@ try {
   const results = await filterResultsByExplicitGender({
     shop: "source-coverage-fixture", originalQuery: rewrite.query, rewrite, results: candidates,
   });
-  assert.equal(results[0].productId, "complete", "both source needs outrank a slightly stronger partial vector match");
+  assert.equal(
+    results[0].productId,
+    "partial",
+    "primary full-Demand dense evidence must outrank lexical source-coverage overlap",
+  );
   assert.equal(results.length, candidates.length, "soft source coverage preserves partial alternatives");
   assert.deepEqual(new Set(results.map(r => r.productId)), new Set(candidates.map(r => r.productId)));
 
@@ -66,15 +70,21 @@ try {
         retrievalSources: ["SEMANTIC"], semanticBranchInput: "jacket", semanticBranchIndex: 1 },
     ],
   });
-  assert.deepEqual(identityBranchResults.map(r => r.productId), ["source-jacket"],
-    "a generic identity embedding branch cannot prove the source waterproof facet");
+  assert.deepEqual(
+    identityBranchResults.map(r => r.productId),
+    ["source-jacket", "generic-jacket"],
+    "a soft source facet may rerank but must not hard-exclude a same-family alternative",
+  );
   const missingGroundedResults = await filterResultsByExplicitGender({
     shop: "source-coverage-fixture", originalQuery: direct.query, rewrite: direct,
     results: [{ productId: "generic-jacket", score: 0.65, vectorSimilarity: 0.65,
       primaryVectorSimilarity: 0.40, retrievalSources: ["SEMANTIC"], semanticBranchInput: "jacket", semanticBranchIndex: 1 }],
   });
-  assert.deepEqual(missingGroundedResults, [],
-    "missing the catalog-proven candidate must not disable the facet precision guard");
+  assert.deepEqual(
+    missingGroundedResults.map(r => r.productId),
+    ["generic-jacket"],
+    "missing open-world facet evidence must not become a hidden hard filter",
+  );
 
   const expansionOnly = await filterResultsByExplicitGender({
     shop: "source-coverage-fixture", originalQuery: "jacket for evenings", rewrite: {
@@ -90,7 +100,7 @@ try {
   });
   assert.equal(expansionOnly.length, 2,
     "LLM expansion evidence remains a ranking hint and cannot hard-exclude a valid source-family candidate");
-  console.log("PASS: source need coverage ranks joint facts without making soft needs hard filters");
+  console.log("PASS: source coverage reranks without stealing hard-filter authority");
 } finally {
   (db.aiSearchProductSemanticProfile as any).findMany = originalFindMany;
   await db.$disconnect();
