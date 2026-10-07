@@ -9,7 +9,7 @@ if (process.env.NODE_ENV === "production") {
   throw new Error("Development test only");
 }
 
-const endpoint = process.env.AI_SEARCH_LIVE_TEST_URL;
+const endpoint = process.env.AI_SEARCH_LIVE_TEST_URL ?? "";
 if (!endpoint) {
   throw new Error(
     "Set AI_SEARCH_LIVE_TEST_URL to the running dev/proxy-e2e endpoint",
