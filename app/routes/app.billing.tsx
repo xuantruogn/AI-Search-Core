@@ -263,6 +263,26 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       };
     }
 
+    // Business rule: once a merchant has an active PRO or CUSTOM entitlement,
+    // BASIC remains in the catalog but is disabled as a downgrade option.
+    // Keep this validation server-side so a crafted POST cannot bypass the UI.
+    const currentSubscription = await getSubscriptionSnapshot(session.shop, {
+      ensure: false,
+    });
+    const currentPlanHandle =
+      currentSubscription.planHandle?.trim().toLowerCase() ?? null;
+    const hasActiveHigherTier =
+      currentSubscription.status === "ACTIVE" &&
+      (currentPlanHandle === "pro" || currentPlanHandle === "custom");
+
+    if (hasActiveHigherTier && planHandle === "basic") {
+      return {
+        success: false,
+        message:
+          "Downgrading from PRO or CUSTOM to BASIC is not available for this store.",
+      };
+    }
+
     const hasEverApprovedSubscription = Boolean(
       await db.billingEvent.findFirst({
         where: {
@@ -488,9 +508,15 @@ export default function BillingPage() {
 
 
   const currentPlanHandle = data.subscription.planHandle?.toLowerCase() ?? null;
-  const availablePlans = data.customPlan
+  const hideBasicPlan =
+    isActive &&
+    (currentPlanHandle === "pro" || currentPlanHandle === "custom");
+  const availablePlans = (data.customPlan
     ? [...data.plans, data.customPlan]
-    : data.plans;
+    : data.plans
+  ).filter(
+    (plan) => !(hideBasicPlan && plan.handle.toLowerCase() === "basic"),
+  );
   const comparisonFeatureCatalog = Array.from(
     new Map(
       availablePlans
@@ -977,7 +1003,7 @@ export default function BillingPage() {
         <strong style={{ color: "#374151", display: "block", marginBottom: 6 }}>
           🔒 Secure Checkout via Shopify Billing API:
         </strong>
-        All app charges are billed directly through your monthly Shopify Invoice. You can upgrade, downgrade, or cancel your subscription at any time within Shopify Admin without hidden fees.
+        All app charges are billed directly through your monthly Shopify Invoice. Available plan changes are confirmed through Shopify Billing.
       </div>
     </div>
   );
