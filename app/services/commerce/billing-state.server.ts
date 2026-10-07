@@ -121,7 +121,6 @@ function getCommercialStatus(
   if (status === "ACTIVE") return trialStatus === "ACTIVE" ? "TRIAL" : "PAID";
   if (
     status === "CANCELLED" &&
-    cancellationStatus === "NON_RENEWING" &&
     currentPeriodEndsAt &&
     currentPeriodEndsAt > new Date()
   ) {
@@ -141,7 +140,6 @@ function getAccessStatus(
     status === "ACTIVE" ||
     (
       status === "CANCELLED" &&
-      cancellationStatus === "NON_RENEWING" &&
       currentPeriodEndsAt &&
       currentPeriodEndsAt > new Date()
     );
