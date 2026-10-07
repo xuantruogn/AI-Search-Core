@@ -879,21 +879,22 @@ export type SemanticSearchDiagnostics = {
   totalMs: number;
 };
 
-export function resolveSemanticRetrievalScope(args: {
+export function resolveSemanticRetrievalScope(_args: {
   retrievalMode: "DIRECT" | "DISCOVERY" | "COMPLEMENT";
   exactIdentityScope: boolean;
   identityIds: string[];
   directExpansionScopeIds: string[];
 }) {
-  if (args.retrievalMode !== "DIRECT" || !args.exactIdentityScope) {
-    return undefined;
-  }
-  return [
-    ...new Set([
-      ...args.identityIds,
-      ...args.directExpansionScopeIds,
-    ]),
-  ];
+  // Product-family context is evidence, not a safe pre-retrieval universe.
+  // Even a source-owned DIRECT class can have sibling/leaf taxonomy names in
+  // the catalog ("bicycle light" -> headlight/taillight, "shoes" -> loafer/
+  // oxford). Hard-scoping Qdrant by literal context IDs destroys recall before
+  // Supply↔Demand similarity gets a chance to evaluate those products.
+  //
+  // Closed-world exact entities are handled by structured retrieval/PSF after
+  // candidate generation. Keep Qdrant scoped only by tenant/searchable
+  // registry constraints.
+  return undefined;
 }
 
 export type SemanticSearchInput = {
