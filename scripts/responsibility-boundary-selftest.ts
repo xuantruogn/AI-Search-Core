@@ -20,6 +20,10 @@ import {
 import {
   SEMANTIC_CONTRACT_VERSION,
 } from "../app/services/search/semantic-contract.server";
+import {
+  currentTargetColors,
+  detectExplicitGender,
+} from "../app/services/search/shop-context-index.server";
 
 assert.deepEqual(
   sourceOwnedSemanticDemandIdentities({
@@ -127,6 +131,73 @@ assert.equal(
   }),
   "DIRECT",
   "a shopper-named translated target must use DIRECT semantics",
+);
+
+assert.equal(
+  detectExplicitGender(
+    "grey sneakers",
+    {
+      analysis: {
+        productType: "Women's",
+        productTypes: ["Women's", "sneaker"],
+        entities: [],
+        attributes: [],
+        audience: [],
+        shopLanguageTerms: [],
+        negativeTerms: [],
+      },
+      planning: { resolvedSegments: [] },
+    } as any,
+  ),
+  null,
+  "LLM/catalog product labels must not invent a shopper-owned gender filter",
+);
+
+assert.equal(
+  detectExplicitGender(
+    "women's grey sneakers",
+    {
+      analysis: {
+        productType: "sneaker",
+        productTypes: ["sneaker"],
+        entities: [],
+        attributes: [],
+        audience: [],
+        shopLanguageTerms: [],
+        negativeTerms: [],
+      },
+      planning: { resolvedSegments: [] },
+    } as any,
+  ),
+  "FEMALE",
+  "explicit shopper gender remains code-owned source evidence",
+);
+
+assert.deepEqual(
+  currentTargetColors(
+    "áo trắng",
+    {
+      analysis: {
+        sourceOwnedExactConstraints: ["white"],
+        negativeTerms: [],
+        negativeAttributes: [],
+      },
+      planning: {
+        retrievalMode: "DIRECT",
+        resolvedSegments: [
+          {
+            text: "trắng",
+            canonicalValue: "white",
+            field: "ATTRIBUTE",
+            confidence: 1,
+          },
+        ],
+      },
+    } as any,
+    new Set(["white", "blue"]),
+  ),
+  ["white"],
+  "typed target color must be source-owned and catalog-enumerated",
 );
 
 assert.deepEqual(
