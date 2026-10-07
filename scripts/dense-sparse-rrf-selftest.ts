@@ -87,9 +87,10 @@ const guarded = fuseHybridRetrieval({
 });
 assert.equal(
   guarded.results.length,
-  0,
-  "BM25 overlap must not bypass semantic no-evidence",
+  1,
+  "dense no-evidence must not erase the independent BM25 recall lane",
 );
+assert.equal(guarded.results[0]?.productId, "token-neighbor");
 
 const absentFamily = fuseHybridRetrieval({
   plan: null,
