@@ -10,9 +10,6 @@ type CutoffShape = {
   structuredMatchedKinds?: string[];
   structuredGuardRescue?: boolean;
   structuredExactCanonicalIdentity?: boolean;
-  /** Soft joint coverage of Semantic Demand axes, computed by PSF reranking. */
-  semanticDemandCoverage?: number;
-  semanticDemandSignalCount?: number;
   retrievalSources?: RetrievalSource[];
 };
 
@@ -70,31 +67,10 @@ export function applyFinalRelevanceCutoff<T extends { score: number }>(args: {
     if (hasExactAuthority(result)) return true;
 
     const sources = uniqueSources(result);
-    const demandSignalCount = result.semanticDemandSignalCount ?? 0;
-    const demandCoverage = Math.max(
-      0,
-      Math.min(1, result.semanticDemandCoverage ?? 0),
-    );
-    const weakJointDemand =
-      args.retrievalMode === "DISCOVERY" &&
-      demandSignalCount >= 2 &&
-      demandCoverage < 0.25;
-
     if (sources.size >= 2) {
-      // Agreement between retrieval lanes is corroboration, not proof that the
-      // product satisfies the shopper's complete semantic need. When PSF
-      // evidence covers almost none of a multi-axis Demand, require materially
-      // stronger dense evidence instead of accepting the item solely because
-      // two recall systems happened to retrieve it.
-      if (weakJointDemand) {
-        const cosine = result.vectorSimilarity;
-        return (
-          sources.has("SEMANTIC") &&
-          typeof cosine === "number" &&
-          Number.isFinite(cosine) &&
-          cosine >= Math.min(0.95, args.semanticThreshold + 0.08)
-        );
-      }
+      // Lane agreement is corroboration only. Complete semantic meaning is
+      // owned by dense Supply↔Demand evidence; PSF term overlap must not turn
+      // open-world semantic axes into a hidden hard filter.
       return true;
     }
 
@@ -120,7 +96,6 @@ export function applyFinalRelevanceCutoff<T extends { score: number }>(args: {
     }
 
     if (sources.has("SPARSE")) {
-      if (weakJointDemand) return false;
       const rank = result.sparseRank ?? Number.POSITIVE_INFINITY;
       const score = result.sparseScore ?? 0;
       const relative = topSparse > 0 ? score / topSparse : 0;
