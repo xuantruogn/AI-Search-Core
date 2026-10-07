@@ -1111,6 +1111,8 @@ export async function semanticSearch({
       vectorOverride;
 
     const directPlan = buildDirectEmbeddingPlan(preparedRewrite);
+    primaryEmbeddingInputForDiagnostics =
+      directPlan.primary || preparedRewrite?.query || cleanQuery;
     const preparedMode = retrievalModeOf(preparedRewrite);
     directSourceResidualBranchIndex =
       preparedMode === "DIRECT"
