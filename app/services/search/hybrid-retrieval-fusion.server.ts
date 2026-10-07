@@ -297,6 +297,7 @@ export function fuseHybridRetrieval(args: {
             // metadata but cannot rescue or bypass semantic relevance.
             structuredGuardRescue: false,
             structuredAnchorKinds: [],
+            structuredExactCanonicalIdentity: false,
           };
     const canRescue =
       !args.sourceProductClassAbsent &&
