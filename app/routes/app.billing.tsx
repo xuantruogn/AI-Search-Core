@@ -269,10 +269,11 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const currentSubscription = await getSubscriptionSnapshot(session.shop, {
       ensure: false,
     });
+    const currentEntitlement = await getShopEntitlement(session.shop);
     const currentPlanHandle =
       currentSubscription.planHandle?.trim().toLowerCase() ?? null;
     const hasActiveHigherTier =
-      currentSubscription.status === "ACTIVE" &&
+      currentEntitlement.active &&
       (currentPlanHandle === "pro" || currentPlanHandle === "custom");
 
     if (hasActiveHigherTier && planHandle === "basic") {
