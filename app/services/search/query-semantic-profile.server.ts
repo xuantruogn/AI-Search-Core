@@ -221,8 +221,8 @@ export function sourceOwnedSemanticDemandIdentities(args: {
     Boolean(
       value &&
       (
-        sourceQuery.includes(value) ||
-        value.includes(sourceQuery)
+        ` ${sourceQuery} `.includes(` ${value} `) ||
+        value === sourceQuery
       ),
     );
 
