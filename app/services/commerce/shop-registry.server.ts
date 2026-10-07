@@ -220,6 +220,8 @@ export async function ensureShopRecord({
         \`shopifyShopId\` = COALESCE(${shopifyShopId ?? null}, \`shopifyShopId\`),
         \`status\` = 'ACTIVE',
         \`uninstalledAt\` = NULL,
+        \`reinstalledAt\` = UTC_TIMESTAMP(3),
+        \`installCount\` = COALESCE(\`installCount\`, 0) + 1,
         \`updatedAt\` = UTC_TIMESTAMP(3)
       WHERE \`shop\` = ${cleanShop}
     `;
