@@ -51,6 +51,18 @@ assert.deepEqual(
 );
 
 assert.deepEqual(
+  sourceOwnedSemanticDemandIdentities({
+    originalQuery: "bicycle accessories",
+    identities: ["bicycle"],
+    mandatoryConcepts: [
+      { target: "bicycle accessories", source: "bicycle accessories" },
+    ],
+  }),
+  [],
+  "a broader compound target must not promote its contained parent family",
+);
+
+assert.deepEqual(
   sourceOwnedSemanticExactConstraints({
     originalQuery: "áo xanh",
     exactConstraints: ["blue"],
@@ -99,6 +111,18 @@ assert.deepEqual(
   }),
   [],
   "unpaired LLM exact values must not gain source ownership",
+);
+
+assert.deepEqual(
+  sourceOwnedSemanticExactConstraints({
+    originalQuery: "áo xanh đậm",
+    exactConstraints: ["blue"],
+    mandatoryConcepts: [
+      { target: "dark blue", source: "xanh đậm" },
+    ],
+  }),
+  [],
+  "a broader translated facet must not grant contained exact authority",
 );
 
 assert.equal(
