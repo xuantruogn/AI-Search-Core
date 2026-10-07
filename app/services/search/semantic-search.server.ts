@@ -879,6 +879,23 @@ export type SemanticSearchDiagnostics = {
   totalMs: number;
 };
 
+export function resolveSemanticRetrievalScope(args: {
+  retrievalMode: "DIRECT" | "DISCOVERY" | "COMPLEMENT";
+  exactIdentityScope: boolean;
+  identityIds: string[];
+  directExpansionScopeIds: string[];
+}) {
+  if (args.retrievalMode !== "DIRECT" || !args.exactIdentityScope) {
+    return undefined;
+  }
+  return [
+    ...new Set([
+      ...args.identityIds,
+      ...args.directExpansionScopeIds,
+    ]),
+  ];
+}
+
 export type SemanticSearchInput = {
   preparedRewrite?: QueryRewriteResult;
   shop: string;
@@ -1621,10 +1638,12 @@ export async function semanticSearch({
   // Only an exact, source-grounded DIRECT identity may narrow the Qdrant
   // candidate universe before retrieval. Discovery/context grounding is recall
   // evidence and must never collapse parent-family recall before dense/BM25.
-  const retrievalScopeIds =
-    exactIdentityScope
-      ? [...new Set([...identityIds, ...directExpansionScopeIds])]
-      : undefined;
+  const retrievalScopeIds = resolveSemanticRetrievalScope({
+    retrievalMode,
+    exactIdentityScope,
+    identityIds,
+    directExpansionScopeIds,
+  });
 
   const onQdrantDiagnostics = (
     diagnostics: {
