@@ -6,6 +6,7 @@ import {
   resolveCodeOwnedRetrievalMode,
   QUERY_EMBEDDING_PIPELINE_VERSION,
   QUERY_SEMANTIC_PROFILE_VERSION,
+  applySemanticPolarity,
 } from "../app/services/search/query-semantic-profile.server";
 import {
   buildDirectEmbeddingPlan,
@@ -14,6 +15,7 @@ import {
   resolveSemanticRetrievalScope,
 } from "../app/services/search/semantic-search.server";
 import { parseRewrittenQuery } from "../app/services/search/query-rewriter.server";
+import { parseDeterministicQuery } from "../app/services/search/deterministic-query-parser.server";
 import {
   currentSearchPipelineSignature,
 } from "../app/services/search/search-result-cache.server";
@@ -171,6 +173,80 @@ assert.equal(
   ),
   "FEMALE",
   "explicit shopper gender remains code-owned source evidence",
+);
+
+const semanticPolarityPlan = {
+  attributes: [
+    { name: "feature", value: "waterproof", normalizedValue: "waterproof", mode: "SHOULD", confidence: 0.7, source: "FULL_LLM" },
+    { name: "feature", value: "hood", normalizedValue: "hood", mode: "SHOULD", confidence: 0.7, source: "FULL_LLM" },
+  ],
+  audiences: [
+    { value: "hikers", normalizedValue: "hikers", mode: "SHOULD", confidence: 0.8, source: "FULL_LLM" },
+  ],
+  contexts: [
+    { value: "winter", normalizedValue: "winter", mode: "SHOULD", confidence: 0.8, source: "FULL_LLM" },
+  ],
+  compatibility: [
+    { value: "PlayStation 5", normalizedValue: "playstation 5", mode: "SHOULD", confidence: 0.8, source: "FULL_LLM" },
+    { value: "USB-C", normalizedValue: "usb c", mode: "MUST", confidence: 1, source: "CODE" },
+  ],
+} as any;
+const semanticPolarityResult = applySemanticPolarity(
+  semanticPolarityPlan,
+  {
+    analysis: {
+      semanticMustTerms: ["waterproof", "hikers", "winter", "PlayStation 5"],
+      semanticSourceMustTerms: ["hikers"],
+      semanticMustNotTerms: ["hood"],
+    },
+  } as any,
+);
+assert.equal(semanticPolarityResult.attributes[0]?.mode, "SHOULD");
+assert.equal(semanticPolarityResult.audiences[0]?.mode, "SHOULD");
+assert.equal(semanticPolarityResult.contexts[0]?.mode, "SHOULD");
+assert.equal(
+  semanticPolarityResult.compatibility.find((item: any) => item.value === "PlayStation 5")?.mode,
+  "SHOULD",
+  "LLM semantic MUST must not manufacture closed-world compatibility",
+);
+assert.equal(
+  semanticPolarityResult.compatibility.find((item: any) => item.value === "USB-C")?.mode,
+  "MUST",
+  "code-owned exact compatibility must remain hard",
+);
+assert.equal(
+  semanticPolarityResult.attributes.find((item: any) => item.value === "hood")?.mode,
+  "MUST_NOT",
+  "explicit negative semantic polarity keeps exclusion authority",
+);
+
+assert.deepEqual(
+  parseDeterministicQuery("Presta valve adapter for PlayStation 5").compatibility
+    .map((item) => item.normalizedValue),
+  ["playstation 5"],
+  "versioned platform after generic for must remain deterministic compatibility",
+);
+assert.deepEqual(
+  parseDeterministicQuery("case for iphone 15").compatibility
+    .map((item) => item.normalizedValue),
+  ["iphone 15"],
+  "known lowercase versioned model family must keep compatibility provenance",
+);
+assert.deepEqual(
+  parseDeterministicQuery("adapter compatible with device 5").compatibility
+    .map((item) => item.normalizedValue),
+  ["device 5"],
+  "explicit compatibility verb may own an arbitrary versioned model family",
+);
+assert.equal(
+  parseDeterministicQuery("shirt for toddler 5").compatibility.length,
+  0,
+  "generic recipient/age phrasing must not become compatibility",
+);
+assert.equal(
+  parseDeterministicQuery("gift for runner 10").compatibility.length,
+  0,
+  "generic audience/use-case plus a number must remain semantic",
 );
 
 assert.deepEqual(
