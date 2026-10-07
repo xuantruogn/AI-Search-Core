@@ -14,7 +14,7 @@ import { normalizeQueryText } from "./deterministic-query-parser.server";
 export const QUERY_SEMANTIC_PROFILE_VERSION =
   "query-semantic-profile-v3-source-owned-target-authority";
 export const QUERY_EMBEDDING_PIPELINE_VERSION =
-  "semantic-expansion-v14-source-owned-target-branches";
+  "semantic-expansion-v15-joint-demand-evidence";
 
 export type QuerySemanticProfile = {
   rawPlan: QueryPlan;
