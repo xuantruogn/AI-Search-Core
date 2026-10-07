@@ -923,7 +923,7 @@ const FALLBACK_PRODUCT_IDENTITY_KINDS = new Set([
 ]);
 
 function isComplementaryRelationText(value: string) {
-  return /\b(?:pair(?:s|ed|ing)?(?: well)? with|go(?:es|ing)?(?: well)? with|match(?:es|ed|ing)? with|wear with|style with|mac(?: gi)? voi|phoi(?: do)? voi|ket hop voi|hop voi|di cung voi)\b/.test(
+  return /\b(?:pair(?:s|ed|ing)?(?: well)? with|go(?:es|ing)?(?: well)? with|match(?:es|ed|ing)?(?: with)?|wear with|style with|mac(?: gi)? voi|phoi(?: do)? voi|ket hop voi|hop voi|di cung voi)\b/.test(
     normalizeContextTerm(value),
   );
 }
@@ -947,6 +947,7 @@ export function readComplementReferenceOnlyFacetTokens(
   const relationIndex = sourceTokens.findIndex(
     (token, index) =>
       token === "with" ||
+      /^(?:matches|matching|matched)$/.test(token) ||
       token === "voi" ||
       (token === "cung" && sourceTokens[index + 1] === "voi"),
   );
@@ -1032,9 +1033,12 @@ function buildProductIdentitySignals(
     rewrite.analysis.shopLanguageProductType,
     ...explicitCategoryValues,
   ].filter((value) => value?.trim());
+  const sourceIdentities = rewrite.analysis.sourceOwnedTargetIdentities ?? [];
+  const targetIdentityValues =
+    sourceIdentities.length > 0 ? sourceIdentities : explicitIdentityValues;
 
   return [
-    ...explicitIdentityValues.map((value) => ({ value, fallback: false })),
+    ...targetIdentityValues.map((value) => ({ value, fallback: false })),
     // Semantic expansions are recall hints, not proof of exact product
     // identity. Only fall back to the raw query when analysis produced no
     // product identity at all.
@@ -2242,20 +2246,21 @@ export async function applyShopContextToQuery({
   };
 }
 
-function detectExplicitGender(
+export function detectExplicitGender(
   originalQuery: string,
   rewrite: QueryRewriteResult,
 ): "MALE" | "FEMALE" | null {
   const negative = readGenderFlags(rewrite.analysis.negativeTerms.join(" "));
   const source = readSourceGenderFlags(originalQuery);
   const interpreted = readGenderFlags(
-    [
-      rewrite.analysis.productType,
-      ...rewrite.analysis.entities,
-      ...rewrite.analysis.attributes,
-      ...rewrite.analysis.audience,
-      ...rewrite.analysis.shopLanguageTerms,
-    ].join(" "),
+    (rewrite.planning?.resolvedSegments ?? [])
+      .filter(
+        (segment) =>
+          segment.field === "AUDIENCE" &&
+          sourceContainsFacet(originalQuery, segment.text),
+      )
+      .map((segment) => segment.canonicalValue)
+      .join(" "),
   );
   const positive = {
     male: source.male || interpreted.male,
@@ -2272,10 +2277,12 @@ function readSourceGenderFlags(value: string) {
   return {
     male:
       tokens.has("nam") || tokens.has("male") || tokens.has("man") ||
-      tokens.has("men") || normalized.includes("男"),
+      tokens.has("men") || tokens.has("homme") || tokens.has("hommes") ||
+      normalized.includes("男"),
     female:
       tokens.has("nữ") || tokens.has("nu") || tokens.has("female") ||
-      tokens.has("woman") || tokens.has("women") || normalized.includes("女"),
+      tokens.has("woman") || tokens.has("women") ||
+      tokens.has("femme") || tokens.has("femmes") || normalized.includes("女"),
   };
 }
 
@@ -2301,7 +2308,10 @@ function sourceTargetText(
   }
   const sourceTokens = normalizeContextTerm(originalQuery).split(" ").filter(Boolean);
   const relation = sourceTokens.findIndex((token, index) =>
-    token === "with" || token === "voi" ||
+    token === "with" ||
+    token === "voi" ||
+    /^(?:matches|matching|matched)$/.test(token) ||
+    (token === "for" && (rewrite.analysis.referenceTerms ?? []).length > 0) ||
     (token === "cung" && sourceTokens[index + 1] === "voi"),
   );
   return relation < 0 ? "" : sourceTokens.slice(0, relation).join(" ");
@@ -2509,6 +2519,25 @@ function sourceGroundedAttributeFacets(
     }
   }
   return [...facets].filter(Boolean);
+}
+
+export function currentTargetColors(
+  originalQuery: string,
+  rewrite: QueryRewriteResult,
+  vocabulary: Set<string>,
+) {
+  const source = sourceTargetText(originalQuery, rewrite);
+  const owned = new Set(
+    (rewrite.analysis.sourceOwnedExactConstraints ?? []).map(normalizeContextTerm),
+  );
+  return [...new Set([
+    ...owned,
+    ...sourceGroundedAttributeFacets(originalQuery, rewrite),
+  ])].filter(
+    (value) =>
+      vocabulary.has(value) &&
+      (owned.has(value) || sourceContainsFacet(source, value)),
+  );
 }
 
 /** Strictness is owned by the shopper's words, never by LLM MUST prose. */
@@ -2784,6 +2813,37 @@ export async function filterResultsByExplicitGender<
   );
   const dbReadMs = Date.now() - dbStartedAt;
   const filterStartedAt = Date.now();
+
+  // Validate explicit target colors only when typed color coverage is high.
+  // Missing product color remains unknown rather than becoming a contradiction.
+  const requestedExact = rewrite.analysis.sourceOwnedExactConstraints ?? [];
+  const catalogRows = requestedExact.length > 0
+    ? await loadShopSemanticRows(shop)
+    : rows;
+  const colorVocabulary = new Set(
+    catalogRows.flatMap((row) => {
+      const match = row.value.match(/^\s*colou?r\s*[=:]\s*(.+?)\s*$/i);
+      return match ? [normalizeContextTerm(match[1])] : [];
+    }),
+  );
+  const requestedColors = currentTargetColors(
+    originalQuery,
+    rewrite,
+    colorVocabulary,
+  );
+  const colorsByProduct = new Map<string, string[]>();
+  for (const row of rows) {
+    if (!["ATTRIBUTE", "VARIANT_OPTION"].includes(row.kind)) continue;
+    const match = row.value.match(/^\s*colou?r\s*[=:]\s*(.+?)\s*$/i);
+    if (!match) continue;
+    colorsByProduct.set(row.productId, [
+      ...(colorsByProduct.get(row.productId) ?? []),
+      normalizeContextTerm(match[1]),
+    ]);
+  }
+  const typedColorCoverage =
+    results.length > 0 ? colorsByProduct.size / results.length : 0;
+
   const genders = new Map<string, { male: boolean; female: boolean }>();
   const valuesByProduct = new Map<string, string[]>();
   const tokensByProduct = new Map<string, Set<string>>();
@@ -3374,6 +3434,10 @@ export async function filterResultsByExplicitGender<
     }, 0);
     const strictFacetMatch = strictAttributes.every(exactFacetMatch);
     const excluded = negativeSignals.some(negative => matchesExplicitNegativeFacet(explicitFilterValues, negative));
+    const primaryDemandVectorSimilarity = Number(
+      (result as T & { primaryVectorSimilarity?: number })
+        .primaryVectorSimilarity,
+    );
     const targetIdentityVectorSimilarity = Number(
       (result as T & { targetIdentityVectorSimilarity?: number })
         .targetIdentityVectorSimilarity,
@@ -3395,11 +3459,34 @@ export async function filterResultsByExplicitGender<
       targetIdentityVectorSimilarity >= configuredSemanticThreshold &&
       Number.isFinite(targetIdentityRelativeScore) &&
       targetIdentityRelativeScore >= 0.8;
+    const compoundIdentityContradiction = identitySignals.some((signal) => {
+      if (signal.tokens.length < 2 || identityMatch > 0) return false;
+      const head = signal.tokens.at(-1)!;
+      return valuesForKinds(["CANONICAL_PRODUCT_TYPE", "PRODUCT_TYPE"]).some(
+        (value) => {
+          const actual = normalizeIdentitySignalTokens(value);
+          return (
+            actual.length > 0 &&
+            !actual.some((token) => identityTokenEquivalent(token, head)) &&
+            actual.some((token) =>
+              signal.tokens
+                .slice(0, -1)
+                .some((modifier) => identityTokenEquivalent(token, modifier)),
+            )
+          );
+        },
+      );
+    });
     return {
       result,
       identityMatch,
       hasKnownIdentity: identityValues.length > 0,
+      primaryDemandVectorSimilarity:
+        Number.isFinite(primaryDemandVectorSimilarity)
+          ? primaryDemandVectorSimilarity
+          : 0,
       targetIdentitySemanticEvidence,
+      compoundIdentityContradiction,
       complementaryReferenceMatch,
       complementaryPreferenceMatch,
       discoveryGroundingMatch,
@@ -3438,37 +3525,10 @@ export async function filterResultsByExplicitGender<
   });
   const hasDirectSourceFacetConsensus =
     sourceGroundedDirectConsensusProductIds.size > 0;
-  const strongDirectSourceFacetEvidenceCount =
-    currentRetrievalMode === "DIRECT"
-      ? (hasDirectSourceFacetConsensus
-          ? sourceGroundedDirectConsensusProductIds.size
-          : sourceGroundedDirectProductIds.size)
-      : 0;
-  // Grounding is catalog evidence, not dependent on whether dense retrieval
-  // happened to return a proven item. Missing the matching item must not turn
-  // off this precision guard and fill the page with generic siblings.
-  const enforceSparseDirectSourceFacetEvidence =
-    currentRetrievalMode === "DIRECT" &&
-    sourceFacetPreferences.length > 0 &&
-    strongDirectSourceFacetEvidenceCount > 0 &&
-    strongDirectSourceFacetEvidenceCount <=
-      Math.max(12, Math.ceil(scored.length * 0.35));
-
-  const strongDirectContextEvidenceCount =
-    currentRetrievalMode === "DIRECT"
-      ? scored.filter(
-          (item) =>
-            item.directContextNeedMatch >= 0.75 ||
-            item.directSourceFacetGrounding,
-        ).length
-      : 0;
-  const enforceSparseDirectContextEvidence =
-    currentRetrievalMode === "DIRECT" &&
-    sourceContextNeedSignals.length > 0 &&
-    strongDirectContextEvidenceCount > 0 &&
-    strongDirectContextEvidenceCount <=
-      Math.max(8, Math.ceil(scored.length * 0.35));
-
+  // Source facets and use-case/context grounding are open-world evidence.
+  // They improve ranking but never become eligibility gates. Strict source
+  // markers, target identity, negatives and closed-world typed facts own hard
+  // filtering below.
   // LLM semantic expansions are retrieval probes and ranking hints only.
   // They must never become a hard eligibility filter: a product may satisfy
   // the shopper need without storing every word from an expansion phrase.
@@ -3499,7 +3559,6 @@ export async function filterResultsByExplicitGender<
     { active: exactModelSignals.length > 0, key: "modelMatch" as const },
     { active: exactIdentifierSignals.length > 0, key: "identifierMatch" as const },
     { active: exactCompatibilitySignals.length > 0, key: "compatibilityMatch" as const },
-    { active: audienceSignals.length > 0, key: "audienceMatch" as const },
     { active: numericRequiredSignals.length > 0, key: "numericRequiredMatch" as const },
   ].filter((group) =>
     group.active &&
@@ -3525,6 +3584,21 @@ export async function filterResultsByExplicitGender<
       genderFilteredCount += 1;
       return [];
     }
+    const knownColors = colorsByProduct.get(result.productId) ?? [];
+    if (
+      requestedExact.length > 0 &&
+      typedColorCoverage >= 0.9 &&
+      requestedColors.length > 0 &&
+      knownColors.length > 0 &&
+      !requestedColors.some((color) =>
+        knownColors.some((actual) =>
+          sourceContainsFacet(actual.replace(/[/_-]/g, " "), color),
+        ),
+      )
+    ) {
+      colorFilteredCount += 1;
+      return [];
+    }
     if (
       complementaryReferenceSignals.length > 0 &&
       item.complementaryReferenceMatch >= 0.75
@@ -3545,42 +3619,19 @@ export async function filterResultsByExplicitGender<
       return [];
     }
     if (
+      hasSourceOwnedTargetIdentity &&
+      item.compoundIdentityContradiction
+    ) {
+      identityFilteredCount += 1;
+      return [];
+    }
+    if (
       directIdentityGrounded &&
       item.hasKnownIdentity &&
       item.identityMatch < 0.34 &&
       !item.targetIdentitySemanticEvidence
     ) {
       identityFilteredCount += 1;
-      return [];
-    }
-    if (
-      enforceSparseDirectSourceFacetEvidence &&
-      !(
-        hasDirectSourceFacetConsensus
-          ? item.directSourceFacetConsensusGrounding
-          : item.directSourceFacetGrounding
-      ) &&
-      item.semanticBranchLift < 0.025
-    ) {
-      // A shopper-owned explicit facet that exists on only a small subset of
-      // the requested family is high-precision evidence. Do not fill the page
-      // with generic siblings merely because the family vector is strong.
-      // A meaningful secondary-branch lift can still rescue a product whose
-      // semantic profile is incomplete.
-      exactConstraintFilteredCount += 1;
-      return [];
-    }
-    if (
-      enforceSparseDirectContextEvidence &&
-      item.directContextNeedMatch < 0.75 &&
-      !item.directSourceFacetGrounding &&
-      item.semanticBranchLift < 0.025
-    ) {
-      // Once the catalog proves that only a small subset of this DIRECT
-      // product family satisfies the shopper-owned use-case/context, do not
-      // fill the page with generic siblings. A material semantic-branch lift
-      // can still rescue nearby seasonal/open-world alternatives.
-      exactConstraintFilteredCount += 1;
       return [];
     }
     if (!item.strictFacetMatch) {
@@ -3625,7 +3676,9 @@ export async function filterResultsByExplicitGender<
       // they were independently resolved into a closed-world typed facet.
       // This prevents open-world concepts such as style/use-case from
       // becoming accidental hard filters.
-      Math.min(0.10, item.semanticMustFacetMatch * 0.10) +
+      (currentRetrievalMode === "DISCOVERY"
+        ? 0
+        : Math.min(0.10, item.semanticMustFacetMatch * 0.10)) +
       Math.min(0.08, item.discoveryExpansionPreferenceMatch * 0.08) +
       Math.min(0.12, item.complementaryPreferenceMatch * 0.12) +
       // For long DIRECT need-style queries, an LLM expansion may resolve the
@@ -3692,6 +3745,12 @@ export async function filterResultsByExplicitGender<
           ? 1
           : 0,
       _sourceNeedCoverage: item.sourceNeedCoverage,
+      // The primary vector is the full Supply↔Demand semantic assessment.
+      // Keep it distinct from branch recall and PSF lexical overlap.
+      _jointDemandEvidence:
+        currentRetrievalMode === "DISCOVERY"
+          ? item.primaryDemandVectorSimilarity
+          : 0,
       _preferredFacetMatches: item.preferredFacetMatches,
       _sourceDiscoveryTier:
         currentRetrievalMode === "DISCOVERY" && item.sourceDiscoveryGrounding
@@ -3721,6 +3780,9 @@ export async function filterResultsByExplicitGender<
   filtered.sort((left, right) =>
     right._identityTier - left._identityTier ||
     right._directSourceFacetTier - left._directSourceFacetTier ||
+    (currentRetrievalMode === "DISCOVERY"
+      ? right._jointDemandEvidence - left._jointDemandEvidence
+      : 0) ||
     (currentRetrievalMode === "DISCOVERY" && sourceCoverageSignals.length >= 2
       ? Number(right._sourceNeedCoverage === 1) - Number(left._sourceNeedCoverage === 1)
       : 0) ||
@@ -3731,17 +3793,7 @@ export async function filterResultsByExplicitGender<
     ) ||
     (
       currentRetrievalMode === "DISCOVERY"
-        ? right._semanticNeedTier - left._semanticNeedTier
-        : 0
-    ) ||
-    (
-      currentRetrievalMode === "DISCOVERY"
         ? right._sourceDiscoveryTier - left._sourceDiscoveryTier
-        : 0
-    ) ||
-    (
-      currentRetrievalMode === "DISCOVERY"
-        ? right._semanticNeedCoverage - left._semanticNeedCoverage
         : 0
     ) ||
     (
@@ -3798,11 +3850,17 @@ export async function filterResultsByExplicitGender<
       const result = item as DiscoveryBranchResult;
       const branch = Number(result.semanticBranchIndex);
       const relative = Number(result.semanticBranchRelativeScore);
+      const primaryDemandSimilarity = Number(
+        (result as DiscoveryBranchResult & { primaryVectorSimilarity?: number })
+          .primaryVectorSimilarity,
+      );
       if (
         !Number.isSafeInteger(branch) ||
         branch <= 0 ||
         !Number.isFinite(relative) ||
         relative < 0.9 ||
+        !Number.isFinite(primaryDemandSimilarity) ||
+        primaryDemandSimilarity < semanticThreshold ||
         (sourceCoverageSignals.length >= 2 &&
           item._sourceNeedCoverage < filtered[0]._sourceNeedCoverage) ||
         item._typedRerankScore < topRankScore * 0.72
@@ -3856,6 +3914,7 @@ export async function filterResultsByExplicitGender<
     _directExpansionTier: _directExpansionTierIgnored,
     _directSourceFacetTier: _directSourceFacetTierIgnored,
     _sourceNeedCoverage: _sourceNeedCoverageIgnored,
+    _jointDemandEvidence: _jointDemandEvidenceIgnored,
     _preferredFacetMatches: _preferredFacetMatchesIgnored,
     _sourceDiscoveryTier: _sourceDiscoveryTierIgnored,
     _semanticNeedTier: _semanticNeedTierIgnored,

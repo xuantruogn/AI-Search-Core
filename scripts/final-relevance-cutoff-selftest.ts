@@ -28,56 +28,61 @@ const discovery = applyFinalRelevanceCutoff({
   retrievalMode: "DISCOVERY",
   semanticThreshold: 0.35,
   results: [
-    { ...base("dense"), vectorSimilarity: 0.5, retrievalSources: ["SEMANTIC" as const] },
-    { ...base("confirmed"), vectorSimilarity: 0.4, sparseScore: 1, sparseRank: 10, retrievalSources: ["SEMANTIC" as const, "SPARSE" as const] },
+    { ...base("dense"), vectorSimilarity: 0.5, primaryVectorSimilarity: 0.5, retrievalSources: ["SEMANTIC" as const] },
+    { ...base("confirmed"), vectorSimilarity: 0.4, primaryVectorSimilarity: 0.4, sparseScore: 1, sparseRank: 10, retrievalSources: ["SEMANTIC" as const, "SPARSE" as const] },
     { ...base("sparse-strong"), sparseScore: 10, sparseRank: 1, retrievalSources: ["SPARSE" as const] },
     { ...base("sparse-mid"), sparseScore: 6, sparseRank: 3, retrievalSources: ["SPARSE" as const] },
     { ...base("sparse-tail"), sparseScore: 9, sparseRank: 8, retrievalSources: ["SPARSE" as const] },
   ],
 });
 assert.deepEqual(discovery.map((r: any) => r.productId), [
-  "dense", "confirmed", "sparse-strong",
+  "dense", "confirmed",
 ]);
 
-const discoveryDemandAware = applyFinalRelevanceCutoff({
+const discoveryJointDemand = applyFinalRelevanceCutoff({
   retrievalMode: "DISCOVERY",
   semanticThreshold: 0.35,
   results: [
     {
-      ...base("joint-good"),
-      vectorSimilarity: 0.39,
-      semanticDemandCoverage: 0.7,
-      semanticDemandSignalCount: 3,
+      ...base("joint-primary"),
+      vectorSimilarity: 0.42,
+      primaryVectorSimilarity: 0.39,
+      sparseScore: 5,
+      sparseRank: 2,
       retrievalSources: ["SEMANTIC" as const, "SPARSE" as const],
     },
     {
-      ...base("joint-weak"),
-      vectorSimilarity: 0.39,
-      semanticDemandCoverage: 0,
-      semanticDemandSignalCount: 3,
+      ...base("branch-only-hybrid"),
+      vectorSimilarity: 0.48,
+      sparseScore: 8,
+      sparseRank: 1,
       retrievalSources: ["SEMANTIC" as const, "SPARSE" as const],
     },
     {
-      ...base("joint-weak-strong-dense"),
+      ...base("weak-primary-hybrid"),
       vectorSimilarity: 0.47,
-      semanticDemandCoverage: 0,
-      semanticDemandSignalCount: 3,
+      primaryVectorSimilarity: 0.31,
+      sparseScore: 7,
+      sparseRank: 2,
       retrievalSources: ["SEMANTIC" as const, "SPARSE" as const],
     },
     {
-      ...base("sparse-weak-demand"),
+      ...base("exact-authority"),
+      structuredAnchorKinds: ["MEASUREMENT"],
+      retrievalSources: ["STRUCTURED" as const],
+    },
+    {
+      ...base("sparse-strong"),
       sparseScore: 20,
       sparseRank: 1,
-      semanticDemandCoverage: 0,
-      semanticDemandSignalCount: 3,
       retrievalSources: ["SPARSE" as const],
     },
   ],
 });
 assert.deepEqual(
-  discoveryDemandAware.map((r: any) => r.productId),
-  ["joint-good", "joint-weak", "joint-weak-strong-dense", "sparse-weak-demand"],
-  "PSF term coverage must not become a hidden hard filter for open-world Demand",
+  discoveryJointDemand.map((r: any) => r.productId),
+  ["joint-primary", "exact-authority"],
+  "DISCOVERY sparse/branch agreement cannot replace full primary Supply↔Demand evidence",
 );
 
 console.log("PASS: final relevance cutoff preserves authority/semantic evidence and removes weak sparse tail");

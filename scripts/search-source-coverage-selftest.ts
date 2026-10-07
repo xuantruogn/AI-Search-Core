@@ -9,6 +9,8 @@ const profiles = [
   { productId: "alternative", terms: [["USE_CASE", "commuting"]] },
   { productId: "source-jacket", terms: [["CANONICAL_PRODUCT_TYPE", "jacket"], ["ATTRIBUTE", "waterproof"]] },
   { productId: "generic-jacket", terms: [["CANONICAL_PRODUCT_TYPE", "jacket"]] },
+  { productId: "hiker-jacket", terms: [["CANONICAL_PRODUCT_TYPE", "jacket"], ["AUDIENCE", "hikers"]] },
+  { productId: "unknown-audience-jacket", terms: [["CANONICAL_PRODUCT_TYPE", "jacket"]] },
 ];
 (db.aiSearchProductSemanticProfile as any).findMany = async () => profiles.map(({ productId, terms }) => ({
   productId, updatedAt: new Date(), profile: {
@@ -44,7 +46,11 @@ try {
   const results = await filterResultsByExplicitGender({
     shop: "source-coverage-fixture", originalQuery: rewrite.query, rewrite, results: candidates,
   });
-  assert.equal(results[0].productId, "complete", "both source needs outrank a slightly stronger partial vector match");
+  assert.equal(
+    results[0].productId,
+    "partial",
+    "primary full-Demand dense evidence must outrank lexical source-coverage overlap",
+  );
   assert.equal(results.length, candidates.length, "soft source coverage preserves partial alternatives");
   assert.deepEqual(new Set(results.map(r => r.productId)), new Set(candidates.map(r => r.productId)));
 
@@ -66,15 +72,49 @@ try {
         retrievalSources: ["SEMANTIC"], semanticBranchInput: "jacket", semanticBranchIndex: 1 },
     ],
   });
-  assert.deepEqual(identityBranchResults.map(r => r.productId), ["source-jacket"],
-    "a generic identity embedding branch cannot prove the source waterproof facet");
+  assert.deepEqual(
+    identityBranchResults.map(r => r.productId),
+    ["source-jacket", "generic-jacket"],
+    "a soft source facet may rerank but must not hard-exclude a same-family alternative",
+  );
   const missingGroundedResults = await filterResultsByExplicitGender({
     shop: "source-coverage-fixture", originalQuery: direct.query, rewrite: direct,
     results: [{ productId: "generic-jacket", score: 0.65, vectorSimilarity: 0.65,
       primaryVectorSimilarity: 0.40, retrievalSources: ["SEMANTIC"], semanticBranchInput: "jacket", semanticBranchIndex: 1 }],
   });
-  assert.deepEqual(missingGroundedResults, [],
-    "missing the catalog-proven candidate must not disable the facet precision guard");
+  assert.deepEqual(
+    missingGroundedResults.map(r => r.productId),
+    ["generic-jacket"],
+    "missing open-world facet evidence must not become a hidden hard filter",
+  );
+
+  const audienceRewrite: any = {
+    ...direct,
+    query: "jacket for hikers",
+    analysis: {
+      ...direct.analysis,
+      attributes: [],
+      optionalPreferences: [],
+      audience: ["hikers"],
+      semanticExpansions: [],
+    },
+    planning: { ...direct.planning, resolvedSegments: [], unresolvedSegments: [] },
+    context: {},
+  };
+  const audienceResults = await filterResultsByExplicitGender({
+    shop: "source-coverage-fixture",
+    originalQuery: audienceRewrite.query,
+    rewrite: audienceRewrite,
+    results: [
+      { productId: "hiker-jacket", score: 0.48, vectorSimilarity: 0.48, primaryVectorSimilarity: 0.48, retrievalSources: ["SEMANTIC"] },
+      { productId: "unknown-audience-jacket", score: 0.47, vectorSimilarity: 0.47, primaryVectorSimilarity: 0.47, retrievalSources: ["SEMANTIC"] },
+    ],
+  });
+  assert.deepEqual(
+    new Set(audienceResults.map(r => r.productId)),
+    new Set(["hiker-jacket", "unknown-audience-jacket"]),
+  );
+  assert.equal(audienceResults[0]?.productId, "hiker-jacket");
 
   const expansionOnly = await filterResultsByExplicitGender({
     shop: "source-coverage-fixture", originalQuery: "jacket for evenings", rewrite: {
@@ -90,7 +130,7 @@ try {
   });
   assert.equal(expansionOnly.length, 2,
     "LLM expansion evidence remains a ranking hint and cannot hard-exclude a valid source-family candidate");
-  console.log("PASS: source need coverage ranks joint facts without making soft needs hard filters");
+  console.log("PASS: source coverage reranks without stealing hard-filter authority");
 } finally {
   (db.aiSearchProductSemanticProfile as any).findMany = originalFindMany;
   await db.$disconnect();

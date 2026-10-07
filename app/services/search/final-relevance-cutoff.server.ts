@@ -3,6 +3,8 @@ type RetrievalSource = "SEMANTIC" | "SPARSE" | "LEXICAL" | "STRUCTURED";
 type CutoffShape = {
   score: number;
   vectorSimilarity?: number;
+  /** Cosine against the primary full Semantic Demand embedding. */
+  primaryVectorSimilarity?: number;
   sparseScore?: number;
   sparseRank?: number;
   lexicalMatchType?: "EXACT_TITLE" | "TITLE_PHRASE" | "TITLE_TOKENS" | "HANDLE";
@@ -67,14 +69,29 @@ export function applyFinalRelevanceCutoff<T extends { score: number }>(args: {
     if (hasExactAuthority(result)) return true;
 
     const sources = uniqueSources(result);
+    const primaryDemandCosine = result.primaryVectorSimilarity;
+    const hasPrimaryDemandEvidence =
+      typeof primaryDemandCosine === "number" &&
+      Number.isFinite(primaryDemandCosine) &&
+      primaryDemandCosine >= args.semanticThreshold;
+
     if (sources.size >= 2) {
-      // Lane agreement is corroboration only. Complete semantic meaning is
-      // owned by dense Supply↔Demand evidence; PSF term overlap must not turn
-      // open-world semantic axes into a hidden hard filter.
+      // Lane agreement is corroboration, not proof of the whole request. In
+      // DISCOVERY the primary dense vector represents the joint Semantic
+      // Demand, so BM25/structured agreement cannot replace it. Exact
+      // authority was already handled above.
+      if (args.retrievalMode === "DISCOVERY") {
+        return sources.has("SEMANTIC") && hasPrimaryDemandEvidence;
+      }
       return true;
     }
 
     if (sources.has("SEMANTIC")) {
+      if (args.retrievalMode === "DISCOVERY") {
+        // Expansion vectors are recall probes. A branch-only hit is not final
+        // evidence that the product satisfies the complete shopper Demand.
+        return hasPrimaryDemandEvidence;
+      }
       const cosine = result.vectorSimilarity;
       return (
         typeof cosine === "number" &&
@@ -104,9 +121,10 @@ export function applyFinalRelevanceCutoff<T extends { score: number }>(args: {
         return rank <= 20 && relative >= 0.35;
       }
 
-      // Natural-language discovery is dense-led. A sparse-only candidate must
-      // be one of the very strongest lexical hits; otherwise it is tail filler.
-      return rank <= 5 && relative >= 0.7;
+      // BM25 is recall/corroboration, never open-world truth. Exact
+      // authority was already handled above, so sparse-only DISCOVERY or
+      // COMPLEMENT candidates cannot prove the shopper's semantic need.
+      return false;
     }
 
     return false;

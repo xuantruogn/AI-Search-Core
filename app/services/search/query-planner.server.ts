@@ -28,7 +28,7 @@ function constraint(value: string, confidence: number): QueryConstraint {
 }
 
 const COMPLEMENTARY_RELATION_PATTERN =
-  /\b(?:pair(?:s|ed|ing)?(?: well)? with|go(?:es|ing)?(?: well)? with|match(?:es|ed|ing)? with|wear with|style with|mac(?: gi)? voi|phoi(?: do)? voi|ket hop voi|hop voi|di cung voi)\b/;
+  /\b(?:pair(?:s|ed|ing)?(?: well)? with|go(?:es|ing)?(?: well)? with|match(?:es|ed|ing)?(?: with)?|wear with|style with|mac(?: gi)? voi|phoi(?: do)? voi|ket hop voi|hop voi|di cung voi)\b/;
 
 function complementaryRelationSpan(normalizedQuery: string) {
   const match = normalizedQuery.match(COMPLEMENTARY_RELATION_PATTERN);
@@ -62,6 +62,17 @@ export function sourceProductTypeOwnsTarget(args: {
 }) {
   const tokens = normalizeQueryText(args.query).split(" ").filter(Boolean);
   if (tokens.length === 0) return false;
+
+  // A quality modifying an indefinite requested object is not a catalog noun.
+  // Keep it unresolved so semantic understanding can disambiguate it.
+  const prefix = tokens.slice(0, args.start).join(" ");
+  if (
+    /\b(?:something|anything|nothing|thing|things)(?: (?:very|quite|really|more|less))?$/.test(
+      prefix,
+    )
+  ) {
+    return false;
+  }
 
   // A catalog noun appearing only after a relation/context boundary is
   // context, not automatically the requested product. Do this before the
@@ -180,6 +191,18 @@ async function buildUncachedPlan(
   const complementaryRelation = complementarySpan !== null;
   const rawMatches = initialCatalogMatches
     .filter((match) => {
+      // Audience vocabulary can also exist as merchant productType. Source
+      // role wins: men/women/kids/toddler are audience, never target identity
+      // merely because the shop dictionary contains the same text.
+      if (
+        match.entry.field === "PRODUCT_TYPE" &&
+        /^(?:men|women|mens|womens|men s|women s|male|female|boys|girls|kids|children|toddler)$/.test(
+          normalizeQueryText(match.text),
+        )
+      ) {
+        return false;
+      }
+
       if (
         deterministic.price &&
         match.entry.field === "MEASUREMENT" &&
@@ -394,6 +417,11 @@ async function buildUncachedPlan(
       normalizeQueryText(item.value).split(" "),
     ),
   );
+  const compatibilityTokens = new Set(
+    deterministic.compatibility.flatMap((item) =>
+      normalizeQueryText(item.value).split(" "),
+    ),
+  );
   const unresolvedTokens = semanticQuery
     .split(" ")
     .filter(
@@ -403,6 +431,7 @@ async function buildUncachedPlan(
         !STOP_WORDS.has(token) &&
         !structural.has(token) &&
         !measurementTokens.has(token) &&
+        !compatibilityTokens.has(token) &&
         !/^\d+(?:[.,]\d+)?$/.test(token),
     );
   const unresolvedSegments = unresolvedTokens.length ? [unresolvedTokens.join(" ")] : [];
@@ -559,7 +588,16 @@ async function buildUncachedPlan(
     ],
     audiences: byField("AUDIENCE"),
     contexts: [...byField("CONTEXT"), ...byField("ALIAS")],
-    compatibility: byField("COMPATIBILITY").map((item) => ({ ...item, mode: "MUST" })),
+    compatibility: [
+      ...deterministic.compatibility,
+      ...byField("COMPATIBILITY").map((item) => ({ ...item, mode: "MUST" as const })),
+    ].filter(
+      (item, index, list) =>
+        list.findIndex(
+          (candidate) =>
+            normalizeQueryText(candidate.value) === normalizeQueryText(item.value),
+        ) === index,
+    ),
     ...(deterministic.price ? { price: deterministic.price } : {}),
     marketPreference: deterministic.marketPreference,
     relation: deterministic.relation,

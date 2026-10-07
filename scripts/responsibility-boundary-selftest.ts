@@ -9,6 +9,7 @@ import {
 } from "../app/services/search/query-semantic-profile.server";
 import {
   buildDirectEmbeddingPlan,
+  buildDiscoveryEmbeddingBranches,
   fuseSemanticVectorBranches,
   resolveSemanticRetrievalScope,
 } from "../app/services/search/semantic-search.server";
@@ -19,6 +20,10 @@ import {
 import {
   SEMANTIC_CONTRACT_VERSION,
 } from "../app/services/search/semantic-contract.server";
+import {
+  currentTargetColors,
+  detectExplicitGender,
+} from "../app/services/search/shop-context-index.server";
 
 assert.deepEqual(
   sourceOwnedSemanticDemandIdentities({
@@ -63,6 +68,34 @@ assert.deepEqual(
 );
 
 assert.deepEqual(
+  sourceOwnedSemanticDemandIdentities({
+    originalQuery: "quần áo mặc mùa đông",
+    identities: ["winter apparel"],
+    mandatoryConcepts: [
+      { target: "winter apparel", source: "quần áo" },
+      { target: "winter", source: "mùa đông" },
+    ],
+    modifiers: ["winter"],
+  }),
+  ["apparel"],
+  "generic family must stay generic after stripping semantic context",
+);
+
+assert.deepEqual(
+  sourceOwnedSemanticDemandIdentities({
+    originalQuery: "áo trắng",
+    identities: ["white shirt"],
+    mandatoryConcepts: [
+      { target: "shirt", source: "áo" },
+      { target: "white", source: "trắng" },
+    ],
+    exactConstraints: ["white"],
+  }),
+  ["shirt"],
+  "exact modifier may wrap, but must not replace, the source-owned target noun",
+);
+
+assert.deepEqual(
   sourceOwnedSemanticExactConstraints({
     originalQuery: "áo xanh",
     exactConstraints: ["blue"],
@@ -98,6 +131,73 @@ assert.equal(
   }),
   "DIRECT",
   "a shopper-named translated target must use DIRECT semantics",
+);
+
+assert.equal(
+  detectExplicitGender(
+    "grey sneakers",
+    {
+      analysis: {
+        productType: "Women's",
+        productTypes: ["Women's", "sneaker"],
+        entities: [],
+        attributes: [],
+        audience: [],
+        shopLanguageTerms: [],
+        negativeTerms: [],
+      },
+      planning: { resolvedSegments: [] },
+    } as any,
+  ),
+  null,
+  "LLM/catalog product labels must not invent a shopper-owned gender filter",
+);
+
+assert.equal(
+  detectExplicitGender(
+    "women's grey sneakers",
+    {
+      analysis: {
+        productType: "sneaker",
+        productTypes: ["sneaker"],
+        entities: [],
+        attributes: [],
+        audience: [],
+        shopLanguageTerms: [],
+        negativeTerms: [],
+      },
+      planning: { resolvedSegments: [] },
+    } as any,
+  ),
+  "FEMALE",
+  "explicit shopper gender remains code-owned source evidence",
+);
+
+assert.deepEqual(
+  currentTargetColors(
+    "áo trắng",
+    {
+      analysis: {
+        sourceOwnedExactConstraints: ["white"],
+        negativeTerms: [],
+        negativeAttributes: [],
+      },
+      planning: {
+        retrievalMode: "DIRECT",
+        resolvedSegments: [
+          {
+            text: "trắng",
+            canonicalValue: "white",
+            field: "ATTRIBUTE",
+            confidence: 1,
+          },
+        ],
+      },
+    } as any,
+    new Set(["white", "blue"]),
+  ),
+  ["white"],
+  "typed target color must be source-owned and catalog-enumerated",
 );
 
 assert.deepEqual(
@@ -210,6 +310,46 @@ assert.equal(
     ?.targetIdentityVectorSimilarity,
   0.55,
   "target-family semantic evidence must stay distinct from generic query similarity",
+);
+
+const discoveryBranches = buildDiscoveryEmbeddingBranches({
+  query: "Looking for outerwear. The goal is staying warm. To use in winter. With insulated and wind resistant. For women. With a style of classic.",
+  planning: {
+    retrievalMode: "DISCOVERY",
+    semanticQuery: "Looking for outerwear. The goal is staying warm.",
+    resolvedSegments: [],
+  },
+  context: { selectedTerms: [] },
+  analysis: {
+    semanticDemand: {
+      identity: ["outerwear"],
+      desiredOutcomes: ["staying warm"],
+      useCases: ["cold-weather commuting"],
+      contexts: ["winter"],
+      qualities: ["insulated", "wind resistant"],
+      audience: ["women"],
+      styles: ["classic"],
+      negativeConstraints: [],
+      exactConstraints: [],
+    },
+    semanticMustTerms: ["outerwear"],
+    requiredAttributes: [],
+    useCases: [],
+    compatibility: [],
+    semanticExpansions: ["wool coat"],
+    intent: "Looking for warm winter outerwear",
+  },
+} as any);
+assert.equal(discoveryBranches.length, 1);
+assert.match(discoveryBranches[0] ?? "", /wool coat/i);
+assert.match(discoveryBranches[0] ?? "", /staying warm/i);
+assert.match(discoveryBranches[0] ?? "", /winter/i);
+assert.match(discoveryBranches[0] ?? "", /insulated/i);
+assert.match(discoveryBranches[0] ?? "", /women/i);
+assert.match(
+  discoveryBranches[0] ?? "",
+  /classic/i,
+  "secondary recall branches must carry the full open-world Demand axes",
 );
 
 const parsedRewrite = parseRewrittenQuery(

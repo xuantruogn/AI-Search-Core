@@ -135,6 +135,33 @@ const priced = parseDeterministicQuery("áo nam dưới 500k");
 assert.equal(priced.price?.max, 500_000);
 assert.equal(priced.marketPreference, "ANY");
 
+const textualSize = parseDeterministicQuery("black dress size medium");
+assert.ok(
+  textualSize.measurements.some(
+    (item) => item.name === "size" && /medium/i.test(item.value),
+  ),
+  "textual size must stay in the deterministic measurement lane",
+);
+
+const versionedCompatibility = parseDeterministicQuery(
+  "Presta valve adapter for PlayStation 5",
+);
+assert.deepEqual(
+  versionedCompatibility.compatibility.map((item) => item.normalizedValue),
+  ["playstation 5"],
+  "single-digit model versions after an explicit relation must be preserved",
+);
+
+assert.equal(
+  sourceProductTypeOwnsTarget({
+    query: "something light for hot weather",
+    start: 1,
+    end: 2,
+  }),
+  false,
+  "quality after an indefinite object must not become target product identity",
+);
+
 const budget = parseDeterministicQuery("đầm 2 dây siêu cấp vipro giá rẻ");
 assert.equal(budget.marketPreference, "BUDGET");
 assert.notEqual(budget.marketPreference, "PREMIUM");
