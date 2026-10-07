@@ -227,4 +227,35 @@ const compatibility: SearchResult = {
   );
 }
 
+{
+  const wrongFamilyExactCanonical: SearchResult = {
+    productId: "PANTS32",
+    handle: "pants-32",
+    title: "Trousers Size 32",
+    score: 0.94,
+    structuredScore: 0.94,
+    structuredMatchedKinds: ["PRODUCT_TYPE", "MEASUREMENT"],
+    structuredAnchorKinds: ["MEASUREMENT"],
+    structuredGuardRescue: true,
+    structuredExactCanonicalIdentity: true,
+    retrievalSources: ["STRUCTURED"],
+  };
+  const fused = fuseHybridRetrieval({
+    plan: { ...directPlan, unresolvedSegments: [] },
+    semantic: [],
+    structured: [wrongFamilyExactCanonical],
+    lexical: [],
+    semanticNoEvidence: false,
+    hasSourceOwnedTargetIdentity: true,
+    sourceOwnedTargetProductIds: ["SHOE32"],
+    semanticThreshold: 0.35,
+    limit: 20,
+  });
+  assert.equal(
+    fused.results.length,
+    0,
+    "wrong-family exact canonical metadata must not restore stripped measurement authority",
+  );
+}
+
 console.log("PASS: hybrid retrieval fusion preserves lane authority and no-evidence safety");
