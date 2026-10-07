@@ -509,6 +509,8 @@ export default function BillingPage() {
 
 
   const currentPlanHandle = data.subscription.planHandle?.toLowerCase() ?? null;
+  const isNonRenewing = data.entitlement.cancellationStatus === "NON_RENEWING";
+  const isActive = data.entitlement.active;
   const hideBasicPlan =
     isActive &&
     (currentPlanHandle === "pro" || currentPlanHandle === "custom");
@@ -532,9 +534,6 @@ export default function BillingPage() {
     "message" in subscribeFetcher.data
       ? String(subscribeFetcher.data.message)
       : null;
-  const isNonRenewing = data.entitlement.cancellationStatus === "NON_RENEWING";
-  const isActive = data.entitlement.active;
-
   return (
     <div
       style={{
