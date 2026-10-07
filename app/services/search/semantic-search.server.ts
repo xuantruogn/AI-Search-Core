@@ -231,14 +231,22 @@ function semanticDemandRecallContext(
     ...(rewrite.analysis.useCases ?? []),
     ...rewrite.analysis.compatibility,
   ];
+  const demandAxes = demand
+    ? [
+        demand.desiredOutcomes,
+        demand.useCases,
+        demand.contexts,
+        demand.qualities,
+        demand.audience,
+        demand.styles,
+      ]
+    : [];
   const values = demand
     ? [
-        ...demand.desiredOutcomes,
-        ...demand.useCases,
-        ...demand.contexts,
-        ...demand.qualities,
-        ...demand.audience,
-        ...demand.styles,
+        // First preserve at least one value from every semantic axis so one
+        // verbose axis cannot crowd audience/style/context out of a branch.
+        ...demandAxes.map((axis) => axis[0]).filter((value): value is string => Boolean(value)),
+        ...demandAxes.flatMap((axis) => axis.slice(1)),
       ]
     : legacy;
 
@@ -380,7 +388,7 @@ export function buildDiscoveryEmbeddingBranches(
   // carry the shopper's complete open-world Demand meaning. This keeps
   // expansion recall aligned with desired outcome/use-case/context/quality/
   // audience/style instead of reducing it to legacy MUST-term overlap.
-  const semanticContext = semanticDemandRecallContext(rewrite, 5);
+  const semanticContext = semanticDemandRecallContext(rewrite, 8);
 
   const groundedCanonicalTypes =
     rewrite.context?.selectedTerms
@@ -635,7 +643,7 @@ export function buildDirectEmbeddingPlan(
   // expansion phrases open semantic recall for short DIRECT need queries
   // (e.g. "office bag" -> work/laptop bag) without turning those phrases into
   // hard catalog evidence.
-  const directDemandContext = semanticDemandRecallContext(rewrite, 4);
+  const directDemandContext = semanticDemandRecallContext(rewrite, 8);
   const expansionBranches = (rewrite.analysis.semanticExpansions ?? [])
     .map((value) => value.replace(/\s+/g, " ").trim())
     .filter(Boolean)
