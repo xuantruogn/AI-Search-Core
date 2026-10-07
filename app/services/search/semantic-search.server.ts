@@ -2152,7 +2152,6 @@ export async function semanticSearch({
   // set. Certain absence is owned by absence-proof.server; semantic quality
   // still has to pass the normal vector evidence guard below.
   const weakNoEvidenceVector =
-    effectiveRewrite?.context?.ungroundedExplicitFeature === true ||
     shouldRejectNoEvidenceVector({
       hasStrongCatalogEvidence,
       topVectorScore,
