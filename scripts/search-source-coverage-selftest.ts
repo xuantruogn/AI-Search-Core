@@ -66,15 +66,21 @@ try {
         retrievalSources: ["SEMANTIC"], semanticBranchInput: "jacket", semanticBranchIndex: 1 },
     ],
   });
-  assert.deepEqual(identityBranchResults.map(r => r.productId), ["source-jacket"],
-    "a generic identity embedding branch cannot prove the source waterproof facet");
+  assert.deepEqual(
+    identityBranchResults.map(r => r.productId),
+    ["source-jacket", "generic-jacket"],
+    "open-world waterproof evidence must rerank within the jacket family without hard-filtering semantic alternatives",
+  );
   const missingGroundedResults = await filterResultsByExplicitGender({
     shop: "source-coverage-fixture", originalQuery: direct.query, rewrite: direct,
     results: [{ productId: "generic-jacket", score: 0.65, vectorSimilarity: 0.65,
       primaryVectorSimilarity: 0.40, retrievalSources: ["SEMANTIC"], semanticBranchInput: "jacket", semanticBranchIndex: 1 }],
   });
-  assert.deepEqual(missingGroundedResults, [],
-    "missing the catalog-proven candidate must not disable the facet precision guard");
+  assert.deepEqual(
+    missingGroundedResults.map(r => r.productId),
+    ["generic-jacket"],
+    "missing PSF evidence for an open-world quality must remain uncertainty, not an empty-result proof",
+  );
 
   const expansionOnly = await filterResultsByExplicitGender({
     shop: "source-coverage-fixture", originalQuery: "jacket for evenings", rewrite: {
@@ -90,6 +96,65 @@ try {
   });
   assert.equal(expansionOnly.length, 2,
     "LLM expansion evidence remains a ranking hint and cannot hard-exclude a valid source-family candidate");
+
+  const jointDemandRewrite: any = {
+    ...rewrite,
+    query: "something warm and insulated for cold weather",
+    analysis: {
+      ...rewrite.analysis,
+      semanticDemand: {
+        identity: [],
+        desiredOutcomes: ["stay warm"],
+        useCases: [],
+        contexts: ["cold weather"],
+        qualities: ["insulated"],
+        audience: [],
+        styles: [],
+        negativeConstraints: [],
+        exactConstraints: [],
+      },
+      semanticMustTerms: [],
+      semanticSourceMustTerms: [],
+      semanticExpansions: ["winter jacket", "fleece"],
+    },
+    planning: {
+      ...rewrite.planning,
+      retrievalMode: "DISCOVERY",
+      resolvedSegments: [],
+      unresolvedSegments: [],
+    },
+  };
+  const jointDemandRanked = await filterResultsByExplicitGender({
+    shop: "source-coverage-fixture",
+    originalQuery: jointDemandRewrite.query,
+    rewrite: jointDemandRewrite,
+    results: [
+      {
+        productId: "semantic-good",
+        score: 0.46,
+        vectorSimilarity: 0.62,
+        primaryVectorSimilarity: 0.62,
+        retrievalSources: ["SEMANTIC", "SPARSE"],
+      },
+      {
+        productId: "semantic-weak",
+        score: 0.61,
+        vectorSimilarity: 0.61,
+        primaryVectorSimilarity: 0.44,
+        retrievalSources: ["SEMANTIC", "SPARSE"],
+      },
+    ],
+  });
+  assert.equal(
+    jointDemandRanked[0]?.productId,
+    "semantic-good",
+    "complete Semantic Demand similarity must outrank a higher fused recall score when exact/family authority is equal",
+  );
+  assert.equal(
+    jointDemandRanked.length,
+    2,
+    "joint semantic evidence reranks open-world demand but does not hard-filter alternatives",
+  );
   console.log("PASS: source need coverage ranks joint facts without making soft needs hard filters");
 } finally {
   (db.aiSearchProductSemanticProfile as any).findMany = originalFindMany;

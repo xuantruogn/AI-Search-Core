@@ -389,34 +389,25 @@ function applySemanticPolarity(
   plan: QueryPlan,
   llm: QueryRewriteResult,
 ): QueryPlan {
-  const mustTerms = [
-    ...(llm.analysis.semanticMustTerms ?? []),
-    ...(llm.analysis.semanticSourceMustTerms ?? []),
-  ];
   const mustNotTerms = llm.analysis.semanticMustNotTerms ?? [];
-  const apply = <T extends QueryConstraint>(items: T[]) =>
+  const applyNegativeOnly = <T extends QueryConstraint>(items: T[]) =>
     items.map((item) => ({
       ...item,
       mode: semanticTermMatches(item, mustNotTerms)
         ? "MUST_NOT" as const
-        : exactSemanticTermMatches(item, mustTerms)
-          ? "MUST" as const
-          : item.mode,
+        : item.mode,
     }));
 
   return {
     ...plan,
-    // LLM semantic MUST means important for meaning, not an exact catalog
-    // requirement. Only code/source-owned markers may harden an attribute.
-    attributes: plan.attributes.map((item) => ({
-      ...item,
-      mode: semanticTermMatches(item, mustNotTerms)
-        ? "MUST_NOT" as const
-        : item.mode,
-    })),
-    audiences: apply(plan.audiences),
-    contexts: apply(plan.contexts),
-    compatibility: apply(plan.compatibility),
+    // LLM semantic concepts preserve meaning/provenance for dense retrieval;
+    // they never create positive closed-world authority. Only deterministic
+    // parsing/source-owned typed constraints may already carry MUST. Explicit
+    // shopper negation may still narrow any semantic facet to MUST_NOT.
+    attributes: applyNegativeOnly(plan.attributes),
+    audiences: applyNegativeOnly(plan.audiences),
+    contexts: applyNegativeOnly(plan.contexts),
+    compatibility: applyNegativeOnly(plan.compatibility),
   };
 }
 

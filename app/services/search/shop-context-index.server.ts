@@ -2912,6 +2912,28 @@ export async function filterResultsByExplicitGender<
           );
         });
 
+  // The primary dense vector represents the complete Semantic Demand against
+  // product Semantic Supply. When the shopper expresses open-world meaning
+  // beyond identity (purpose/use-case/context/quality/audience/style), keep
+  // that joint dense evidence as the leading semantic ranking signal after
+  // exact/family authority. PSF lexical overlap remains a soft explanation
+  // signal only and must not substitute for Supply↔Demand similarity.
+  const semanticDemand = rewrite.analysis.semanticDemand;
+  const jointSemanticDemandSignals = semanticDemand
+    ? [
+        ...semanticDemand.desiredOutcomes,
+        ...semanticDemand.useCases,
+        ...semanticDemand.contexts,
+        ...semanticDemand.qualities,
+        ...semanticDemand.audience,
+        ...semanticDemand.styles,
+      ]
+        .map((value) => value.replace(/\s+/g, " ").trim())
+        .filter(Boolean)
+        .filter((value) => !isCommerceOnlyValue(value))
+    : [];
+  const hasJointSemanticDemand = jointSemanticDemandSignals.length > 0;
+
   const brandSignals = rewrite.analysis.brands;
   const modelSignals = rewrite.analysis.models;
   const identifierSignals = rewrite.analysis.identifiers;
@@ -3395,11 +3417,20 @@ export async function filterResultsByExplicitGender<
       targetIdentityVectorSimilarity >= configuredSemanticThreshold &&
       Number.isFinite(targetIdentityRelativeScore) &&
       targetIdentityRelativeScore >= 0.8;
+    const primaryDemandSimilarity = Number(
+      (result as T & { primaryVectorSimilarity?: number })
+        .primaryVectorSimilarity,
+    );
+    const jointSemanticDemandEvidence =
+      hasJointSemanticDemand && Number.isFinite(primaryDemandSimilarity)
+        ? primaryDemandSimilarity
+        : Number.NEGATIVE_INFINITY;
     return {
       result,
       identityMatch,
       hasKnownIdentity: identityValues.length > 0,
       targetIdentitySemanticEvidence,
+      jointSemanticDemandEvidence,
       complementaryReferenceMatch,
       complementaryPreferenceMatch,
       discoveryGroundingMatch,
@@ -3438,36 +3469,6 @@ export async function filterResultsByExplicitGender<
   });
   const hasDirectSourceFacetConsensus =
     sourceGroundedDirectConsensusProductIds.size > 0;
-  const strongDirectSourceFacetEvidenceCount =
-    currentRetrievalMode === "DIRECT"
-      ? (hasDirectSourceFacetConsensus
-          ? sourceGroundedDirectConsensusProductIds.size
-          : sourceGroundedDirectProductIds.size)
-      : 0;
-  // Grounding is catalog evidence, not dependent on whether dense retrieval
-  // happened to return a proven item. Missing the matching item must not turn
-  // off this precision guard and fill the page with generic siblings.
-  const enforceSparseDirectSourceFacetEvidence =
-    currentRetrievalMode === "DIRECT" &&
-    sourceFacetPreferences.length > 0 &&
-    strongDirectSourceFacetEvidenceCount > 0 &&
-    strongDirectSourceFacetEvidenceCount <=
-      Math.max(12, Math.ceil(scored.length * 0.35));
-
-  const strongDirectContextEvidenceCount =
-    currentRetrievalMode === "DIRECT"
-      ? scored.filter(
-          (item) =>
-            item.directContextNeedMatch >= 0.75 ||
-            item.directSourceFacetGrounding,
-        ).length
-      : 0;
-  const enforceSparseDirectContextEvidence =
-    currentRetrievalMode === "DIRECT" &&
-    sourceContextNeedSignals.length > 0 &&
-    strongDirectContextEvidenceCount > 0 &&
-    strongDirectContextEvidenceCount <=
-      Math.max(8, Math.ceil(scored.length * 0.35));
 
   // LLM semantic expansions are retrieval probes and ranking hints only.
   // They must never become a hard eligibility filter: a product may satisfy
@@ -3553,36 +3554,6 @@ export async function filterResultsByExplicitGender<
       identityFilteredCount += 1;
       return [];
     }
-    if (
-      enforceSparseDirectSourceFacetEvidence &&
-      !(
-        hasDirectSourceFacetConsensus
-          ? item.directSourceFacetConsensusGrounding
-          : item.directSourceFacetGrounding
-      ) &&
-      item.semanticBranchLift < 0.025
-    ) {
-      // A shopper-owned explicit facet that exists on only a small subset of
-      // the requested family is high-precision evidence. Do not fill the page
-      // with generic siblings merely because the family vector is strong.
-      // A meaningful secondary-branch lift can still rescue a product whose
-      // semantic profile is incomplete.
-      exactConstraintFilteredCount += 1;
-      return [];
-    }
-    if (
-      enforceSparseDirectContextEvidence &&
-      item.directContextNeedMatch < 0.75 &&
-      !item.directSourceFacetGrounding &&
-      item.semanticBranchLift < 0.025
-    ) {
-      // Once the catalog proves that only a small subset of this DIRECT
-      // product family satisfies the shopper-owned use-case/context, do not
-      // fill the page with generic siblings. A material semantic-branch lift
-      // can still rescue nearby seasonal/open-world alternatives.
-      exactConstraintFilteredCount += 1;
-      return [];
-    }
     if (!item.strictFacetMatch) {
       exactConstraintFilteredCount += 1;
       return [];
@@ -3634,11 +3605,10 @@ export async function filterResultsByExplicitGender<
       // The source still owns the broad identity; the grounded leaf is a strong
       // rerank signal, not a hard filter.
       (item.directExpansionGrounding ? 0.14 : 0) +
-      // A facet/use-case explicitly owned by the shopper and grounded to a
-      // product in the same DIRECT identity family is stronger than generic
-      // vector similarity, but remains a ranking signal rather than a hard
-      // filter. This keeps color/material soft while allowing relational needs
-      // such as "bag for laptop" to outrank grooming/lunch bags.
+      // Shopper-owned facet/use-case/context evidence is a ranking signal only.
+      // Open-world qualities such as waterproof/warm/seasonal use must not
+      // become an accidental AND gate merely because PSF happens to contain a
+      // matching term on a subset of the family.
       (item.directSourceFacetConsensusGrounding
         ? 0.14
         : item.directSourceFacetGrounding
@@ -3693,6 +3663,7 @@ export async function filterResultsByExplicitGender<
           : 0,
       _sourceNeedCoverage: item.sourceNeedCoverage,
       _preferredFacetMatches: item.preferredFacetMatches,
+      _jointSemanticDemandEvidence: item.jointSemanticDemandEvidence,
       _sourceDiscoveryTier:
         currentRetrievalMode === "DISCOVERY" && item.sourceDiscoveryGrounding
           ? 1
@@ -3727,6 +3698,11 @@ export async function filterResultsByExplicitGender<
     (
       directIdentityGrounded || hasSourceOwnedTargetIdentity
         ? right._preferredFacetMatches - left._preferredFacetMatches
+        : 0
+    ) ||
+    (
+      hasJointSemanticDemand
+        ? right._jointSemanticDemandEvidence - left._jointSemanticDemandEvidence
         : 0
     ) ||
     (
@@ -3803,6 +3779,8 @@ export async function filterResultsByExplicitGender<
         branch <= 0 ||
         !Number.isFinite(relative) ||
         relative < 0.9 ||
+        (hasJointSemanticDemand &&
+          !Number.isFinite(item._jointSemanticDemandEvidence)) ||
         (sourceCoverageSignals.length >= 2 &&
           item._sourceNeedCoverage < filtered[0]._sourceNeedCoverage) ||
         item._typedRerankScore < topRankScore * 0.72
@@ -3857,6 +3835,7 @@ export async function filterResultsByExplicitGender<
     _directSourceFacetTier: _directSourceFacetTierIgnored,
     _sourceNeedCoverage: _sourceNeedCoverageIgnored,
     _preferredFacetMatches: _preferredFacetMatchesIgnored,
+    _jointSemanticDemandEvidence: _jointSemanticDemandEvidenceIgnored,
     _sourceDiscoveryTier: _sourceDiscoveryTierIgnored,
     _semanticNeedTier: _semanticNeedTierIgnored,
     _semanticNeedCoverage: _semanticNeedCoverageIgnored,
