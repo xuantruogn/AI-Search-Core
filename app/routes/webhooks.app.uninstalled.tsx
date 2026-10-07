@@ -42,8 +42,11 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       where: { shop },
       select: {
         status: true,
+        currentPlanHandle: true,
         currentSubscriptionGid: true,
+        pendingPlanHandle: true,
         pendingSubscriptionGid: true,
+        pendingChangeAt: true,
       },
     });
 
@@ -63,11 +66,14 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       data: {
         status: "UNINSTALLED",
         uninstalledAt: now,
-        currentPlanHandle: null,
-        currentSubscriptionGid: null,
-        pendingPlanHandle: null,
-        pendingSubscriptionGid: null,
-        pendingChangeAt: null,
+        // Preserve commercial/billing pointers. Shopify cancels the provider
+        // subscription on uninstall, but the merchant can reinstall and use
+        // the remainder of the already-paid billing period.
+        currentPlanHandle: shopRecord.currentPlanHandle,
+        currentSubscriptionGid: shopRecord.currentSubscriptionGid,
+        pendingPlanHandle: shopRecord.pendingPlanHandle,
+        pendingSubscriptionGid: shopRecord.pendingSubscriptionGid,
+        pendingChangeAt: shopRecord.pendingChangeAt,
       },
     });
 
@@ -94,12 +100,9 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     await tx.aiSearchSubscription.updateMany({
       where: { shop },
       data: {
-        plan: "NONE",
+        // Preserve the last commercial snapshot so reinstall can determine
+        // whether the original paid/trial window is still valid.
         status: "INACTIVE",
-        planHandle: null,
-        shopifySubscriptionId: null,
-        billingPeriodStart: null,
-        billingPeriodEnd: null,
         source: "WEBHOOK",
         lastSyncedAt: now,
       },
