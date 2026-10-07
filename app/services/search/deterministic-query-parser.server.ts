@@ -90,30 +90,59 @@ export function parseDeterministicQuery(query: string): DeterministicQueryParse 
     });
   }
 
-  // Versioned device/model references after an explicit compatibility relation
-  // are closed-world source facts. Keep this parser deliberately narrow:
-  // 1-3 digit versions are accepted, while year-like 4 digit contexts remain
-  // semantic/open-world and cannot become compatibility filters.
+  // Versioned device/model references can become closed-world compatibility
+  // facts only with strong source provenance. Explicit compatibility verbs are
+  // authoritative. Generic "for/cho" is intentionally narrower because it
+  // also introduces audience, occasion and use-case phrases ("for toddler 5"),
+  // which must stay semantic/open-world rather than becoming hard filters.
   const compatibility: QueryConstraint[] = [];
-  const versionedCompatibilityPattern =
-    /\b(?:compatible\s+with|compatibility\s+with|works?\s+with|fits?(?:\s+with)?|for|cho)\s+(?:an?\s+)?([\p{L}][\p{L}\p{N}-]*(?:\s+[\p{L}][\p{L}\p{N}-]*){0,2}\s+\d{1,3}(?:\s+(?:pro|max|mini|plus|ultra))?)\b/giu;
-  for (const match of query.matchAll(versionedCompatibilityPattern)) {
-    const raw = match[1]?.replace(/\s+/g, " ").trim();
-    if (!raw) continue;
+  const blockedCompatibilityContext =
+    /\b(?:size|age|ages|year|years|month|months|day|days|hour|hours|pack|capacity|waist|inseam|toddler|toddlers|child|children|kid|kids|boy|boys|girl|girls|men|women|man|woman|adult|adults)\b/;
+  const highConfidenceGenericModelFamilies = new Set([
+    "playstation", "ps", "xbox", "iphone", "ipad", "ipod", "galaxy",
+    "pixel", "macbook", "surface", "switch", "rtx", "gtx",
+  ]);
+  const addCompatibility = (rawValue: string | undefined) => {
+    const raw = rawValue?.replace(/\s+/g, " ").trim();
+    if (!raw) return;
     const normalized = normalizeQueryText(raw);
-    if (
-      /\b(?:size|age|year|years|day|days|hour|hours|pack|capacity|waist|inseam)\b/.test(
-        normalized,
-      )
-    ) {
-      continue;
-    }
+    if (!normalized || blockedCompatibilityContext.test(normalized)) return;
     if (
       !compatibility.some(
-        (item) => item.normalizedValue === normalizeQueryText(raw),
+        (item) => item.normalizedValue === normalized,
       )
     ) {
       compatibility.push(constraint(raw, "MUST"));
+    }
+  };
+
+  const explicitVersionedCompatibilityPattern =
+    /\b(?:compatible\s+with|compatibility\s+with|works?\s+with|fits?(?:\s+with)?)\s+(?:an?\s+)?([\p{L}][\p{L}\p{N}-]*(?:\s+[\p{L}][\p{L}\p{N}-]*){0,2}\s+\d{1,3}(?:\s+(?:pro|max|mini|plus|ultra))?)\b/giu;
+  for (const match of query.matchAll(explicitVersionedCompatibilityPattern)) {
+    addCompatibility(match[1]);
+  }
+
+  const genericForVersionedPattern =
+    /\b(?:for|cho)\s+(?:an?\s+)?([\p{L}][\p{L}\p{N}-]*(?:\s+[\p{L}][\p{L}\p{N}-]*){0,2}\s+\d{1,3}(?:\s+(?:pro|max|mini|plus|ultra))?)\b/giu;
+  for (const match of query.matchAll(genericForVersionedPattern)) {
+    const raw = match[1]?.replace(/\s+/g, " ").trim();
+    if (!raw) continue;
+    const normalized = normalizeQueryText(raw);
+    if (blockedCompatibilityContext.test(normalized)) continue;
+
+    const rawTokens = raw.split(/\s+/).filter(Boolean);
+    const hasModelLikeSurface = rawTokens.some(
+      (token) =>
+        /[a-z][A-Z]/.test(token) ||
+        /[A-Z]{2,}/.test(token) ||
+        /(?:[\p{L}]\d|\d[\p{L}])/u.test(token),
+    );
+    const hasKnownVersionedFamily = normalized
+      .split(" ")
+      .some((token) => highConfidenceGenericModelFamilies.has(token));
+
+    if (hasModelLikeSurface || hasKnownVersionedFamily) {
+      addCompatibility(raw);
     }
   }
 
