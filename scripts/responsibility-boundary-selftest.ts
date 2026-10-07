@@ -112,15 +112,15 @@ assert.equal(
   "DISCOVERY context grounding must never hard-scope Qdrant before recall",
 );
 
-assert.deepEqual(
+assert.equal(
   resolveSemanticRetrievalScope({
     retrievalMode: "DIRECT",
     exactIdentityScope: true,
     identityIds: ["SHOE-A"],
     directExpansionScopeIds: ["SHOE-B"],
   }),
-  ["SHOE-A", "SHOE-B"],
-  "only exact source-grounded DIRECT identity may pre-scope retrieval",
+  undefined,
+  "literal target-family context must not pre-scope semantic retrieval",
 );
 
 const directIdentityRewrite = {
