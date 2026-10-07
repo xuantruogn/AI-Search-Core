@@ -104,6 +104,12 @@ export type QueryRewriteAnalysis = {
   semanticDemand?: SemanticDemandProfile;
   /** Aligned source/canonical mandatory concepts; preserves provenance. */
   semanticMandatoryConcepts?: SemanticMandatoryConcept[];
+  /**
+   * Target identities explicitly owned by the shopper source after validated
+   * translation. This is provenance for family relevance, not an inferred
+   * expansion and not by itself a closed-world absence proof.
+   */
+  sourceOwnedTargetIdentities?: string[];
   // Keep PREMIUM/BUDGET in this legacy field for downstream compatibility.
   // marketPreference is the cleaner semantic signal for new consumers.
   sortIntent: "RELEVANCE" | "PRICE_ASC" | "PRICE_DESC" | "PREMIUM" | "BUDGET";
@@ -161,7 +167,7 @@ type FastQueryAnalysis = {
 };
 
 const QUERY_REWRITE_CACHE_VERSION =
-  "semantic-normalize-v41-aligned-mandatory-concepts";
+  "semantic-normalize-v42-source-owned-target-and-exact-provenance";
 const rewrittenQueryCache = new Map<string, CacheEntry<QueryRewriteResult>>();
 const pendingRewrites = new Map<string, Promise<QueryRewriteResult>>();
 
@@ -757,7 +763,7 @@ async function performRewrite({ shop, cleanQuery, searchLanguage, model, backupM
       "For relational shopping queries equivalent to 'what should I wear with X', 'Y to wear with X', 'pair with X', or Vietnamese 'mặc gì với X', use COMPLEMENT and put ONLY the referenced item X in referenceTerms. Never put the requested target Y in referenceTerms. referenceTerms is extraction/translation evidence; do not invent additional referenced products.",
       "In COMPLEMENT mode, mandatoryConcepts belong to the requested TARGET product only. Never copy the reference item or reference-only qualifiers into mandatoryConcepts. Example: for 'what goes well with a navy coat', coat/navy coat/navy describe the reference and must not become target requirements; referenceTerms should identify the coat while expansions describe plausible complementary products.",
       "Return mandatoryConcepts as aligned {target, source} pairs for semantic conditions whose absence makes a product unacceptable. target is the canonical concept in the configured target language; source is the same concept as expressed in the original shopper query. Required target identity, use, season, environment, surface, compatibility, and capability phrases belong here; preferences do not. Example: 'snowboard for summer training on artificial slope' requires aligned pairs for snowboard, summer, and artificial slope.",
-      "mandatoryConcepts preserves provenance: each pair MUST describe one and the same concept. Never reorder or pair an identity target with an occasion/context source phrase.",
+      "mandatoryConcepts preserves provenance: each pair MUST describe one and the same concept. Never reorder or pair an identity target with an occasion/context source phrase. Every shopper-explicit required semanticDemand.exactConstraints item (for example color/material/size/measurement/compatibility) must also have an aligned mandatoryConcepts {target, source} pair so code can validate source ownership; this pair is provenance only and does not itself grant exact authority.",
       "Return mustNotTerms ONLY when the shopper explicitly excludes something with wording like without/not/exclude/không/loại trừ. Never infer an exclusion from audience, recipient, occasion, gender, style, or preference.",
       "Keep semanticQuery short and faithful. If the shopper explicitly names a product identity, semanticQuery must preserve that identity. If retrievalMode is DISCOVERY and the shopper does NOT name an exact product identity, semanticQuery must be NEED-FIRST and CATEGORY-NEUTRAL: state the required use/context/attribute without choosing one product family as the answer. Put plausible purchasable product classes only in expansions. Generic 'wear all day' must not become footwear unless the source explicitly mentions feet/shoes/footwear; generic activity/occasion needs must not become apparel unless the source explicitly names wearing/clothing/fashion. Add up to 6 high-value retrieval expansions.",
       "If the shopper names an exact product identity, every expansion must preserve that identity and may only be a direct synonym/equivalent form.",
