@@ -1738,7 +1738,10 @@ export async function semanticSearch({
     throw retrieval.reason;
   }
 
-  let results = retrieval.value;
+  // From this boundary onward semantic retrieval may carry branch-level
+  // evidence that is intentionally not part of the low-level vector-store
+  // result contract.
+  let results: SearchResult[] = retrieval.value as SearchResult[];
 
   // Retrieval has already passed the authoritative registry guard. Capture
   // raw similarity before identity boosts/synthetic evidence scores are merged;
