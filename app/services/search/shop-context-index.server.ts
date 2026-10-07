@@ -3533,15 +3533,23 @@ export async function filterResultsByExplicitGender<
       return [];
     }
     if (
-      (directIdentityGrounded || hasSourceOwnedTargetIdentity) &&
+      hasSourceOwnedTargetIdentity &&
+      (!item.hasKnownIdentity || item.identityMatch < 0.34) &&
+      !item.targetIdentitySemanticEvidence
+    ) {
+      // Shopper-owned target identity scopes the whole query. Missing PSF
+      // identity is uncertainty, not permission for an exact size/model fact
+      // to admit another family; dedicated target-identity dense evidence may
+      // still rescue cross-taxonomy synonyms or incompletely profiled items.
+      identityFilteredCount += 1;
+      return [];
+    }
+    if (
+      directIdentityGrounded &&
       item.hasKnownIdentity &&
       item.identityMatch < 0.34 &&
       !item.targetIdentitySemanticEvidence
     ) {
-      // Source-owned target identity scopes the whole query. Exact facets
-      // (size/model/etc.) cannot make another product family relevant. A
-      // cross-taxonomy synonym may still survive on dedicated dense identity
-      // evidence, keeping semantic recall without treating expansions as fact.
       identityFilteredCount += 1;
       return [];
     }
