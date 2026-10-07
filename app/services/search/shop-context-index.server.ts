@@ -923,7 +923,7 @@ const FALLBACK_PRODUCT_IDENTITY_KINDS = new Set([
 ]);
 
 function isComplementaryRelationText(value: string) {
-  return /\b(?:pair(?:s|ed|ing)?(?: well)? with|go(?:es|ing)?(?: well)? with|match(?:es|ed|ing)? with|wear with|style with|mac(?: gi)? voi|phoi(?: do)? voi|ket hop voi|hop voi|di cung voi)\b/.test(
+  return /\b(?:pair(?:s|ed|ing)?(?: well)? with|go(?:es|ing)?(?: well)? with|match(?:es|ed|ing)?(?: with)?|wear with|style with|mac(?: gi)? voi|phoi(?: do)? voi|ket hop voi|hop voi|di cung voi)\b/.test(
     normalizeContextTerm(value),
   );
 }
@@ -947,6 +947,7 @@ export function readComplementReferenceOnlyFacetTokens(
   const relationIndex = sourceTokens.findIndex(
     (token, index) =>
       token === "with" ||
+      /^(?:matches|matching|matched)$/.test(token) ||
       token === "voi" ||
       (token === "cung" && sourceTokens[index + 1] === "voi"),
   );
@@ -1032,9 +1033,12 @@ function buildProductIdentitySignals(
     rewrite.analysis.shopLanguageProductType,
     ...explicitCategoryValues,
   ].filter((value) => value?.trim());
+  const sourceIdentities = rewrite.analysis.sourceOwnedTargetIdentities ?? [];
+  const targetIdentityValues =
+    sourceIdentities.length > 0 ? sourceIdentities : explicitIdentityValues;
 
   return [
-    ...explicitIdentityValues.map((value) => ({ value, fallback: false })),
+    ...targetIdentityValues.map((value) => ({ value, fallback: false })),
     // Semantic expansions are recall hints, not proof of exact product
     // identity. Only fall back to the raw query when analysis produced no
     // product identity at all.
@@ -2242,20 +2246,21 @@ export async function applyShopContextToQuery({
   };
 }
 
-function detectExplicitGender(
+export function detectExplicitGender(
   originalQuery: string,
   rewrite: QueryRewriteResult,
 ): "MALE" | "FEMALE" | null {
   const negative = readGenderFlags(rewrite.analysis.negativeTerms.join(" "));
   const source = readSourceGenderFlags(originalQuery);
   const interpreted = readGenderFlags(
-    [
-      rewrite.analysis.productType,
-      ...rewrite.analysis.entities,
-      ...rewrite.analysis.attributes,
-      ...rewrite.analysis.audience,
-      ...rewrite.analysis.shopLanguageTerms,
-    ].join(" "),
+    (rewrite.planning?.resolvedSegments ?? [])
+      .filter(
+        (segment) =>
+          segment.field === "AUDIENCE" &&
+          sourceContainsFacet(originalQuery, segment.text),
+      )
+      .map((segment) => segment.canonicalValue)
+      .join(" "),
   );
   const positive = {
     male: source.male || interpreted.male,
@@ -2272,10 +2277,12 @@ function readSourceGenderFlags(value: string) {
   return {
     male:
       tokens.has("nam") || tokens.has("male") || tokens.has("man") ||
-      tokens.has("men") || normalized.includes("男"),
+      tokens.has("men") || tokens.has("homme") || tokens.has("hommes") ||
+      normalized.includes("男"),
     female:
       tokens.has("nữ") || tokens.has("nu") || tokens.has("female") ||
-      tokens.has("woman") || tokens.has("women") || normalized.includes("女"),
+      tokens.has("woman") || tokens.has("women") ||
+      tokens.has("femme") || tokens.has("femmes") || normalized.includes("女"),
   };
 }
 
@@ -2301,7 +2308,10 @@ function sourceTargetText(
   }
   const sourceTokens = normalizeContextTerm(originalQuery).split(" ").filter(Boolean);
   const relation = sourceTokens.findIndex((token, index) =>
-    token === "with" || token === "voi" ||
+    token === "with" ||
+    token === "voi" ||
+    /^(?:matches|matching|matched)$/.test(token) ||
+    (token === "for" && (rewrite.analysis.referenceTerms ?? []).length > 0) ||
     (token === "cung" && sourceTokens[index + 1] === "voi"),
   );
   return relation < 0 ? "" : sourceTokens.slice(0, relation).join(" ");
@@ -2509,6 +2519,25 @@ function sourceGroundedAttributeFacets(
     }
   }
   return [...facets].filter(Boolean);
+}
+
+export function currentTargetColors(
+  originalQuery: string,
+  rewrite: QueryRewriteResult,
+  vocabulary: Set<string>,
+) {
+  const source = sourceTargetText(originalQuery, rewrite);
+  const owned = new Set(
+    (rewrite.analysis.sourceOwnedExactConstraints ?? []).map(normalizeContextTerm),
+  );
+  return [...new Set([
+    ...owned,
+    ...sourceGroundedAttributeFacets(originalQuery, rewrite),
+  ])].filter(
+    (value) =>
+      vocabulary.has(value) &&
+      (owned.has(value) || sourceContainsFacet(source, value)),
+  );
 }
 
 /** Strictness is owned by the shopper's words, never by LLM MUST prose. */
@@ -2784,6 +2813,37 @@ export async function filterResultsByExplicitGender<
   );
   const dbReadMs = Date.now() - dbStartedAt;
   const filterStartedAt = Date.now();
+
+  // Validate explicit target colors only when typed color coverage is high.
+  // Missing product color remains unknown rather than becoming a contradiction.
+  const requestedExact = rewrite.analysis.sourceOwnedExactConstraints ?? [];
+  const catalogRows = requestedExact.length > 0
+    ? await loadShopSemanticRows(shop)
+    : rows;
+  const colorVocabulary = new Set(
+    catalogRows.flatMap((row) => {
+      const match = row.value.match(/^\s*colou?r\s*[=:]\s*(.+?)\s*$/i);
+      return match ? [normalizeContextTerm(match[1])] : [];
+    }),
+  );
+  const requestedColors = currentTargetColors(
+    originalQuery,
+    rewrite,
+    colorVocabulary,
+  );
+  const colorsByProduct = new Map<string, string[]>();
+  for (const row of rows) {
+    if (!["ATTRIBUTE", "VARIANT_OPTION"].includes(row.kind)) continue;
+    const match = row.value.match(/^\s*colou?r\s*[=:]\s*(.+?)\s*$/i);
+    if (!match) continue;
+    colorsByProduct.set(row.productId, [
+      ...(colorsByProduct.get(row.productId) ?? []),
+      normalizeContextTerm(match[1]),
+    ]);
+  }
+  const typedColorCoverage =
+    results.length > 0 ? colorsByProduct.size / results.length : 0;
+
   const genders = new Map<string, { male: boolean; female: boolean }>();
   const valuesByProduct = new Map<string, string[]>();
   const tokensByProduct = new Map<string, Set<string>>();
@@ -3399,6 +3459,24 @@ export async function filterResultsByExplicitGender<
       targetIdentityVectorSimilarity >= configuredSemanticThreshold &&
       Number.isFinite(targetIdentityRelativeScore) &&
       targetIdentityRelativeScore >= 0.8;
+    const compoundIdentityContradiction = identitySignals.some((signal) => {
+      if (signal.tokens.length < 2 || identityMatch > 0) return false;
+      const head = signal.tokens.at(-1)!;
+      return valuesForKinds(["CANONICAL_PRODUCT_TYPE", "PRODUCT_TYPE"]).some(
+        (value) => {
+          const actual = normalizeIdentitySignalTokens(value);
+          return (
+            actual.length > 0 &&
+            !actual.some((token) => identityTokenEquivalent(token, head)) &&
+            actual.some((token) =>
+              signal.tokens
+                .slice(0, -1)
+                .some((modifier) => identityTokenEquivalent(token, modifier)),
+            )
+          );
+        },
+      );
+    });
     return {
       result,
       identityMatch,
@@ -3408,6 +3486,7 @@ export async function filterResultsByExplicitGender<
           ? primaryDemandVectorSimilarity
           : 0,
       targetIdentitySemanticEvidence,
+      compoundIdentityContradiction,
       complementaryReferenceMatch,
       complementaryPreferenceMatch,
       discoveryGroundingMatch,
@@ -3505,6 +3584,21 @@ export async function filterResultsByExplicitGender<
       genderFilteredCount += 1;
       return [];
     }
+    const knownColors = colorsByProduct.get(result.productId) ?? [];
+    if (
+      requestedExact.length > 0 &&
+      typedColorCoverage >= 0.9 &&
+      requestedColors.length > 0 &&
+      knownColors.length > 0 &&
+      !requestedColors.some((color) =>
+        knownColors.some((actual) =>
+          sourceContainsFacet(actual.replace(/[/_-]/g, " "), color),
+        ),
+      )
+    ) {
+      colorFilteredCount += 1;
+      return [];
+    }
     if (
       complementaryReferenceSignals.length > 0 &&
       item.complementaryReferenceMatch >= 0.75
@@ -3521,6 +3615,13 @@ export async function filterResultsByExplicitGender<
       // identity is uncertainty, not permission for an exact size/model fact
       // to admit another family; dedicated target-identity dense evidence may
       // still rescue cross-taxonomy synonyms or incompletely profiled items.
+      identityFilteredCount += 1;
+      return [];
+    }
+    if (
+      hasSourceOwnedTargetIdentity &&
+      item.compoundIdentityContradiction
+    ) {
       identityFilteredCount += 1;
       return [];
     }
