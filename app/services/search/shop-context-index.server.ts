@@ -3674,7 +3674,12 @@ export async function filterResultsByExplicitGender<
       // soft (nearby alternatives remain) while making an exact typed facet
       // reliably outrank nearby shades/styles within the same product family.
       _identityTier:
-        directIdentityGrounded && item.identityMatch >= 0.75 ? 1 : 0,
+        (
+          (directIdentityGrounded && item.identityMatch >= 0.75) ||
+          (hasSourceOwnedTargetIdentity && item.targetIdentitySemanticEvidence)
+        )
+          ? 1
+          : 0,
       _directExpansionTier:
         currentRetrievalMode === "DIRECT" && item.directExpansionGrounding
           ? 1
@@ -3721,7 +3726,7 @@ export async function filterResultsByExplicitGender<
       ? Number(right._sourceNeedCoverage === 1) - Number(left._sourceNeedCoverage === 1)
       : 0) ||
     (
-      directIdentityGrounded
+      directIdentityGrounded || hasSourceOwnedTargetIdentity
         ? right._preferredFacetMatches - left._preferredFacetMatches
         : 0
     ) ||
