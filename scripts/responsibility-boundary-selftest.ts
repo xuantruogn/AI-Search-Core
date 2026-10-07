@@ -4,6 +4,7 @@ import {
   sourceOwnedSemanticDemandIdentities,
   sourceOwnedSemanticExactConstraints,
   resolveCodeOwnedRetrievalMode,
+  buildQuerySemanticProfile,
   QUERY_EMBEDDING_PIPELINE_VERSION,
   QUERY_SEMANTIC_PROFILE_VERSION,
 } from "../app/services/search/query-semantic-profile.server";
@@ -256,6 +257,92 @@ assert.deepEqual(parsedRewrite?.analysis.semanticSourceMustTerms, [
   "xe đạp",
   "đi cuối tuần",
 ]);
+
+const summerRewrite = parseRewrittenQuery(
+  JSON.stringify({
+    semanticDemand: {
+      identity: [],
+      desiredOutcomes: ["comfortable in summer"],
+      useCases: [],
+      contexts: ["summer"],
+      qualities: [],
+      audience: [],
+      styles: [],
+      negativeConstraints: [],
+      exactConstraints: [],
+    },
+    detectedLanguage: "vi",
+    retrievalMode: "DISCOVERY",
+    referenceTerms: [],
+    semanticQuery: "The goal is comfortable in summer. To use in summer.",
+    expansions: ["lightweight clothing"],
+    mandatoryConcepts: [
+      { target: "summer", source: "mùa hè" },
+    ],
+    mustNotTerms: [],
+  }),
+  "đồ dùng cho mùa hè",
+  "en",
+  "COMPLEX",
+)!;
+const basePlan: any = {
+  rawQuery: "đồ dùng cho mùa hè",
+  normalizedQuery: "do dung cho mua he",
+  foldedQuery: "do dung cho mua he",
+  route: "FULL_LLM",
+  retrievalMode: "DISCOVERY",
+  identities: [],
+  entities: { brands: [], models: [], identifiers: [] },
+  attributes: [],
+  measurements: [],
+  audiences: [],
+  contexts: [],
+  compatibility: [],
+  marketPreference: "ANY",
+  relation: "SINGLE",
+  sort: { field: "RELEVANCE" },
+  semanticQuery: "đồ dùng cho mùa hè",
+  resolvedSegments: [],
+  unresolvedSegments: ["mùa hè"],
+  routerReason: [],
+  versions: {
+    dictionaryVersion: "fixture",
+    queryParserVersion: "fixture",
+    queryRouterVersion: "fixture",
+  },
+};
+const expandedPlan: any = {
+  ...basePlan,
+  semanticQuery: "summer products",
+  contexts: [{
+    value: "summer",
+    normalizedValue: "summer",
+    mode: "SHOULD",
+    confidence: 0.9,
+    source: "FULL_LLM",
+  }],
+  resolvedSegments: [{
+    text: "mùa hè",
+    start: 3,
+    end: 5,
+    field: "CONTEXT",
+    canonicalValue: "summer",
+    confidence: 0.9,
+    source: "FULL_LLM",
+  }],
+  unresolvedSegments: [],
+};
+const summerProfile = buildQuerySemanticProfile({
+  originalQuery: "đồ dùng cho mùa hè",
+  rawPlan: basePlan,
+  expandedPlan,
+  llm: summerRewrite as any,
+});
+assert.equal(
+  summerProfile.finalPlan.contexts[0]?.mode,
+  "SHOULD",
+  "LLM semantic provenance must not harden an open-world context into QueryPlan MUST",
+);
 
 const signature = currentSearchPipelineSignature();
 assert.ok(signature.includes("qdrant:"), "cache signature must include resolved collection");
