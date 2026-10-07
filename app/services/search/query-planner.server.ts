@@ -590,7 +590,7 @@ async function buildUncachedPlan(
     contexts: [...byField("CONTEXT"), ...byField("ALIAS")],
     compatibility: [
       ...deterministic.compatibility,
-      ...byField("COMPATIBILITY").map((item) => ({ ...item, mode: "MUST" })),
+      ...byField("COMPATIBILITY").map((item) => ({ ...item, mode: "MUST" as const })),
     ].filter(
       (item, index, list) =>
         list.findIndex(
