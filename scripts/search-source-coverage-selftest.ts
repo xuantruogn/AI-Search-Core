@@ -66,15 +66,21 @@ try {
         retrievalSources: ["SEMANTIC"], semanticBranchInput: "jacket", semanticBranchIndex: 1 },
     ],
   });
-  assert.deepEqual(identityBranchResults.map(r => r.productId), ["source-jacket"],
-    "a generic identity embedding branch cannot prove the source waterproof facet");
+  assert.deepEqual(
+    identityBranchResults.map(r => r.productId),
+    ["source-jacket", "generic-jacket"],
+    "open-world waterproof evidence must rerank within the jacket family without hard-filtering semantic alternatives",
+  );
   const missingGroundedResults = await filterResultsByExplicitGender({
     shop: "source-coverage-fixture", originalQuery: direct.query, rewrite: direct,
     results: [{ productId: "generic-jacket", score: 0.65, vectorSimilarity: 0.65,
       primaryVectorSimilarity: 0.40, retrievalSources: ["SEMANTIC"], semanticBranchInput: "jacket", semanticBranchIndex: 1 }],
   });
-  assert.deepEqual(missingGroundedResults, [],
-    "missing the catalog-proven candidate must not disable the facet precision guard");
+  assert.deepEqual(
+    missingGroundedResults.map(r => r.productId),
+    ["generic-jacket"],
+    "missing PSF evidence for an open-world quality must remain uncertainty, not an empty-result proof",
+  );
 
   const expansionOnly = await filterResultsByExplicitGender({
     shop: "source-coverage-fixture", originalQuery: "jacket for evenings", rewrite: {
