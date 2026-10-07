@@ -800,9 +800,14 @@ export default function BillingPage() {
         <div
           style={{
             display: "grid",
-            gridTemplateColumns: "repeat(auto-fit, minmax(270px, 1fr))",
+            gridTemplateColumns:
+              availablePlans.length === 1
+                ? "minmax(0, 520px)"
+                : "repeat(auto-fit, minmax(270px, 1fr))",
+            justifyContent: availablePlans.length === 1 ? "center" : undefined,
             gap: 18,
             alignItems: "stretch",
+            width: "100%",
           }}
         >
           {availablePlans.map((plan) => {
