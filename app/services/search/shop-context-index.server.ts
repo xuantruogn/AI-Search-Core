@@ -2491,6 +2491,7 @@ function sourceGroundedAttributeFacets(
     ...(rewrite.analysis.optionalPreferences ?? []),
     ...(rewrite.analysis.attributes ?? []),
     ...(rewrite.analysis.compatibility ?? []),
+    ...(rewrite.analysis.sourceOwnedExactConstraints ?? []),
   ]) {
     if (identityInternalLowConfidenceSignals.has(normalizeContextTerm(value))) {
       continue;
@@ -2822,21 +2823,13 @@ export async function filterResultsByExplicitGender<
     retrievalModeOf(originalQuery, rewrite);
   const shopperStrictAttributes = readStrictTargetAttributes(originalQuery, rewrite);
   const sourceFacetPreferences = sourceGroundedAttributeFacets(originalQuery, rewrite);
-  const sourceTextForExactDemand = sourceTargetText(originalQuery, rewrite);
   const sourceOwnedExactDemandAttributes = [
     ...new Set(
-      (rewrite.analysis.semanticDemand?.exactConstraints ?? [])
+      (rewrite.analysis.sourceOwnedExactConstraints ?? [])
         .map((value) => value.replace(/\s+/g, " ").trim())
         .filter(Boolean)
-        .filter((value) =>
-          Boolean(
-            sourceSemanticTermForCanonical(
-              sourceTextForExactDemand,
-              rewrite,
-              value,
-            ),
-          ) || sourceContainsFacet(sourceTextForExactDemand, value),
-        )
+        // Exact provenance is not exact authority yet. Promote only values
+        // that the catalog can type as an ATTRIBUTE/VARIANT fact.
         .filter((value) =>
           rows.some((row) =>
             ["ATTRIBUTE", "VARIANT_OPTION"].includes(row.kind) &&
@@ -2866,9 +2859,6 @@ export async function filterResultsByExplicitGender<
   const strictAttributes = [
     ...new Set([
       ...shopperStrictAttributes,
-      // LLM exact constraints remain advisory until both provenance and the
-      // catalog's typed ATTRIBUTE/VARIANT evidence validate them.
-      ...sourceOwnedExactDemandAttributes,
     ]),
   ].filter(
     (value) =>
@@ -2885,10 +2875,18 @@ export async function filterResultsByExplicitGender<
     ...(rewrite.analysis.optionalPreferences ?? []),
     ...(rewrite.analysis.attributes ?? []),
     ...(rewrite.analysis.useCases ?? []),
-    ...(rewrite.analysis.semanticDemand?.exactConstraints ?? []),
+    ...(rewrite.analysis.sourceOwnedExactConstraints ?? []),
     ...planningContextSignals,
   ].filter((value) => !isCommerceOnlyValue(value));
-  const preferredAttributes = sourceFacetPreferences
+  const preferredAttributes = [
+    ...new Set([
+      ...sourceFacetPreferences,
+      // Source-owned translated exact values (for example xanh -> blue) are
+      // strong typed preferences unless code independently marks them strict.
+      // Size/measurement MUSTs remain owned by the deterministic parser.
+      ...sourceOwnedExactDemandAttributes,
+    ]),
+  ]
     .filter((value) => !strictAttributes.includes(value))
     .filter((value) => !negativeSignals.includes(value));
   const genericSemanticFacetTokens = new Set([
