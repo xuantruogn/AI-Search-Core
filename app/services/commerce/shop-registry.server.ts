@@ -214,17 +214,29 @@ export async function ensureShopRecord({
     // the one place where an UNINSTALLED shop is intentionally made ACTIVE.
     const wasUninstalled = existing.status === "UNINSTALLED";
 
-    await db.$executeRaw`
-      UPDATE \`AiSearchShop\`
-      SET
-        \`shopifyShopId\` = COALESCE(${shopifyShopId ?? null}, \`shopifyShopId\`),
-        \`status\` = 'ACTIVE',
-        \`uninstalledAt\` = NULL,
-        \`reinstalledAt\` = UTC_TIMESTAMP(3),
-        \`installCount\` = COALESCE(\`installCount\`, 0) + 1,
-        \`updatedAt\` = UTC_TIMESTAMP(3)
-      WHERE \`shop\` = ${cleanShop}
-    `;
+    if (wasUninstalled) {
+      await db.$executeRaw`
+        UPDATE \`AiSearchShop\`
+        SET
+          \`shopifyShopId\` = COALESCE(${shopifyShopId ?? null}, \`shopifyShopId\`),
+          \`status\` = 'ACTIVE',
+          \`uninstalledAt\` = NULL,
+          \`reinstalledAt\` = UTC_TIMESTAMP(3),
+          \`installCount\` = COALESCE(\`installCount\`, 0) + 1,
+          \`updatedAt\` = UTC_TIMESTAMP(3)
+        WHERE \`shop\` = ${cleanShop}
+      `;
+    } else {
+      await db.$executeRaw`
+        UPDATE \`AiSearchShop\`
+        SET
+          \`shopifyShopId\` = COALESCE(${shopifyShopId ?? null}, \`shopifyShopId\`),
+          \`status\` = 'ACTIVE',
+          \`uninstalledAt\` = NULL,
+          \`updatedAt\` = UTC_TIMESTAMP(3)
+        WHERE \`shop\` = ${cleanShop}
+      `;
+    }
 
     if (wasUninstalled) {
       await recordBillingEvent({
