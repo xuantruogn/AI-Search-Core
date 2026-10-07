@@ -121,9 +121,10 @@ export function applyFinalRelevanceCutoff<T extends { score: number }>(args: {
         return rank <= 20 && relative >= 0.35;
       }
 
-      // Natural-language discovery is dense-led. A sparse-only candidate must
-      // be one of the very strongest lexical hits; otherwise it is tail filler.
-      return rank <= 5 && relative >= 0.7;
+      // BM25 is recall/corroboration, never open-world truth. Exact
+      // authority was already handled above, so sparse-only DISCOVERY or
+      // COMPLEMENT candidates cannot prove the shopper's semantic need.
+      return false;
     }
 
     return false;
