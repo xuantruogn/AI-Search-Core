@@ -428,7 +428,7 @@ function parseMandatoryConcepts(value: unknown) {
   if (!Array.isArray(value)) return [] as SemanticMandatoryConcept[];
   const result: SemanticMandatoryConcept[] = [];
   const seen = new Set<string>();
-  for (const item of value.slice(0, 3)) {
+  for (const item of value.slice(0, 5)) {
     if (!item || typeof item !== "object" || Array.isArray(item)) continue;
     const record = item as Record<string, unknown>;
     const target = parseShortString(record.target, 96);
@@ -805,7 +805,7 @@ async function performRewrite({ shop, cleanQuery, searchLanguage, model, backupM
         },
         mandatoryConcepts: {
           type: "array",
-          maxItems: 3,
+          maxItems: 5,
           items: {
             type: "object",
             properties: {
