@@ -36,7 +36,7 @@ const discovery = applyFinalRelevanceCutoff({
   ],
 });
 assert.deepEqual(discovery.map((r: any) => r.productId), [
-  "dense", "confirmed", "sparse-strong",
+  "dense", "confirmed",
 ]);
 
 const discoveryJointDemand = applyFinalRelevanceCutoff({
@@ -81,8 +81,8 @@ const discoveryJointDemand = applyFinalRelevanceCutoff({
 });
 assert.deepEqual(
   discoveryJointDemand.map((r: any) => r.productId),
-  ["joint-primary", "exact-authority", "sparse-strong"],
-  "DISCOVERY lane agreement cannot replace full primary Supply↔Demand evidence",
+  ["joint-primary", "exact-authority"],
+  "DISCOVERY sparse/branch agreement cannot replace full primary Supply↔Demand evidence",
 );
 
 console.log("PASS: final relevance cutoff preserves authority/semantic evidence and removes weak sparse tail");
