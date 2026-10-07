@@ -111,6 +111,12 @@ export type QueryRewriteAnalysis = {
    * expansion and not by itself a closed-world absence proof.
    */
   sourceOwnedTargetIdentities?: string[];
+  /**
+   * Shopper-owned exact values preserved through translation (for example
+   * xanh -> blue). This is provenance only. Downstream code must still map the
+   * value to a typed catalog fact before using it as exact authority.
+   */
+  sourceOwnedExactConstraints?: string[];
   // Keep PREMIUM/BUDGET in this legacy field for downstream compatibility.
   // marketPreference is the cleaner semantic signal for new consumers.
   sortIntent: "RELEVANCE" | "PRICE_ASC" | "PRICE_DESC" | "PREMIUM" | "BUDGET";
