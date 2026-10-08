@@ -217,6 +217,21 @@ export function buildShopContextLookupIndex(terms: ContextTerm[]): ShopContextLo
     normalizedList.push(term);
     byNormalized.set(term.normalizedValue, normalizedList);
 
+    // Typed one-letter option values (e.g. "Size: S", "Color: M") have no
+    // meaningfulTokens() entry. Index the exact assigned value as an alias so
+    // a source-owned short code is still considered for later exact checking.
+    if (["ATTRIBUTE", "VARIANT_OPTION"].includes(term.kind)) {
+      const assigned = term.value.match(
+        /^\s*(?:colou?r|size|material|fabric|finish|pattern)\s*[=:]\s*(.+?)\s*$/i,
+      )?.[1];
+      const normalizedAssigned = assigned ? normalizeContextTerm(assigned) : "";
+      if (normalizedAssigned && normalizedAssigned !== term.normalizedValue) {
+        const assignedRows = byNormalized.get(normalizedAssigned) ?? [];
+        assignedRows.push(term);
+        byNormalized.set(normalizedAssigned, assignedRows);
+      }
+    }
+
     for (const token of new Set(term.tokens)) {
       const tokenList = byToken.get(token) ?? [];
       tokenList.push(term);
