@@ -385,7 +385,15 @@ function forbiddenCategoryBranch(parts: string[]) {
 export function shopifyCategoryLeaf(path: string): FamilyNode | null {
   const segments = shopifyCategoryParts(path);
   if (!segments.length || forbiddenCategoryBranch(segments)) return null;
-  return classifySoldItemLeaf(segments.at(-1) ?? "");
+  const leaf = segments.at(-1) ?? "";
+  const aggregateMembers = CATEGORY_LEAF_MEMBERS[leaf];
+  // An aggregate typed category ("Shoes", "Jewelry", "Shirts & Tops") is
+  // not one concrete sold-item leaf unless Shopify's category maps to exactly
+  // one supported node.
+  if (aggregateMembers) {
+    return aggregateMembers.length === 1 ? aggregateMembers[0] : null;
+  }
+  return classifySoldItemLeaf(leaf);
 }
 
 function categoryProvesGroup(path: string, group: FamilyGroup) {
@@ -394,8 +402,11 @@ function categoryProvesGroup(path: string, group: FamilyGroup) {
   const leaf = segments.at(-1) ?? "";
   const aggregateMembers = CATEGORY_LEAF_MEMBERS[leaf];
   if (aggregateMembers) {
-    const typedMembers = new Set<FamilyNode>(aggregateMembers);
-    return GROUP_MEMBERS[group].some((node) => typedMembers.has(node));
+    const accepted = new Set<FamilyNode>(GROUP_MEMBERS[group]);
+    // Broad category evidence proves a query only when every possible member
+    // of that category is inside the requested family. Intersection alone
+    // would make generic Shoes falsely prove Sneakers.
+    return aggregateMembers.every((node) => accepted.has(node));
   }
   // Broad catalog roots may prove only broad shopper groups and only when the
   // product is below that root. Never use an ancestor Vehicles/Clothing to
