@@ -27,6 +27,10 @@ assert.deepEqual(verifyVariantColorAndSize(variants, { color: "black", size: nul
 assert.deepEqual(verifyVariantColorAndSize([], { color: "red", size: null }),
   { state: "UNKNOWN" });
 assert.deepEqual(verifyVariantColorAndSize(normalizeIndexedVariantSelections([
+  { id: gid(199), selectedOptions: [{ name: "Màu", value: "Đỏ" }, { name: "Cỡ", value: "M" }] },
+]), { color: "red", size: "m" }), { state: "MATCH", variantId: gid(199) },
+  "Localized Color and Size options must be matched on the same Shopify variant");
+assert.deepEqual(verifyVariantColorAndSize(normalizeIndexedVariantSelections([
   { id: gid(200), selectedOptions: [{ name: "Fabric", value: "Red cotton" }] },
 ]), { color: "red", size: null }), { state: "UNKNOWN" }, "Fabric is not Color");
 
@@ -46,6 +50,11 @@ const rewrite = (color: string, mode: "DIRECT" | "COMPLEMENT" = "DIRECT") => ({
 }) as any;
 assert.deepEqual(requestedVariantFacets("áo đỏ size M", rewrite("red")), { color: "red", size: "m" });
 assert.equal(requestedVariantFacets("áo đỏ", rewrite("red"))?.color, "red");
+const localizedRewrite = {
+  ...rewrite("red"), context: { typedColorVocabulary: ["Đỏ", "Xanh dương"] },
+} as any;
+assert.equal(requestedVariantFacets("áo đỏ", localizedRewrite)?.color, "red",
+  "Translated Red must match merchant's Đỏ color vocabulary");
 assert.equal(requestedVariantFacets("shirt from Red brand", {
   ...rewrite("red"),
   planning: { resolvedSegments: [{ text: "Red", field: "BRAND", canonicalValue: "Red" }] },
