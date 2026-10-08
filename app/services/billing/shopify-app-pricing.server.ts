@@ -28,6 +28,11 @@ type AdminGraphqlClient = {
       variables?: Record<string, unknown>;
     },
   ) => Promise<Response>;
+  rest?: {
+    get: (options: { path: string }) => Promise<{
+      json: () => Promise<unknown>;
+    }>;
+  };
 };
 
 type ShopifySubscriptionStatus =
@@ -119,6 +124,62 @@ function parseShopifyDate(value: string | null | undefined) {
 
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function getStoredConfirmationUrl(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+
+  const candidate = (value as Record<string, unknown>).confirmationUrl;
+  return typeof candidate === "string" && candidate.trim().length > 0
+    ? candidate.trim()
+    : null;
+}
+
+type ShopifyRecurringApplicationCharge = {
+  id?: number | string;
+  status?: string | null;
+  activated_on?: string | null;
+  billing_on?: string | null;
+  cancelled_on?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+  price?: string | null;
+  currency?: string | null;
+  test?: boolean | null;
+  trial_days?: number | null;
+  trial_ends_on?: string | null;
+};
+
+async function queryShopifyRecurringApplicationCharge(
+  admin: AdminGraphqlClient,
+  chargeId: string | null | undefined,
+): Promise<ShopifyRecurringApplicationCharge | null> {
+  const normalizedId = chargeId?.trim();
+  if (!normalizedId || !admin.rest?.get) return null;
+
+  try {
+    const response = await admin.rest.get({
+      path: `/recurring_application_charges/${encodeURIComponent(normalizedId)}.json`,
+    });
+    const body = (await response.json()) as {
+      recurring_application_charge?: ShopifyRecurringApplicationCharge;
+    };
+
+    return body.recurring_application_charge ?? null;
+  } catch (error) {
+    console.warn("[BILLING] Unable to reconcile recurring application charge:", {
+      chargeId: normalizedId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return null;
+  }
+}
+
+function chargeIdFromSubscriptionGid(subscriptionGid: string) {
+  const match = subscriptionGid.match(/\/(\d+)$/);
+  return match?.[1] ?? null;
 }
 
 function inferPlan({
@@ -351,6 +412,8 @@ async function reconcileManualShopifySubscription({
   adminSubscription,
   source = "API",
   observedShopifyStatus,
+  providerChargeId,
+  confirmationUrl,
 }: {
   shop: string;
   admin: AdminGraphqlClient;
@@ -359,6 +422,8 @@ async function reconcileManualShopifySubscription({
   adminSubscription: AdminSubscription;
   source?: "CALLBACK" | "WEBHOOK" | "API" | "RECONCILIATION";
   observedShopifyStatus?: ShopifySubscriptionStatus | null;
+  providerChargeId?: string | null;
+  confirmationUrl?: string | null;
 }) {
   const identity = await fetchShopIdentity(admin);
 
@@ -617,6 +682,39 @@ async function reconcileManualShopifySubscription({
       ? providerTrialEndsAt
       : current?.trialEndsAt ?? providerTrialEndsAt;
 
+  // Financial reconciliation is optional enrichment only. Never derive a
+  // legacy RecurringApplicationCharge ID from an AppSubscription GID: those
+  // identifiers are distinct Shopify resources. Only use an explicit charge
+  // ID when a caller has actually obtained one from a provider callback.
+  const resolvedProviderChargeId = providerChargeId?.trim() || null;
+  const providerCharge = resolvedProviderChargeId
+    ? await queryShopifyRecurringApplicationCharge(
+        admin,
+        resolvedProviderChargeId,
+      )
+    : null;
+
+  const providerChargeStatus =
+    providerCharge?.status?.trim().toLowerCase() ?? null;
+  const providerChargeTest =
+    providerCharge?.test ?? adminSubscription.test ?? null;
+  const providerChargeActivatedAt =
+    parseShopifyDate(providerCharge?.activated_on);
+  const providerChargeBillingOn =
+    parseShopifyDate(providerCharge?.billing_on);
+
+  console.log("[BILLING FINANCIAL] provider charge reconciliation:", {
+    shop,
+    subscriptionGid: gid,
+    providerChargeId: resolvedProviderChargeId,
+    providerChargeStatus,
+    providerChargeActivatedAt:
+      providerChargeActivatedAt?.toISOString() ?? null,
+    providerChargeBillingOn:
+      providerChargeBillingOn?.toISOString() ?? null,
+    providerChargeTest,
+  });
+
   const previousTrialStatus = current?.trialStatus ?? "NONE";
 
   const trialStatus: BillingTrialStatus =
@@ -671,28 +769,53 @@ async function reconcileManualShopifySubscription({
         : "EFFECTIVE"
       : (current?.cancellationStatus ?? "NONE");
 
-  const chargeStatus: BillingChargeStatus =
-    status === "FROZEN"
-      ? "FAILED"
-      : status === "PENDING"
-        ? "PENDING"
-        : status === "ACTIVE" && trialStatus === "ACTIVE"
-          ? "NONE"
-          : status === "ACTIVE"
-            ? "PAID"
-            : "NONE";
+  // A cancellation is a lifecycle transition, not proof that the paid
+  // financial state disappeared. Shopify may return CANCELLED while the
+  // merchant still owns the remainder of the already-paid period. Preserve
+  // the last verified local payment/charge state so reinstall recovery can
+  // distinguish paid-period entitlement from a forfeited trial.
+  const providerChargeIsPaid =
+    providerChargeStatus === "active" ||
+    providerChargeStatus === "accepted";
 
-  const paymentStatus: BillingPaymentStatus =
-    status === "FROZEN"
-      ? "FAILED"
-      : status === "PENDING"
-        ? "PENDING"
-        : status === "ACTIVE" && subscriptionPreviousStatus === "FROZEN"
-          ? "RECOVERED"
+  const providerChargeIsPending =
+    providerChargeStatus === "pending";
+
+  const providerChargeHasFailed =
+    providerChargeStatus === "frozen" ||
+    providerChargeStatus === "declined" ||
+    providerChargeStatus === "expired";
+
+  const chargeStatus: BillingChargeStatus =
+    providerChargeIsPaid
+      ? "PAID"
+      : providerChargeHasFailed || status === "FROZEN"
+        ? "FAILED"
+        : providerChargeIsPending
+          ? "PENDING"
           : status === "ACTIVE" && trialStatus === "ACTIVE"
             ? "NONE"
-            : status === "ACTIVE"
+            : status === "CANCELLED" && current?.chargeStatus === "PAID"
               ? "PAID"
+              : "NONE";
+
+  const paymentStatus: BillingPaymentStatus =
+    providerChargeIsPaid
+      ? subscriptionPreviousStatus === "FROZEN"
+        ? "RECOVERED"
+        : "PAID"
+      : providerChargeHasFailed || status === "FROZEN"
+        ? "FAILED"
+        : providerChargeIsPending
+          ? trialStatus === "ACTIVE"
+            ? "NONE"
+            : "PENDING"
+          : status === "ACTIVE" && trialStatus === "ACTIVE"
+            ? "NONE"
+            : status === "CANCELLED" &&
+                (current?.paymentStatus === "PAID" ||
+                  current?.paymentStatus === "RECOVERED")
+              ? current.paymentStatus
               : "NONE";
 
   const accessStatus: BillingAccessStatus =
@@ -778,8 +901,20 @@ async function reconcileManualShopifySubscription({
       adminSubscription.test ?? process.env.NODE_ENV !== "production",
     rawResponse: {
       ...(adminSubscription as unknown as Record<string, unknown>),
+      confirmationUrl:
+        confirmationUrl?.trim() ||
+        getStoredConfirmationUrl(current?.rawResponse),
       reconciliationSource: source,
       reconciledAt: now.toISOString(),
+      financialReconciliation: {
+        provider: "SHOPIFY_RECURRING_APPLICATION_CHARGE",
+        chargeId: resolvedProviderChargeId,
+        status: providerChargeStatus,
+        activatedAt: providerChargeActivatedAt?.toISOString() ?? null,
+        billingOn: providerChargeBillingOn?.toISOString() ?? null,
+        test: providerChargeTest,
+        verifiedPaid: providerChargeIsPaid,
+      },
     },
   };
 
@@ -793,9 +928,10 @@ async function reconcileManualShopifySubscription({
     update: data,
   });
 
-  // One local charge record represents one Shopify billing period. The real
-  // Shopify charge ID can be attached later when/if that provider record is
-  // available; lifecycle state is still derived from the subscription state.
+  // One local charge record represents one Shopify billing period.
+  // Lifecycle reconciliation preserves PAID on cancellation when the exact
+  // subscription had already entered the paid period. A CANCELLED state by
+  // itself is never treated as a refund.
   if (start) {
     await db.billingCharge.upsert({
       where: {
@@ -807,6 +943,7 @@ async function reconcileManualShopifySubscription({
       create: {
         shop,
         subscriptionGid: gid,
+        shopifyChargeId: resolvedProviderChargeId,
         status: chargeStatus,
         amount: shopifyPrice ?? plan.price,
         currency: shopifyCurrency ?? plan.currencyCode,
@@ -816,22 +953,31 @@ async function reconcileManualShopifySubscription({
           subscriptionPreviousStatus === "PENDING" && status === "ACTIVE"
             ? now
             : null,
-        activatedAt: status === "ACTIVE" ? now : null,
+        activatedAt:
+          providerChargeActivatedAt ??
+          (status === "ACTIVE" ? now : null),
         paidAt:
-          status === "ACTIVE" && trialStatus !== "ACTIVE"
-            ? now
+          providerChargeIsPaid
+            ? providerChargeActivatedAt ?? now
             : null,
         failedAt: status === "FROZEN" ? now : null,
         frozenAt: status === "FROZEN" ? now : null,
-        testMode:
-          adminSubscription.test ?? process.env.NODE_ENV !== "production",
+        testMode: providerChargeTest ?? process.env.NODE_ENV !== "production",
         rawResponse: {
           subscriptionGid: gid,
+          shopifyChargeId: resolvedProviderChargeId,
           shopifyUpdatedAt: shopifyUpdatedAt?.toISOString() ?? null,
+          providerChargeStatus,
+          providerChargeActivatedAt:
+            providerChargeActivatedAt?.toISOString() ?? null,
+          providerChargeBillingOn:
+            providerChargeBillingOn?.toISOString() ?? null,
+          providerChargeTest,
           status,
         },
       },
       update: {
+        shopifyChargeId: resolvedProviderChargeId,
         status: chargeStatus,
         amount: shopifyPrice ?? plan.price,
         currency: shopifyCurrency ?? plan.currencyCode,
@@ -840,16 +986,27 @@ async function reconcileManualShopifySubscription({
           subscriptionPreviousStatus === "PENDING" && status === "ACTIVE"
             ? now
             : undefined,
-        activatedAt: status === "ACTIVE" ? now : undefined,
+        activatedAt:
+          providerChargeActivatedAt ??
+          (status === "ACTIVE" ? now : undefined),
         paidAt:
-          status === "ACTIVE" && trialStatus !== "ACTIVE"
-            ? now
-            : undefined,
+          providerChargeIsPaid
+            ? providerChargeActivatedAt ?? now
+            : status === "CANCELLED" && current?.paymentStatus === "PAID"
+              ? current?.activatedAt ?? current?.shopifyUpdatedAt ?? now
+              : undefined,
         failedAt: status === "FROZEN" ? now : undefined,
         frozenAt: status === "FROZEN" ? now : undefined,
         rawResponse: {
           subscriptionGid: gid,
+          shopifyChargeId: resolvedProviderChargeId,
           shopifyUpdatedAt: shopifyUpdatedAt?.toISOString() ?? null,
+          providerChargeStatus,
+          providerChargeActivatedAt:
+            providerChargeActivatedAt?.toISOString() ?? null,
+          providerChargeBillingOn:
+            providerChargeBillingOn?.toISOString() ?? null,
+          providerChargeTest,
           status,
         },
       },
@@ -1423,6 +1580,8 @@ export async function reconcileShopifySubscriptionFromAdmin({
   authoritativePlanHandle,
   source = "API",
   observedShopifyStatus,
+  providerChargeId,
+  confirmationUrl,
 }: {
   shop: string;
   admin: AdminGraphqlClient;
@@ -1431,6 +1590,8 @@ export async function reconcileShopifySubscriptionFromAdmin({
   authoritativePlanHandle?: string | null;
   source?: "CALLBACK" | "WEBHOOK" | "API" | "RECONCILIATION";
   observedShopifyStatus?: ShopifySubscriptionStatus | null;
+  providerChargeId?: string | null;
+  confirmationUrl?: string | null;
 }) {
   const subscription = await queryAdminSubscription(
     admin,
@@ -1683,6 +1844,8 @@ export async function reconcileShopifySubscriptionFromAdmin({
     adminSubscription: subscription,
     source,
     observedShopifyStatus,
+    providerChargeId,
+    confirmationUrl,
   });
 
   return {
@@ -1702,12 +1865,14 @@ export async function refreshShopifyAppPricingSubscription({
   preferredPlanHandle,
   adminSubscription,
   source = "API",
+  providerChargeId,
 }: {
   shop: string;
   admin: AdminGraphqlClient;
   preferredPlanHandle?: string | null;
   adminSubscription?: AdminSubscription | null;
   source?: "CALLBACK" | "WEBHOOK" | "API" | "RECONCILIATION";
+  providerChargeId?: string | null;
 }) {
   if (adminSubscription) {
     return reconcileManualShopifySubscription({
@@ -1716,6 +1881,7 @@ export async function refreshShopifyAppPricingSubscription({
       preferredPlanHandle,
       adminSubscription,
       source,
+      providerChargeId,
     });
   }
 
@@ -1725,6 +1891,7 @@ export async function refreshShopifyAppPricingSubscription({
     expectedSubscriptionGid: null,
     preferredPlanHandle,
     source,
+    providerChargeId,
   });
 }
 
