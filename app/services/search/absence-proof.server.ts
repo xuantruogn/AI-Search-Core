@@ -226,6 +226,26 @@ export async function proveNoResult(args: {
     };
   }
 
+  // Without a complete source-field manifest, LLM-enriched measurements,
+  // compatibility and models cannot prove absence. When no target identity or
+  // provable typed source fact remains, skip every catalog-wide profile scan
+  // and Qdrant count; they cannot change UNKNOWN into certainty.
+  const canProveTypedFact = closedWorldConstraints.some(
+    (item) => !item.requiresEnrichment &&
+      ["CODE", "DICTIONARY"].includes(item.constraint.source),
+  );
+  if (identities.length === 0 && !canProveTypedFact) {
+    return {
+      status: "UNKNOWN",
+      phase: args.phase,
+      reason: "NO_SOURCE_COMPLETE_CLOSED_WORLD_FACT",
+      durationMs: Date.now() - startedAt,
+      candidateCount: null,
+      coverageComplete: false,
+      evidence: [],
+    };
+  }
+
   const evidence: string[] = [];
 
   let semanticPayloadCoverageComplete = false;
