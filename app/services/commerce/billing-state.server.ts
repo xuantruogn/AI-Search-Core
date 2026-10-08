@@ -143,7 +143,8 @@ function getAccessStatus(
     status === "ACTIVE" ||
     (
       status === "CANCELLED" &&
-      cancellationStatus !== "NONE" &&
+      trialStatus !== "ACTIVE" &&
+      trialStatus !== "CANCELLED" &&
       currentPeriodEndsAt &&
       currentPeriodEndsAt > new Date()
     );
@@ -644,6 +645,7 @@ export async function getBillingSubscriptionSnapshot(
     planKey,
     subscription.cancellationStatus,
     subscription.currentPeriodEndsAt,
+    trialStatus,
   );
 
   return {
