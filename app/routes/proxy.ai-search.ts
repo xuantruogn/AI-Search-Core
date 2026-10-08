@@ -1328,6 +1328,13 @@ let resultCacheStatus: "HIT" | "MISS" = "MISS";
           safeToRender:
             true,
 
+          matched_variants: Object.fromEntries(
+            cachedPage.result.rankedProducts
+              .filter((product) => product.matchedVariantId &&
+                transportPlan.targetProductIds.includes(product.productId))
+              .map((product) => [product.productId, product.matchedVariantId]),
+          ),
+
           targetProductIds:
             transportPlan
               .targetProductIds,
@@ -3971,6 +3978,9 @@ let resultCacheStatus: "HIT" | "MISS" = "MISS";
 
                 score:
                   product.score,
+
+                matchedVariantId:
+                  product.matchedVariantId,
               }),
             ),
         });
@@ -4119,6 +4129,17 @@ let resultCacheStatus: "HIT" | "MISS" = "MISS";
 
               safeToRender:
                 true,
+
+              matched_variants: Object.fromEntries(
+                allProducts
+                  .filter((product) => product.matchedVariantId &&
+                    transportPlan.targetProductIds.includes(
+                      `gid://shopify/Product/${product.id}`))
+                  .map((product) => [
+                    `gid://shopify/Product/${product.id}`,
+                    product.matchedVariantId,
+                  ]),
+              ),
 
               targetProductIds:
                 transportPlan
