@@ -158,7 +158,8 @@ export function classifyFamilyProduct(
       if (leaf) {
         // Disagreeing canonical sold-item identity is a classification issue,
         // not permission to declare the query family proven.
-        if (knownTypeNodes.length > 0 && knownTypeNodes.every((node) => node !== leaf)) {
+        if (knownTypeNodes.length > 0 &&
+          knownTypeNodes.every((node) => node !== leaf && !accepted.has(node))) {
           return { match: false, reason: "CONTRADICTION" };
         }
         return accepted.has(leaf)
