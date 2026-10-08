@@ -26,7 +26,7 @@ const makeRewrite = (canonical: string, source: string, extra: Record<string, st
 }) as any;
 
 assert.deepEqual(classifyPureFamilyLookup(makePlan("bicycle", "bicycle"), makeRewrite("bicycle", "bicycle")),
-  { canonical: "bicycle", broadCategory: false });
+  { canonical: "bicycles", broadCategory: false, taxonomyGroup: "bicycles" });
 
 assert.deepEqual(classifyPureFamilyLookup(
   makePlan("clothes", "clothes", "DISCOVERY"),
@@ -39,7 +39,7 @@ translatedPlan.resolvedSegments = [];
 translatedPlan.unresolvedSegments = ["xe dap"];
 translatedPlan.route = "FULL_LLM";
 assert.deepEqual(classifyPureFamilyLookup(translatedPlan, makeRewrite("bicycle", "Xe đạp")),
-  { canonical: "bicycle", broadCategory: false, taxonomyGroup: "bicycle" });
+  { canonical: "bicycles", broadCategory: false, taxonomyGroup: "bicycles" });
 
 const winter = makePlan("winter clothing", "clothing", "DISCOVERY");
 winter.resolvedSegments = [];
