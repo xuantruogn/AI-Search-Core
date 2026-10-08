@@ -13,6 +13,44 @@ import {
   getSemanticPayloadCoverage,
 } from "./vector-store.server";
 
+export function typedProductFamilyMatches(actual: string, requested: string) {
+  const fold = (value: string) => normalizeQueryText(value).split(" ").map((token) =>
+    token.length > 3 && token.endsWith("s") && !token.endsWith("ss") ? token.slice(0, -1) : token
+  ).join(" ");
+  const source = fold(actual), target = fold(requested);
+  // A subtype may add modifiers before the family noun. Accessory/component
+  // families have their own final noun and do not inherit authority from a
+  // reference word (bicycle helmet is not a bicycle).
+  return Boolean(target) && (source === target || source.endsWith(` ${target}`));
+}
+
+export function resolveTypedAliasFamilyHeads(
+  rows: Array<{productId: string; kind: string; value: string}>, targets: string[],
+) {
+  const byProduct = new Map<string, Map<string, string[]>>();
+  for (const row of rows) {
+    if (!["ALIAS", "PRODUCT_TYPE", "CANONICAL_PRODUCT_TYPE"].includes(row.kind)) continue;
+    const kinds = byProduct.get(row.productId) ?? new Map<string, string[]>();
+    const values = kinds.get(row.kind) ?? []; values.push(normalizeQueryText(row.value));
+    kinds.set(row.kind, values); byProduct.set(row.productId, kinds);
+  }
+  const resolved = new Set<string>();
+  for (const target of targets) {
+    const heads = new Set<string>();
+    for (const kinds of byProduct.values()) {
+      if (!(kinds.get("ALIAS") ?? []).includes(normalizeQueryText(target))) continue;
+      for (const actual of kinds.get("PRODUCT_TYPE") ?? []) {
+        const head = actual.split(" ").at(-1)!;
+        if ((kinds.get("CANONICAL_PRODUCT_TYPE") ?? []).some((canonical) => typedProductFamilyMatches(canonical, head))) heads.add(head);
+      }
+    }
+    // Ambiguous aliases do not prove a family equivalence. The merchant type
+    // and canonical class must agree on the same head across the alias seeds.
+    if (heads.size === 1) resolved.add([...heads][0]);
+  }
+  return [...resolved];
+}
+
 export const STRUCTURED_RANKING_WEIGHTS = {
   IDENTIFIER: 100,
   MODEL: 70,
@@ -382,7 +420,15 @@ export async function retrieveStructuredCandidates(args: {
     .map(([id]) => id);
 
   if (!ids.length) return [];
-  const products = await listSearchableIndexedProducts(args.shop, ids);
+  const [products, identityFacts] = await Promise.all([
+    listSearchableIndexedProducts(args.shop, ids), loadProductSemanticRows(args.shop, ids),
+  ]);
+  const familyFacts = new Map<string, string[]>();
+  for (const fact of identityFacts) {
+    if (!["PRODUCT_TYPE", "CANONICAL_PRODUCT_TYPE"].includes(fact.kind)) continue;
+    const values = familyFacts.get(fact.productId) ?? [];
+    values.push(fact.value); familyFacts.set(fact.productId, values);
+  }
   const byId = new Map(products.map((product) => [product.productId, product]));
   const top = Math.max(...ids.map((id) => scores.get(id) || 0), 1);
 
@@ -420,7 +466,11 @@ export async function retrieveStructuredCandidates(args: {
     const rowKinds = [...(matchedRowKinds.get(id) ?? new Set<string>())];
     const exactCanonicalIdentity =
       matchedKinds.includes("PRODUCT_TYPE") &&
-      rowKinds.includes("CANONICAL_PRODUCT_TYPE");
+      (rowKinds.includes("CANONICAL_PRODUCT_TYPE") || (rowKinds.includes("ALIAS") && (familyFacts.get(id)?.length ?? 0) > 0) || matchedTerms.some((term) =>
+        term.kind === "PRODUCT_TYPE" && (familyFacts.get(id) ?? []).some((actual) =>
+          typedProductFamilyMatches(actual, term.constraint.normalizedValue || term.constraint.value)
+        )
+      ));
     const hasClosedWorldAnchor = matchedAnchorKinds.some((kind) =>
       ["IDENTIFIER", "MODEL", "COMPATIBILITY", "MEASUREMENT"].includes(kind),
     );

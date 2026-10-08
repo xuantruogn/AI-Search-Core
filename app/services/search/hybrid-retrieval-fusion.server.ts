@@ -331,6 +331,7 @@ export function fuseHybridRetrieval(args: {
           );
       merged.set(result.productId, {
         ...scopedResult,
+        structuredGuardRescue: canRescue && args.plan?.route === "STRUCTURED_ONLY",
         score,
         retrievalSources: uniqueSources(scopedResult.retrievalSources, ["STRUCTURED"]),
       });
@@ -339,6 +340,9 @@ export function fuseHybridRetrieval(args: {
     }
 
     const combined = mergeMetadata(current, scopedResult);
+    // A sparse candidate joining a validated pure-target structured candidate
+    // must preserve the same authority as a standalone structured candidate.
+    if (canRescue && args.plan?.route === "STRUCTURED_ONLY") combined.structuredGuardRescue = true;
     const matchedKinds = new Set(combined.structuredMatchedKinds ?? []);
     const multiFact = matchedKinds.size >= 2;
     const directIdentityBoost =

@@ -10,12 +10,13 @@ import {
   queryPlanToLegacyRewrite,
 } from "./legacy-query-rewrite-adapter.server";
 import { normalizeQueryText } from "./deterministic-query-parser.server";
+
 import { sourceProductTypeOwnsTarget } from "./query-planner.server";
 
 export const QUERY_SEMANTIC_PROFILE_VERSION =
   "query-semantic-profile-v6-parser-target-authority";
 export const QUERY_EMBEDDING_PIPELINE_VERSION =
-  "semantic-expansion-v17-source-authority-full-demand";
+  "semantic-expansion-v21-pure-target-equivalence";
 
 export type QuerySemanticProfile = {
   rawPlan: QueryPlan;
@@ -223,11 +224,11 @@ export function sourceOwnedSemanticDemandIdentities(args: {
             ),
           );
           const identityMatchesTarget =
-            concept.target === normalizedIdentity ||
+            concept.target === normalizedIdentity || concept.source === normalizedIdentity ||
             (
               normalizedIdentity.endsWith(` ${concept.target}`) &&
               identityModifiers.length > 0 &&
-              identityModifiers.every((token) => exactTokens.has(token))
+              identityModifiers.every((token) => exactTokens.has(token) || (args.modifiers ?? []).some((modifier) => normalizeQueryText(modifier).split(" ").includes(token)))
             );
           if (!identityMatchesTarget || !sourceContains(concept.source)) {
             return false;
@@ -610,28 +611,82 @@ export function stripReferenceScopedFacetsFromEmbedding(args: {
     .trim();
 }
 
-function composeFacetEmbeddingInput(
+export function pureTargetDemandEmbedding(args: {
+  originalQuery: string;
+  retrievalMode: string;
+  identities: string[];
+  concepts: Array<{target: string; source: string}>;
+  demand?: import("./semantic-contract.server").SemanticDemandProfile;
+}) {
+  const demand = args.demand;
+  if (args.retrievalMode !== "DIRECT" || args.identities.length !== 1 || !demand) return null;
+  if (isGenericDiscoveryFamily(args.identities[0])) return null;
+  if ([demand.desiredOutcomes, demand.useCases, demand.contexts, demand.qualities,
+       demand.audience, demand.styles, demand.negativeConstraints, demand.exactConstraints]
+       .some((axis) => axis.length > 0)) return null;
+  const target = normalizeQueryText(args.identities[0]);
+  return args.concepts.some((concept) =>
+    normalizeQueryText(concept.source) === normalizeQueryText(args.originalQuery) &&
+    normalizeQueryText(concept.target) === target
+  ) ? args.identities[0] : null;
+}
+
+export function composeFacetEmbeddingInput(
   semanticQuery: string,
   finalPlan: QueryPlan,
   _expandedPlan: QueryPlan,
   llm: QueryRewriteResult,
+  canonicalReferenceTerms: string[] = [],
 ) {
   // The dense query vector should represent the shopper's natural semantic
   // intent, not a serialized copy of structured facets. Exact attributes,
   // identity, brand/model/SKU, compatibility, price and negatives already
   // have dedicated structured/lexical/filter lanes and separate semantic
   // branches. Injecting them again here distorts cosine geometry.
+  // A source-aligned translation of the entire identity-only query is the
+  // complete Demand. Duplicating languages and request boilerplate here changes
+  // cosine geometry; no semantic axis is being discarded.
+  const pureTarget = !llm.fallbackReason ? pureTargetDemandEmbedding({
+    originalQuery: finalPlan.rawQuery, retrievalMode: finalPlan.retrievalMode,
+    identities: llm.analysis.sourceOwnedTargetIdentities ?? [],
+    concepts: llm.analysis.semanticMandatoryConcepts ?? [],
+    demand: llm.analysis.semanticDemand,
+  }) : null;
+  if (pureTarget) return pureTarget;
   const demandText = llm.analysis.semanticDemand && !llm.fallbackReason
     ? renderSemanticDemand(llm.analysis.semanticDemand) : "";
-  if (finalPlan.retrievalMode === "COMPLEMENT") {
-    // The source relation owns target/reference roles. Keep the natural
-    // relation in dense recall while downstream code strips reference-only
-    // exact facets from target authority.
-    return `${finalPlan.rawQuery}. ${demandText}`.trim();
-  }
-  const naturalIntent = demandText || (!llm.fallbackReason && llm.analysis.intent !== "unknown"
-    ? llm.analysis.intent : semanticQuery);
+  // The shopper's raw text is kept in QueryPlan for provenance/exact validation.
+  // When translation succeeded, the dense input must contain only shop-language
+  // meaning aligned with product Semantic Supply. In COMPLEMENT, preserve the
+  // target/reference relation in the LLM's canonical semanticQuery, not by
+  // prepending untranslated shopper text.
+  const naturalIntent = [semanticQuery, demandText]
+    .map((value) => value.replace(/\s+/g, " ").trim())
+    .filter(Boolean)
+    .filter((value, index, values) =>
+      values.findIndex((candidate) =>
+        normalizeQueryText(candidate) === normalizeQueryText(value)
+      ) === index
+    )
+    .join(". ") || (!llm.fallbackReason && llm.analysis.intent !== "unknown"
+      ? llm.analysis.intent : semanticQuery);
   const cleanSemanticQuery = naturalIntent.split(/\s*;\s*/)[0].replace(/\s+/g, " ").trim();
+  // The reference belongs to the shopper's relationship, not to target
+  // identity/exact facts. The LLM's referenceTerms are already in shop language;
+  // do NOT use the source-language rawPlan reference strings for dense input.
+  if (finalPlan.retrievalMode === "COMPLEMENT" &&
+      !llm.fallbackReason && canonicalReferenceTerms.length > 0) {
+    const references = canonicalReferenceTerms
+      .map((value) => value.replace(/\s+/g, " ").trim())
+      .filter(Boolean)
+      .slice(0, 2);
+    const missingReferences = references.filter((reference) =>
+      !normalizeQueryText(cleanSemanticQuery).includes(normalizeQueryText(reference))
+    );
+    if (missingReferences.length > 0) {
+      return `${cleanSemanticQuery} to pair with ${missingReferences.join(" and ")}`.trim();
+    }
+  }
   if (cleanSemanticQuery) return cleanSemanticQuery;
 
   // Deterministic/LLM fallback only: if no semantic sentence survived,
@@ -728,6 +783,7 @@ export function buildQuerySemanticProfile(args: {
       ...(safeLlm.analysis.semanticDemand?.contexts ?? []),
       ...(safeLlm.analysis.semanticDemand?.qualities ?? []),
       ...(safeLlm.analysis.semanticDemand?.styles ?? []),
+      ...(safeLlm.analysis.semanticDemand?.audience ?? []),
     ],
     }),
   ])].filter((value, index, values) => values.findIndex((candidate) =>
@@ -935,7 +991,17 @@ export function buildQuerySemanticProfile(args: {
             ...mergedRewriteBaseWithDemand.analysis.semanticDemand,
             // Parser-owned source target cannot be revoked by LLM omission or
             // replaced by an expanded product class. Preserve semantic axes.
-            identity: sourceOwnedDemandIdentities,
+            identity: [...new Set([
+              ...sourceOwnedDemandIdentities,
+              ...normalizeQueryText(args.originalQuery).split(" ").filter((token, index) =>
+                isGenericDiscoveryFamily(token) && sourceProductTypeOwnsTarget({
+                  query: args.originalQuery, start: index, end: index + 1,
+                })
+              ),
+              ...args.rawPlan.identities.filter((item) =>
+                isGenericDiscoveryFamily(item.value) && item.mode !== "MUST_NOT"
+              ).map((item) => item.value),
+            ])],
           }
         : undefined,
       referenceTerms:
@@ -952,11 +1018,23 @@ export function buildQuerySemanticProfile(args: {
   // Reference facets are excluded from target fact authority, not from full
   // Demand meaning. Keep the source relation (including reference color/size)
   // in the primary vector; composeFacetEmbeddingInput already preserves roles.
+  // A same-language shopper reference is already canonical and carries exact
+  // qualifiers the LLM might omit ("black skirt"). Across languages never send
+  // untranslated source references into the dense query: use LLM-translated
+  // referenceTerms while retaining the full original separately for provenance.
+  const sourceLanguage = safeLlm.analysis.detectedLanguage?.toLowerCase().split("-")[0];
+  const shopLanguage = safeLlm.analysis.shopLanguage?.toLowerCase().split("-")[0];
+  const referenceTermsForDense = safeLlm.fallbackReason
+    ? []
+    : sourceLanguage && shopLanguage && sourceLanguage === shopLanguage
+      ? trustedReferenceTerms
+      : (safeLlm.analysis.referenceTerms ?? []);
   const embeddingInput = composeFacetEmbeddingInput(
     embeddingSeed,
     finalPlan,
     safeExpandedPlan,
     mergedRewrite,
+    referenceTermsForDense,
   );
 
   return {

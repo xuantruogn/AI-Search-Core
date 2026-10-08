@@ -81,7 +81,7 @@ export function sourceProductTypeOwnsTarget(args: {
   // PRODUCT_TYPE=Home into the target identity.
   const contextualBoundaries = new Set([
     "for", "with", "on", "at", "from", "using", "without", "while",
-    "when", "during", "about", "around", "because", "to",
+    "when", "during", "about", "around", "because", "to", "pour", "avec", "pendant",
   ]);
   const firstBoundary = tokens.findIndex((token) =>
     contextualBoundaries.has(token),
@@ -90,6 +90,9 @@ export function sourceProductTypeOwnsTarget(args: {
 
   // Short catalog-style queries are overwhelmingly direct noun phrases:
   // "black cardigan", "women navy jacket", "electric kettle", etc.
+  // In adjective compounds (light weight backpack), light describes weight;
+  // it cannot own the catalog lighting family.
+  if (tokens[args.start] === "light" && tokens[args.end] === "weight") return false;
   if (tokens.length <= 6) return true;
   if (args.start <= 0) return true;
 

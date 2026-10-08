@@ -2579,7 +2579,7 @@ let resultCacheStatus: "HIT" | "MISS" = "MISS";
       const sparseStartedAt = Date.now();
       let sparseRetrievalMs = 0;
       const sparsePromise = (
-        queryPlan?.route === "STRUCTURED_ONLY"
+        queryPlan?.route === "STRUCTURED_ONLY" && queryPlan.identities.length === 0
           ? Promise.resolve([])
           : retrieveSparseCandidates({
               shop: session.shop,
@@ -2747,15 +2747,16 @@ let resultCacheStatus: "HIT" | "MISS" = "MISS";
           responseWonRace: true,
         });
       } else if (queryPlan?.route === "STRUCTURED_ONLY") {
-        const [structured, lexical] = await Promise.all([
+        const [structured, lexical, sparse] = await Promise.all([
           structuredPromise,
           lexicalPromise,
+          sparsePromise,
         ]);
-        if (structured.length > 0 || lexical.length > 0) {
+        if (structured.length > 0 || lexical.length > 0 || sparse.length > 0) {
           const fused = fuseHybridRetrieval({
             plan: queryPlan,
             semantic: [],
-            sparse: [],
+            sparse,
             structured,
             lexical,
             semanticNoEvidence: false,

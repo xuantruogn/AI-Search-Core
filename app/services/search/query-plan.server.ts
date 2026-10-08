@@ -1,4 +1,4 @@
-export const QUERY_PARSER_VERSION = "deterministic-v12-compatibility-provenance";
+export const QUERY_PARSER_VERSION = "deterministic-v13-apparel-size-source-role";
 export const QUERY_ROUTER_VERSION = "coverage-router-v12-semantic-remainder";
 
 export type QueryRoute =
