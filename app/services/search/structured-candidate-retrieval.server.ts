@@ -49,11 +49,23 @@ export async function retrieveGroundedFacetCandidates(args: {
   const [products, rows] = await Promise.all([
     listSearchableIndexedProducts(args.shop, ids), loadProductSemanticRows(args.shop, ids),
   ]);
-  return products.filter((product) => facets.every((facet) => rows.some((row) =>
-    row.productId === product.productId &&
-    ["ATTRIBUTE", "VARIANT_OPTION", "USE_CASE", "SOFT_CONTEXT", "COMPATIBILITY"].includes(row.kind) &&
-    normalizeQueryText(row.value) === normalizeQueryText(facet.canonicalValue),
-  ))).map((product) => ({
+  // Index candidate facts once. The former nested rows.some() walked every
+  // flattened PSF row for every (product, facet), which scaled quadratically
+  // on broad direct searches even after Qdrant had shortlisted the IDs.
+  const allowedKinds = new Set([
+    "ATTRIBUTE", "VARIANT_OPTION", "USE_CASE", "SOFT_CONTEXT", "COMPATIBILITY",
+  ]);
+  const factValuesByProduct = new Map<string, Set<string>>();
+  for (const row of rows) {
+    if (!allowedKinds.has(row.kind)) continue;
+    const values = factValuesByProduct.get(row.productId) ?? new Set<string>();
+    values.add(normalizeQueryText(row.value));
+    factValuesByProduct.set(row.productId, values);
+  }
+  const requiredValues = facets.map((facet) => normalizeQueryText(facet.canonicalValue));
+  return products.filter((product) =>
+    requiredValues.every((value) => factValuesByProduct.get(product.productId)?.has(value) === true),
+  ).map((product) => ({
     ...product, score: 0.72, structuredScore: 0.72,
     structuredMatchedKinds: ["PRODUCT_TYPE", ...new Set(facets.map(f => f.field))],
     structuredMatchedTerms: facets.map(f => ({ kind: f.field, value: normalizeQueryText(f.canonicalValue) })),
