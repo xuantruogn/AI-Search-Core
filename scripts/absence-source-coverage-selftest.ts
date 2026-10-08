@@ -10,7 +10,8 @@ const qdrantUrl=process.env.QDRANT_URL;delete process.env.QDRANT_URL;
 (db.aiSearchShopSettings as any).findUnique=async()=>null;
 (db.aiSearchIndexedProduct as any).count=async()=>1;
 (db as any).$queryRaw=async()=>[{productId:"fixture",shop:"absence-fixture",searchable:true,hasVector:true}];
-(db.aiSearchProductSemanticProfile as any).findMany=async()=>[{id:1,productId:"fixture",updatedAt:new Date(),profile:{schemaVersion:2,values:{CANONICAL_PRODUCT_TYPE:["footwear"],ATTRIBUTE:["cotton"]}}}];
+let profileReads = 0;
+(db.aiSearchProductSemanticProfile as any).findMany=async()=>{ profileReads += 1; return [{id:1,productId:"fixture",updatedAt:new Date(),profile:{schemaVersion:2,values:{CANONICAL_PRODUCT_TYPE:["footwear"],ATTRIBUTE:["cotton"]}}}]; };
 try {
  for(const phase of ["RAW","FINAL"] as const){
   invalidateProductSemanticProfileCache("absence-fixture");
@@ -18,5 +19,6 @@ try {
   assert.equal(proof.status,"UNKNOWN",`${phase}: ENRICHED does not prove source measurement coverage`);
   assert.equal(proof.coverageComplete,false);
  }
+ assert.equal(profileReads,0,"unprovable source facts must not load every catalog profile");
  console.log("PASS: missing closed-world source field remains UNKNOWN despite complete enrichment");
 }finally{(db.aiSearchIndexedProduct as any).count=count;(db.aiSearchProductSemanticProfile as any).findMany=find;(db.aiSearchShopSettings as any).findUnique=settingsFind;(db as any).$queryRaw=raw;if(qdrantUrl)process.env.QDRANT_URL=qdrantUrl;await db.$disconnect();}
