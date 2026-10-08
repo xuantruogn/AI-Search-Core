@@ -334,7 +334,7 @@ function categoryProvesGroup(path: string, group: FamilyGroup) {
   // prove a narrow leaf such as bicycle/dress.
   if (group === "clothing") {
     return segments.slice(0, -1).some((segment) => segment === "clothing") &&
-      !segments.some((segment) => /\baccessor(?:y|ies)\b/.test(segment));
+      !segments.slice(1).some((segment) => /\baccessor(?:y|ies)\b/.test(segment));
   }
   if (group === "furniture") {
     return segments.slice(0, -1).some((segment) => segment === "furniture");
@@ -344,6 +344,17 @@ function categoryProvesGroup(path: string, group: FamilyGroup) {
 
 export function shopifyCategoryIsClothing(path: string) {
   return categoryProvesGroup(path, "clothing");
+}
+
+function mentionsAnyAcceptedHead(value: string, accepted: Set<FamilyNode>) {
+  const normalized = " " + normalizeQueryText(value) + " ";
+  for (const node of accepted) {
+    for (const head of FAMILY_HEADS[node]) {
+      const needle = " " + normalizeQueryText(head) + " ";
+      if (normalized.includes(needle)) return true;
+    }
+  }
+  return false;
 }
 
 export type FamilyProductEvidence = {
@@ -367,6 +378,16 @@ export function classifyFamilyProduct(
   const knownTypeNodes = authoritativeNames
     .map(classifySoldItemLeaf)
     .filter((node): node is FamilyNode => node !== null);
+
+  // "Bicycle Helmet", "Phone Charger", etc. mention the requested family but
+  // sell a different head noun. When the head is not one of our supported
+  // family nodes, treat that phrase as a contradiction instead of trusting an
+  // accidentally broad Shopify category.
+  if (authoritativeNames.some((value) =>
+    classifySoldItemLeaf(value) === null && mentionsAnyAcceptedHead(value, accepted)
+  )) {
+    return { match: false, reason: "CONTRADICTION" };
+  }
 
   // A concrete canonical sold-item identity outside the requested family is a
   // contradiction. It also protects against a mistakenly assigned Shopify
