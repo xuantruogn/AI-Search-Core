@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { buildSearchCacheRequestVariant } from "../app/services/search/search-cache-request-variant.server";
 import {
   normalizeRankedProducts,
   parseProducts,
@@ -30,4 +31,21 @@ assert.equal(
   null,
   "invalid cached scores must not reach storefront",
 );
-console.log("PASS: persistent result cache preserves rank, dedupe and vector similarity");
+
+const base = "https://example.myshopify.com/apps/ai-search";
+const common = "q=waterproof+boots&filter.v.option.color=Navy";
+const first = new URL(`${base}?${common}&shop=example.myshopify.com&timestamp=123&signature=abc&page=1`);
+const second = new URL(`${base}?${common}&shop=example.myshopify.com&timestamp=456&signature=xyz&page=2`);
+assert.equal(
+  buildSearchCacheRequestVariant(first),
+  buildSearchCacheRequestVariant(second),
+  "app-proxy signed transport metadata must not fragment result cache",
+);
+const altered = new URL(`${base}?q=waterproof+boots&filter.v.option.color=Red&timestamp=456`);
+assert.notEqual(
+  buildSearchCacheRequestVariant(first),
+  buildSearchCacheRequestVariant(altered),
+  "real storefront filters must keep separate result-cache identities",
+);
+
+console.log("PASS: search cache roundtrip, Shopify transport keys and result-changing filters");
