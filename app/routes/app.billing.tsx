@@ -1,6 +1,6 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
-import { useFetcher, useLoaderData } from "react-router";
+import { Form, useActionData, useFetcher, useLoaderData, useNavigation } from "react-router";
 import db from "../db.server";
 import { authenticate } from "../shopify.server";
 import {
@@ -47,8 +47,51 @@ function planPresentation(value: unknown) {
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const debugId = crypto.randomUUID().slice(0, 8);
   console.log("[BILLING TRACE] loader:start", { debugId, method: request.method, url: request.url, referer: request.headers.get("referer"), remixRequest: request.headers.get("x-remix-request"), secFetchMode: request.headers.get("sec-fetch-mode") });
-  const { session } = await authenticate.admin(request);
+  const { admin, session } = await authenticate.admin(request);
   console.log("[BILLING DEBUG] loader:authenticated", { debugId, shop: session.shop });
+
+  const billingUrl = new URL(request.url);
+  const isBillingCallback =
+    billingUrl.searchParams.get("billing_callback") === "1";
+  const callbackChargeId =
+    billingUrl.searchParams.get("charge_id")?.trim() || null;
+
+  // The confirmation redirect is a synchronous billing boundary. Do not wait
+  // for the webhook/background commercial reconcile to make the UI correct.
+  // Re-query Shopify Admin here, persist the confirmed billing state, then
+  // calculate entitlement from the fresh local snapshot.
+  if (isBillingCallback) {
+    try {
+      const callbackReconciliation =
+        await refreshShopifyAppPricingSubscription({
+          shop: session.shop,
+          admin,
+          source: "CALLBACK",
+          providerChargeId: callbackChargeId,
+        });
+
+      await reconcileShopCommercialState({
+        shop: session.shop,
+        forceCatalogRefresh: callbackReconciliation.changed,
+      });
+
+      console.log("[BILLING CALLBACK] synchronous reconciliation complete", {
+        debugId,
+        shop: session.shop,
+        chargeId: callbackChargeId,
+        status: callbackReconciliation.subscription.status,
+        plan: callbackReconciliation.subscription.plan,
+        paymentStatus: callbackReconciliation.subscription.paymentStatus,
+      });
+    } catch (error) {
+      console.error("[BILLING CALLBACK] synchronous reconciliation failed", {
+        debugId,
+        shop: session.shop,
+        chargeId: callbackChargeId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
 
   const entitlement = await getShopEntitlement(session.shop);
   const subscription = await getSubscriptionSnapshot(session.shop, { ensure: false });
@@ -173,10 +216,15 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
 export const action = async ({ request }: ActionFunctionArgs) => {
   const debugId = crypto.randomUUID().slice(0, 8);
-  console.log("[BILLING DEBUG] action:start", {
+  console.log("[BILLING TRACE] action:start", {
     debugId,
     method: request.method,
     url: request.url,
+    referer: request.headers.get("referer"),
+    origin: request.headers.get("origin"),
+    secFetchMode: request.headers.get("sec-fetch-mode"),
+    secFetchDest: request.headers.get("sec-fetch-dest"),
+    contentType: request.headers.get("content-type"),
   });
 
   const { admin, session } = await authenticate.admin(request);
@@ -272,6 +320,82 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const currentEntitlement = await getShopEntitlement(session.shop);
     const currentPlanHandle =
       currentSubscription.planHandle?.trim().toLowerCase() ?? null;
+    const requestedPlanIsCurrent =
+      planHandle === currentPlanHandle;
+
+    const currentSubscriptionStillValid =
+      currentEntitlement.active &&
+      (
+        currentSubscription.status === "ACTIVE" ||
+        (
+          currentSubscription.status === "CANCELLED" &&
+          currentSubscription.billingPeriodEnd !== null &&
+          currentSubscription.billingPeriodEnd > new Date()
+        )
+      );
+
+    const samePlanAlreadyPending =
+      currentSubscription.status === "PENDING" &&
+      requestedPlanIsCurrent;
+
+    if (samePlanAlreadyPending) {
+      const pendingSubscriptionGid =
+        currentSubscription.shopifySubscriptionId;
+
+      const pendingBillingSubscription = pendingSubscriptionGid
+        ? await db.billingSubscription.findUnique({
+            where: {
+              shopifySubscriptionGid: pendingSubscriptionGid,
+            },
+            select: {
+              rawResponse: true,
+            },
+          })
+        : null;
+
+      const pendingRawResponse =
+        pendingBillingSubscription?.rawResponse &&
+        typeof pendingBillingSubscription.rawResponse === "object" &&
+        !Array.isArray(pendingBillingSubscription.rawResponse)
+          ? (pendingBillingSubscription.rawResponse as Record<string, unknown>)
+          : null;
+
+      const pendingConfirmationUrl =
+        typeof pendingRawResponse?.confirmationUrl === "string" &&
+        pendingRawResponse.confirmationUrl.trim().length > 0
+          ? pendingRawResponse.confirmationUrl.trim()
+          : null;
+
+      console.log("[BILLING TRACE] pending:reuse-approval", {
+        debugId,
+        shop: session.shop,
+        planHandle,
+        subscriptionGid: pendingSubscriptionGid,
+        hasConfirmationUrl: Boolean(pendingConfirmationUrl),
+      });
+
+      if (pendingConfirmationUrl) {
+        return {
+          success: true,
+          message: `The ${currentSubscription.planLabel} subscription is still awaiting approval. Opening Shopify approval.`,
+          confirmationUrl: pendingConfirmationUrl,
+        };
+      }
+
+      return {
+        success: false,
+        message:
+          `The ${currentSubscription.planLabel} subscription is already awaiting approval, but its Shopify approval URL is unavailable. Do not create another subscription; refresh the billing page and retry.`,
+      };
+    }
+
+    if (requestedPlanIsCurrent && currentSubscriptionStillValid) {
+      return {
+        success: false,
+        message: `The ${currentSubscription.planLabel} subscription is already active for this billing period.`,
+      };
+    }
+
     const hasActiveHigherTier =
       currentEntitlement.active &&
       (currentPlanHandle === "pro" || currentPlanHandle === "custom");
@@ -312,9 +436,26 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
     try {
       const shopHandle = session.shop.replace(/\.myshopify\.com$/i, "");
-      const appIdentifier =
-        process.env.SHOPIFY_APP_HANDLE?.trim() ||
-        process.env.SHOPIFY_API_KEY?.trim();
+      const configuredAppHandle = process.env.SHOPIFY_APP_HANDLE?.trim() || "";
+      const configuredApiKey = process.env.SHOPIFY_API_KEY?.trim() || "";
+      const appIdentifier = configuredAppHandle || configuredApiKey;
+      const appIdentifierSource = configuredAppHandle
+        ? "SHOPIFY_APP_HANDLE"
+        : configuredApiKey
+          ? "SHOPIFY_API_KEY_FALLBACK"
+          : "NONE";
+
+      console.log("[BILLING TRACE] env:billing-config", {
+        debugId,
+        shop: session.shop,
+        billingTestMode,
+        hasShopifyAppHandle: Boolean(configuredAppHandle),
+        hasShopifyApiKey: Boolean(configuredApiKey),
+        appIdentifierSource,
+        hasShopifyAppUrl: Boolean(process.env.SHOPIFY_APP_URL?.trim()),
+        hasShopifyApiSecret: Boolean(process.env.SHOPIFY_API_SECRET?.trim()),
+        nodeEnv: process.env.NODE_ENV ?? null,
+      });
 
       if (!appIdentifier) {
         throw new Error("Shopify app identifier is not configured.");
@@ -396,6 +537,20 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
       const subscriptionData = responseJson.data?.appSubscriptionCreate;
 
+      console.log("[BILLING TRACE] appSubscriptionCreate:response", {
+        debugId,
+        shop: session.shop,
+        httpStatus: response.status,
+        httpOk: response.ok,
+        responseContentType: response.headers.get("content-type"),
+        responseHasErrors: Boolean(responseJson.errors?.length),
+        userErrors: subscriptionData?.userErrors ?? [],
+        subscriptionId: subscriptionData?.appSubscription?.id ?? null,
+        subscriptionStatus: subscriptionData?.appSubscription?.status ?? null,
+        confirmationUrl: subscriptionData?.confirmationUrl ?? null,
+        returnUrl: returnUrl.toString(),
+      });
+
       if (subscriptionData?.userErrors?.length) {
         const errorMsg = subscriptionData.userErrors
           .map((error) => error.message)
@@ -429,6 +584,18 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         },
       });
 
+      console.log("[BILLING TRACE] checkpoint:after-pending-update", {
+        debugId,
+        shop: session.shop,
+        subscriptionId: createdSubscription.id,
+      });
+
+      console.log("[BILLING TRACE] checkpoint:before-reconcile", {
+        debugId,
+        shop: session.shop,
+        subscriptionId: createdSubscription.id,
+      });
+
       await reconcileShopifySubscriptionFromAdmin({
         shop: session.shop,
         admin,
@@ -436,6 +603,47 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         preferredPlanHandle: billingPlan.handle,
         authoritativePlanHandle: billingPlan.handle,
         source: "CALLBACK",
+        confirmationUrl: subscriptionData?.confirmationUrl?.trim() || null,
+      });
+
+      const confirmationUrl = subscriptionData?.confirmationUrl?.trim() || null;
+
+      if (confirmationUrl) {
+        const pendingBillingSubscription =
+          await db.billingSubscription.findUnique({
+            where: {
+              shopifySubscriptionGid: createdSubscription.id,
+            },
+            select: {
+              rawResponse: true,
+            },
+          });
+
+        const rawResponse =
+          pendingBillingSubscription?.rawResponse &&
+          typeof pendingBillingSubscription.rawResponse === "object" &&
+          !Array.isArray(pendingBillingSubscription.rawResponse)
+            ? (pendingBillingSubscription.rawResponse as Record<string, unknown>)
+            : {};
+
+        await db.billingSubscription.update({
+          where: {
+            shopifySubscriptionGid: createdSubscription.id,
+          },
+          data: {
+            rawResponse: {
+              ...rawResponse,
+              confirmationUrl,
+              confirmationUrlStoredAt: new Date().toISOString(),
+            },
+          },
+        });
+      }
+
+      console.log("[BILLING TRACE] checkpoint:after-reconcile", {
+        debugId,
+        shop: session.shop,
+        subscriptionId: createdSubscription.id,
       });
 
       if (replacementBehavior === "APPLY_ON_NEXT_BILLING_CYCLE") {
@@ -449,11 +657,30 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         });
       }
 
-      const confirmationUrl = subscriptionData?.confirmationUrl;
+      console.log("[BILLING TRACE] redirect:before", {
+        debugId,
+        shop: session.shop,
+        subscriptionId: createdSubscription.id,
+        confirmationUrl: confirmationUrl ?? null,
+        returnUrl: returnUrl.toString(),
+        requestMethod: request.method,
+        secFetchMode: request.headers.get("sec-fetch-mode"),
+        secFetchDest: request.headers.get("sec-fetch-dest"),
+        origin: request.headers.get("origin"),
+        referer: request.headers.get("referer"),
+      });
 
       if (confirmationUrl) {
+        console.log("[BILLING TRACE] action:confirmation-url-ready", {
+          debugId,
+          shop: session.shop,
+          subscriptionId: createdSubscription.id,
+          confirmationUrl,
+        });
+
         return {
           success: true,
+          message: "Subscription created. Opening Shopify approval.",
           confirmationUrl,
         };
       }
@@ -463,6 +690,14 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         message: "Failed to create payment link.",
       };
     } catch (error) {
+      console.error("[BILLING TRACE] subscribe:FAILED", {
+        debugId,
+        shop: session.shop,
+        error,
+        message: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined,
+      });
+
       return {
         success: false,
         message: error instanceof Error ? error.message : String(error),
@@ -487,14 +722,45 @@ export default function BillingPage() {
   const data = useLoaderData<typeof loader>();
   const fetcher = useFetcher<typeof action>();
   const subscribeFetcher = useFetcher<typeof action>();
+  const navigation = useNavigation();
+  const [pendingPlanHandle, setPendingPlanHandle] = useState<string | null>(null);
   if (!data) return null;
 
+  const actionData = useActionData<typeof action>();
+
   useEffect(() => {
-    if (subscribeFetcher.data?.confirmationUrl) {
-      console.log(`[BILLING CLIENT REDIRECT] Redirecting top location to confirmationUrl`);
-      window.top!.location.href = subscribeFetcher.data.confirmationUrl;
-    }
+    const confirmationUrl = subscribeFetcher.data?.confirmationUrl;
+
+    if (!confirmationUrl) return;
+
+    console.log("[BILLING TRACE] client:navigate-to-confirmation", {
+      confirmationUrl,
+    });
+
+    window.top!.location.href = confirmationUrl;
   }, [subscribeFetcher.data]);
+
+  useEffect(() => {
+    if (
+      subscribeFetcher.state === "idle" &&
+      subscribeFetcher.data &&
+      "success" in subscribeFetcher.data &&
+      subscribeFetcher.data.success === false
+    ) {
+      setPendingPlanHandle(null);
+    }
+  }, [subscribeFetcher.data, subscribeFetcher.state]);
+
+  useEffect(() => {
+    if (
+      navigation.state === "idle" &&
+      actionData &&
+      "success" in actionData &&
+      actionData.success === false
+    ) {
+      setPendingPlanHandle(null);
+    }
+  }, [actionData, navigation.state]);
 
   useEffect(() => {
     if (window.location.hash !== "#plans") return;
@@ -527,13 +793,6 @@ export default function BillingPage() {
         .map((feature) => [feature.key, { key: feature.key, label: feature.label }]),
     ).values(),
   );
-  const subscribeError =
-    subscribeFetcher.data &&
-    "success" in subscribeFetcher.data &&
-    subscribeFetcher.data.success === false &&
-    "message" in subscribeFetcher.data
-      ? String(subscribeFetcher.data.message)
-      : null;
   return (
     <div
       style={{
@@ -778,24 +1037,6 @@ export default function BillingPage() {
             Available plans, pricing, quotas and trial terms are managed by AI-Buyense. All paid plan changes are confirmed through Shopify.
           </p>
         </div>
-
-        {subscribeError ? (
-          <div
-            role="alert"
-            style={{
-              margin: "0 0 18px",
-              padding: "12px 14px",
-              borderRadius: 10,
-              border: "1px solid #f0a08c",
-              background: "#fff6f3",
-              color: "#9a3412",
-              fontSize: 13,
-              fontWeight: 600,
-            }}
-          >
-            {subscribeError}
-          </div>
-        ) : null}
 
         <div
           style={{
