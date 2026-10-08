@@ -92,7 +92,10 @@ export function classifyPureFamilyLookup(
   // translated the ENTIRE raw phrase to this single canonical target.
   if (plan.unresolvedSegments.length > 0 && sourceAligned.length !== 1) return null;
   if (plan.identities.length > 1) return null;
-  return { canonical: target, broadCategory: BROAD_CATEGORY_IDENTITIES.has(target) };
+  // Clothes/clothing share a canonical taxonomy parent; this is a trusted
+  // identity synonym, not an inferred set of product subtypes.
+  const canonical = target === "clothes" ? "clothing" : target;
+  return { canonical, broadCategory: BROAD_CATEGORY_IDENTITIES.has(target) };
 }
 
 type FamilyTerm = { kind: string; value: string };
