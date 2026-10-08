@@ -3179,9 +3179,10 @@ export async function filterResultsByExplicitGender<
     requestedSizeFamilyIds.has(row.productId) && row.kind === "MEASUREMENT" &&
     /^size\s*[=:]\s*(?:xs|s|m|l|xl|xxl|small|medium|large)\b/i.test(row.value),
   );
-  const parsedMeasurements = parseDeterministicQuery(originalQuery, {
+  const deterministicSource = parseDeterministicQuery(originalQuery, {
     allowBareAlphaSize: hasTypedAlphaSizeInTargetFamily,
-  }).measurements;
+  });
+  const parsedMeasurements = deterministicSource.measurements;
   const numericRequiredSignals = parsedMeasurements.map((item) => item.value);
   const familyCategorySignals =
     currentRetrievalMode === "DIRECT"
@@ -3289,13 +3290,31 @@ export async function filterResultsByExplicitGender<
     ...identitySignals.map((signal) => signal.value),
     ...resolveTypedAliasFamilyHeads(rows, identitySignals.map((signal) => signal.value)),
   ])];
+  // Planning stores matched source spans, NOT the full QueryPlan facet arrays.
+  // Classify a pure lookup by source-backed spans and deterministic constraints;
+  // a typed size/brand/feature cannot silently become a family-only query.
+  const resolvedSourceSegments = rewrite.planning?.resolvedSegments ?? [];
+  const hasNoUnresolvedSourceNeed =
+    (rewrite.planning?.unresolvedSegments.length ?? 0) === 0;
+  const hasOnlyClosedWorldLookupFields = resolvedSourceSegments.length > 0 &&
+    resolvedSourceSegments.every((segment) =>
+      ["PRODUCT_TYPE", "ALIAS", "IDENTIFIER", "MODEL", "BRAND", "MEASUREMENT", "COMPATIBILITY"]
+        .includes(segment.field)
+    ) &&
+    hasNoUnresolvedSourceNeed &&
+    deterministicSource.negatives.length === 0;
   const pureFamilyLookup = currentRetrievalMode === "DIRECT" &&
-    rewrite.planning?.route === "STRUCTURED_ONLY" && identitySignals.length > 0 &&
-    (rewrite.planning.attributes?.length ?? 0) === 0 &&
-    (rewrite.planning.contexts?.length ?? 0) === 0 &&
-    (rewrite.planning.audiences?.length ?? 0) === 0 &&
-    (rewrite.planning.measurements?.length ?? 0) === 0 &&
-    (rewrite.planning.compatibility?.length ?? 0) === 0;
+    rewrite.planning?.route === "STRUCTURED_ONLY" &&
+    identitySignals.length > 0 &&
+    hasOnlyClosedWorldLookupFields &&
+    resolvedSourceSegments.every((segment) =>
+      ["PRODUCT_TYPE", "ALIAS"].includes(segment.field)
+    ) &&
+    parsedMeasurements.length === 0 &&
+    deterministicSource.compatibility.length === 0 &&
+    !deterministicSource.price &&
+    deterministicSource.marketPreference === "ANY" &&
+    deterministicSource.sort.field === "RELEVANCE";
   const scored = results.map((result) => {
     const values = valuesByProduct.get(result.productId) ?? [];
     const tokens = tokensByProduct.get(result.productId) ?? new Set<string>();
@@ -4003,7 +4022,12 @@ export async function filterResultsByExplicitGender<
     results: filtered,
     retrievalMode: currentRetrievalMode,
     semanticThreshold,
-    requiresFullDemand: rewrite.planning?.route !== "STRUCTURED_ONLY",
+    // Preserve genuinely exact SKU/model/typed lookups while requiring full
+    // primary Demand for partial semantic or context/attribute matches.
+    requiresFullDemand: !(
+      rewrite.planning?.route === "STRUCTURED_ONLY" &&
+      hasOnlyClosedWorldLookupFields
+    ),
   });
   filtered.splice(0, filtered.length, ...relevanceFiltered);
 
