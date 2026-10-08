@@ -313,10 +313,15 @@ export async function ensureBillingV2State(shop: string) {
     select: { currentSubscriptionGid: true },
   });
 
-  let subscription = shopPointer?.currentSubscriptionGid
+  // An explicit current pointer is authoritative locally. Never fall back to
+  // another ACTIVE/PAID row while it exists; that could silently resurrect an
+  // older subscription and break the Shopify -> Billing V2 cross-check.
+  let currentSubscriptionGid = shopPointer?.currentSubscriptionGid ?? null;
+
+  let subscription = currentSubscriptionGid
     ? await db.billingSubscription.findUnique({
         where: {
-          shopifySubscriptionGid: shopPointer.currentSubscriptionGid,
+          shopifySubscriptionGid: currentSubscriptionGid,
         },
       })
     : null;
@@ -373,6 +378,7 @@ export async function ensureBillingV2State(shop: string) {
     });
 
     subscription = null;
+    currentSubscriptionGid = null;
   }
 
   // Reinstall recovery is an entitlement decision, not a generic
@@ -401,7 +407,7 @@ export async function ensureBillingV2State(shop: string) {
     (subscription.status === "ACTIVE" ||
       subscription.status === "CANCELLED");
 
-  if (!hasPaidEntitlementEvidence) {
+  if (!hasPaidEntitlementEvidence && !currentSubscriptionGid) {
     subscription = await db.billingSubscription.findFirst({
       where: {
         shop,
@@ -416,15 +422,25 @@ export async function ensureBillingV2State(shop: string) {
   }
 
   // A brand-new shop may legitimately have only a PENDING subscription.
-  // Only use PENDING when there is no current ACTIVE/FROZEN entitlement.
-  if (!subscription) {
+  // Only search for an unpointed PENDING subscription when there is no
+  // explicit current GID. An explicit pointer with a missing local row is a
+  // mismatch that reconciliation must repair, not a reason to select another
+  // subscription.
+  if (!subscription && !currentSubscriptionGid) {
     subscription = await db.billingSubscription.findFirst({
       where: { shop, status: "PENDING" },
       orderBy: { updatedAt: "desc" },
     });
   }
 
-  if (!subscription && legacy) {
+  if (currentSubscriptionGid && !subscription) {
+    console.warn("[BILLING STATE] current pointer has no matching BillingSubscription", {
+      shop,
+      currentSubscriptionGid,
+    });
+  }
+
+  if (!subscription && legacy && !currentSubscriptionGid) {
     subscription = await migrateLegacySubscription(legacy);
   }
 
@@ -437,8 +453,42 @@ export async function ensureBillingV2State(shop: string) {
 export async function getBillingSubscriptionSnapshot(
   shop: string,
 ): Promise<SubscriptionSnapshot> {
-  const state = await ensureBillingV2State(shop);
+  // Callback and webhook reconciliation can advance the current pointer while
+  // another request is reading the snapshot. Re-read once when the pointer and
+  // selected BillingSubscription disagree so a transient mixed read does not
+  // become entitlement/UI state.
+  let state = await ensureBillingV2State(shop);
+  let pointer = await db.aiSearchShop.findUnique({
+    where: { shop },
+    select: { currentSubscriptionGid: true },
+  });
 
+  const selectedGid = state.subscription?.shopifySubscriptionGid ?? null;
+  const pointerGid = pointer?.currentSubscriptionGid ?? null;
+
+  if (selectedGid !== pointerGid) {
+    console.warn("[BILLING STATE] snapshot pointer mismatch; retrying", {
+      shop,
+      pointerGid,
+      selectedGid,
+    });
+
+    state = await ensureBillingV2State(shop);
+    pointer = await db.aiSearchShop.findUnique({
+      where: { shop },
+      select: { currentSubscriptionGid: true },
+    });
+
+    const retriedGid = state.subscription?.shopifySubscriptionGid ?? null;
+    const retriedPointerGid = pointer?.currentSubscriptionGid ?? null;
+
+    console.log("[BILLING STATE] snapshot pointer retry", {
+      shop,
+      pointerGid: retriedPointerGid,
+      selectedGid: retriedGid,
+      consistent: retriedGid === retriedPointerGid,
+    });
+  }
 
   const subscription = state.subscription;
 
@@ -879,20 +929,52 @@ export async function emitBillingBackendContract({
   eventType?: BillingContractEventType | null;
   eventPayload?: unknown;
 }): Promise<BillingBackendContract> {
-  const [shopRow, snapshot] = await Promise.all([
-    db.aiSearchShop.findUnique({
-      where: { shop },
-      select: {
-        status: true,
-        currentPlanHandle: true,
-        currentSubscriptionGid: true,
-        pendingPlanHandle: true,
-        pendingSubscriptionGid: true,
-        pendingChangeAt: true,
-      },
-    }),
-    getBillingSubscriptionSnapshot(shop),
-  ]);
+  // Read the pointer first, then build the Billing V2 snapshot. These reads
+  // are intentionally sequential: Promise.all can observe a new
+  // currentSubscriptionGid together with an older snapshot during callback /
+  // webhook reconciliation and emit a contradictory contract.
+  let shopRow = await db.aiSearchShop.findUnique({
+    where: { shop },
+    select: {
+      status: true,
+      currentPlanHandle: true,
+      currentSubscriptionGid: true,
+      pendingPlanHandle: true,
+      pendingSubscriptionGid: true,
+      pendingChangeAt: true,
+    },
+  });
+
+  let snapshot = await getBillingSubscriptionSnapshot(shop);
+
+  const pointerAfterSnapshot = await db.aiSearchShop.findUnique({
+    where: { shop },
+    select: {
+      status: true,
+      currentPlanHandle: true,
+      currentSubscriptionGid: true,
+      pendingPlanHandle: true,
+      pendingSubscriptionGid: true,
+      pendingChangeAt: true,
+    },
+  });
+
+  if (
+    (pointerAfterSnapshot?.currentSubscriptionGid ?? null) !==
+    (snapshot.shopifySubscriptionId ?? null)
+  ) {
+    console.warn("[BILLING BACKEND CONTRACT] pointer/snapshot race; retrying", {
+      shop,
+      pointerBefore: shopRow?.currentSubscriptionGid ?? null,
+      pointerAfter: pointerAfterSnapshot?.currentSubscriptionGid ?? null,
+      snapshotGid: snapshot.shopifySubscriptionId ?? null,
+    });
+
+    shopRow = pointerAfterSnapshot;
+    snapshot = await getBillingSubscriptionSnapshot(shop);
+  } else {
+    shopRow = pointerAfterSnapshot;
+  }
 
   const currentRow = shopRow?.currentSubscriptionGid
     ? await db.billingSubscription.findUnique({
