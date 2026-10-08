@@ -11,7 +11,10 @@ import {
 } from "../services/billing/shopify-app-pricing.server";
 
 import { getShopEntitlement } from "../services/commerce/entitlement.server";
-import { getSubscriptionSnapshot } from "../services/commerce/shop-registry.server";
+import {
+  ensureShopFromAdmin,
+  getSubscriptionSnapshot,
+} from "../services/commerce/shop-registry.server";
 import { reconcileShopCommercialState } from "../services/commerce/reconciliation.server";
 import { setBillingPlanChangeState } from "../services/commerce/billing-state.server";
 import {
@@ -49,6 +52,13 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   console.log("[BILLING TRACE] loader:start", { debugId, method: request.method, url: request.url, referer: request.headers.get("referer"), remixRequest: request.headers.get("x-remix-request"), secFetchMode: request.headers.get("sec-fetch-mode") });
   const { admin, session } = await authenticate.admin(request);
   console.log("[BILLING DEBUG] loader:authenticated", { debugId, shop: session.shop });
+
+  // A direct visit to Billing after reinstall must use the same authenticated
+  // Shopify reconciliation boundary as the dashboard.
+  await ensureShopFromAdmin({
+    shop: session.shop,
+    admin,
+  });
 
   const billingUrl = new URL(request.url);
   const isBillingCallback =
