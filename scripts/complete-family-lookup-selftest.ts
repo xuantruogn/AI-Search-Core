@@ -28,6 +28,11 @@ const makeRewrite = (canonical: string, source: string, extra: Record<string, st
 assert.deepEqual(classifyPureFamilyLookup(makePlan("bicycle", "bicycle"), makeRewrite("bicycle", "bicycle")),
   { canonical: "bicycle", broadCategory: false });
 
+assert.deepEqual(classifyPureFamilyLookup(
+  makePlan("clothes", "clothes", "DISCOVERY"),
+  makeRewrite("clothes", "clothes"),
+), { canonical: "clothing", broadCategory: true });
+
 const translatedPlan = makePlan("Xe đạp", "bicycle");
 translatedPlan.identities = [];
 translatedPlan.resolvedSegments = [];
