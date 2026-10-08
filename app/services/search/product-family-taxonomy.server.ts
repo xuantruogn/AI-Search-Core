@@ -407,10 +407,15 @@ function forbiddenCategoryBranch(parts: string[]) {
   return parts.some((part) => CATEGORY_DENIAL.test(part));
 }
 
-export function shopifyCategoryLeaf(path: string): FamilyNode | null {
+export function shopifyCategorySafeLeafText(path: string): string | null {
   const segments = shopifyCategoryParts(path);
   if (!segments.length || forbiddenCategoryBranch(segments)) return null;
-  const leaf = segments.at(-1) ?? "";
+  return segments.at(-1) ?? null;
+}
+
+export function shopifyCategoryLeaf(path: string): FamilyNode | null {
+  const leaf = shopifyCategorySafeLeafText(path);
+  if (!leaf) return null;
   const aggregateMembers = CATEGORY_LEAF_MEMBERS[leaf];
   // An aggregate typed category ("Shoes", "Jewelry", "Shirts & Tops") is
   // not one concrete sold-item leaf unless Shopify's category maps to exactly
