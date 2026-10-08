@@ -293,39 +293,39 @@ const QUERY_FAMILIES: Record<string, FamilyGroup> = {
  * A category leaf can use a plural/aggregate Shopify name such as
  * "Shirts & Tops". These are typed category labels, not free-text synonyms.
  */
-const CATEGORY_LEAF_GROUPS: Record<string, FamilyGroup> = {
-  "shirts tops": "tops",
-  "pants": "pants",
-  "shorts": "shorts",
-  "shoes": "footwear",
-  "handbags wallets cases": "fashion_accessories",
-  "jewelry": "jewelry",
-  "watches": "watches",
-  "bicycles": "bicycles",
-  "motorcycles scooters": "motorcycles",
-  "mobile phones": "phones",
-  "tablet computers": "tablets",
-  "laptop computers": "laptops",
-  "desktop computers": "computers",
-  "computer monitors": "computer_accessories",
-  "headphones": "headphones",
-  "cameras": "cameras",
-  "televisions": "televisions",
-  "chairs": "seating",
-  "sofas": "seating",
-  "tables": "tables",
-  "beds": "furniture",
-  "cabinets storage": "furniture",
-  "lamps": "lighting",
-  "rugs": "floor_coverings",
-  "makeup": "makeup",
-  "skin care": "skincare",
-  "hair care": "haircare",
-  "fragrances": "fragrance",
-  "tea": "tea",
-  "coffee": "coffee",
-  "snowboards": "snowboards",
-  "skateboards": "skateboards",
+const CATEGORY_LEAF_MEMBERS: Record<string, readonly FamilyNode[]> = {
+  "shirts tops": ["shirt", "top"],
+  "pants": ["pants"],
+  "shorts": ["shorts"],
+  "shoes": ["shoe", "sneaker", "boot", "sandal", "slipper"],
+  "handbags wallets cases": ["handbag", "wallet", "phone_case"],
+  "jewelry": ["ring", "necklace", "bracelet", "earring", "pendant"],
+  "watches": ["watch"],
+  "bicycles": ["bicycle"],
+  "motorcycles scooters": ["motorcycle", "scooter"],
+  "mobile phones": ["phone"],
+  "tablet computers": ["tablet"],
+  "laptop computers": ["laptop"],
+  "desktop computers": ["desktop"],
+  "computer monitors": ["monitor"],
+  "headphones": ["headphone"],
+  "cameras": ["camera"],
+  "televisions": ["television"],
+  "chairs": ["chair"],
+  "sofas": ["sofa"],
+  "tables": ["table"],
+  "beds": ["bed"],
+  "cabinets storage": ["cabinet", "shelf"],
+  "lamps": ["lamp"],
+  "rugs": ["rug"],
+  "makeup": ["makeup"],
+  "skin care": ["skincare", "cleanser"],
+  "hair care": ["shampoo", "conditioner"],
+  "fragrances": ["fragrance"],
+  "tea": ["tea"],
+  "coffee": ["coffee"],
+  "snowboards": ["snowboard"],
+  "skateboards": ["skateboard"],
 };
 
 /** Only these modifiers make an otherwise valid sold-item head non-literal. */
@@ -389,10 +389,10 @@ function categoryProvesGroup(path: string, group: FamilyGroup) {
   const segments = shopifyCategoryParts(path);
   if (!segments.length || forbiddenCategoryBranch(segments)) return false;
   const leaf = segments.at(-1) ?? "";
-  const aggregate = CATEGORY_LEAF_GROUPS[leaf];
-  if (aggregate) {
-    const aggregateMembers = new Set(GROUP_MEMBERS[aggregate]);
-    return GROUP_MEMBERS[group].some((node) => aggregateMembers.has(node));
+  const aggregateMembers = CATEGORY_LEAF_MEMBERS[leaf];
+  if (aggregateMembers) {
+    const typedMembers = new Set<FamilyNode>(aggregateMembers);
+    return GROUP_MEMBERS[group].some((node) => typedMembers.has(node));
   }
   // Broad catalog roots may prove only broad shopper groups and only when the
   // product is below that root. Never use an ancestor Vehicles/Clothing to
@@ -462,6 +462,15 @@ export function classifyFamilyProduct(
   }
 
   for (const path of evidence.shopifyCategoryPaths) {
+    // Aggregate typed leaves (e.g. "Shirts & Tops") are checked before the
+    // suffix parser so a Shirt query is admitted but Jacket is not.
+    if (categoryProvesGroup(path, group)) {
+      return {
+        match: true,
+        node: knownTypeNodes.find((node) => accepted.has(node)) ?? null,
+        reason: "SHOPIFY_CATEGORY",
+      };
+    }
     const leaf = shopifyCategoryLeaf(path);
     if (leaf) {
       if (knownTypeNodes.length > 0 &&
@@ -471,13 +480,6 @@ export function classifyFamilyProduct(
       return accepted.has(leaf)
         ? { match: true, node: leaf, reason: "SHOPIFY_CATEGORY" }
         : { match: false, reason: "CONTRADICTION" };
-    }
-    if (categoryProvesGroup(path, group)) {
-      return {
-        match: true,
-        node: knownTypeNodes.find((node) => accepted.has(node)) ?? null,
-        reason: "SHOPIFY_CATEGORY",
-      };
     }
   }
 
