@@ -129,11 +129,10 @@ export function normalizeRankedProducts(products: CachedRankedProduct[]) {
         Number.isFinite(product.primaryVectorSimilarity)
           ? product.primaryVectorSimilarity
           : undefined,
-      matchedVariantId:
-        typeof product.matchedVariantId === "string" &&
+      ...(typeof product.matchedVariantId === "string" &&
         /^gid:\/\/shopify\/ProductVariant\/\d+$/.test(product.matchedVariantId)
-          ? product.matchedVariantId
-          : undefined,
+        ? { matchedVariantId: product.matchedVariantId }
+        : {}),
     });
   }
   return result;
