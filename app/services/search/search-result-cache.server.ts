@@ -106,7 +106,7 @@ function createReceiptId() {
   return `srch_${randomBytes(18).toString("base64url")}`;
 }
 
-function normalizeRankedProducts(products: CachedRankedProduct[]) {
+export function normalizeRankedProducts(products: CachedRankedProduct[]) {
   const seen = new Set<string>();
   const result: CachedRankedProduct[] = [];
   for (const product of products) {
@@ -374,7 +374,7 @@ export async function saveSearchQueryCache(args: {
   };
 }
 
-function parseProducts(value: string): CachedRankedProduct[] | null {
+export function parseProducts(value: string): CachedRankedProduct[] | null {
   try {
     const parsed = JSON.parse(value) as unknown;
     if (!Array.isArray(parsed)) return null;
