@@ -207,7 +207,7 @@ async function loadShopSearchDictionaryUncached(
   // between the dictionary and Shop Context modules.
   const { getShopContextCatalogTerms } = await import("./shop-context-index.server");
   const catalogSnapshot = await getShopContextCatalogTerms(shop);
-  const addDictionaryValue = (row: typeof catalogSnapshot.terms[number], field: DictionaryField, canonical: string) => {
+  const addDictionaryValue = (row: (typeof catalogSnapshot.terms)[number], field: DictionaryField, canonical: string) => {
     const normalized = normalizeQueryText(canonical);
     if (!normalized) return;
     const canonicalNormalized = normalizeQueryText(canonical);
