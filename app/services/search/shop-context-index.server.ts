@@ -2403,7 +2403,7 @@ function sourceSemanticTermForCanonical(
 
 function objectiveFacetAssignmentValue(value: string) {
   const match = value.match(
-    /^\s*(?:color|colour|material|fabric|finish|pattern)\s*=\s*(.+?)\s*$/i,
+    /^\s*(?:color|colour|material|fabric|finish|pattern)\s*[=:]\s*(.+?)\s*$/i,
   );
   return match?.[1] ? normalizeContextTerm(match[1]) : null;
 }
