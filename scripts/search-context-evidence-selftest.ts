@@ -80,6 +80,24 @@ assert.ok(selectedValues.has("headlamp"), "plural expansion still recalls canoni
 assert.ok(selectedValues.has("color navy"), "explicit facet with token match remains");
 assert.ok(!selectedValues.has("unrelated supplier"), "unrelated catalog terms are no longer scored");
 assert.deepEqual([...contextIndex.typedColorVocabulary], ["navy"]);
+assert.equal(sourceContextCatalogValueMatch("ATTRIBUTE", "Color: S", "s"), true);
+assert.equal(sourceContextCatalogValueMatch("ATTRIBUTE", "Color: M", "s"), false,
+  "empty meaningful token arrays must not create false typed-facet matches");
+const largeVocabulary = [
+  ...contextFixture,
+  ...Array.from({ length: 2000 }, (_, index) => ({
+    kind: "PRODUCT_TITLE", value: `unrelated product ${index}`,
+    normalizedValue: `unrelated product ${index}`,
+    tokens: ["unrelated", "product", String(index)],
+    productCount: 1, productIds: new Set([`z${index}`]),
+  })),
+];
+const largeIndex = buildShopContextLookupIndex(largeVocabulary as any);
+const sparseContextHits = selectContextScoreCandidates(
+  largeIndex, ["wet weather commuting"], [], [],
+);
+assert.ok(sparseContextHits.length < 20,
+  "each query must score indexed relevant terms rather than the entire vocabulary");
 
 console.log("PASS: typed identity provenance and explicit negative facet morphology");
 
