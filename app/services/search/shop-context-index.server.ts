@@ -114,6 +114,7 @@ type ShopContextLookupIndex = {
 };
 
 type LoadedShopContext = {
+  catalogRevision: string;
   terms: ContextTerm[];
   index: ShopContextLookupIndex;
   cacheStatus: "HIT" | "MISS";
@@ -840,6 +841,7 @@ async function loadShopContextUncached(
   ) {
     touchContextCache(shop, cached);
     return {
+      catalogRevision,
       terms: cached.terms,
       index: cached.index,
       cacheStatus: "HIT" as const,
@@ -895,6 +897,7 @@ async function loadShopContextUncached(
     enforceContextCacheBudget();
   }
   return {
+    catalogRevision,
     terms,
     index,
     cacheStatus: "MISS" as const,
@@ -918,6 +921,7 @@ async function loadShopContext(shop: string): Promise<LoadedShopContext> {
   ) {
     touchContextCache(normalizedShop, cached);
     return {
+      catalogRevision,
       terms: cached.terms,
       index: cached.index,
       cacheStatus: "HIT",
@@ -949,8 +953,9 @@ async function loadShopContext(shop: string): Promise<LoadedShopContext> {
 /** A single revision-keyed catalog aggregation is shared with the query
  * dictionary. Both consumers reuse term postings without a second JSON scan.
  * The dictionary should never mutate these source-owned term sets. */
-export async function getShopContextCatalogTerms(shop: string): Promise<ContextTerm[]> {
-  return (await loadShopContext(shop)).terms;
+export async function getShopContextCatalogTerms(shop: string) {
+  const loaded = await loadShopContext(shop);
+  return { terms: loaded.terms, catalogRevision: loaded.catalogRevision };
 }
 
 export async function warmShopContext(shop: string) {
