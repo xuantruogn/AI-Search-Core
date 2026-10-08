@@ -123,6 +123,92 @@ export function shopifyCategoryIsClothing(path: string) {
     segments.length >= 2;
 }
 
+
+/**
+ * Generic taxonomy matching for every Shopify category family.
+ *
+ * A query family is canonicalized separately (dictionary/LLM/source bridge).
+ * Membership then comes from the product's typed Shopify category path or
+ * exact sold-item type. Dense/BM25 text is never used as membership proof.
+ */
+function singularFamilyToken(token: string) {
+  if (token.length > 4 && token.endsWith("ies")) return token.slice(0, -3) + "y";
+  if (token.length > 5 && token.endsWith("sses")) return token.slice(0, -2);
+  if (token.length > 3 && token.endsWith("s") &&
+      !token.endsWith("ss") && !token.endsWith("us") && !token.endsWith("is")) {
+    return token.slice(0, -1);
+  }
+  return token;
+}
+function normalizeFamilyPhrase(value: string) {
+  return normalizeQueryText(value)
+    .split(" ")
+    .filter(Boolean)
+    .map(singularFamilyToken)
+    .join(" ");
+}
+function genericFamilyPhraseMatches(actual: string, requested: string) {
+  const source = normalizeFamilyPhrase(actual);
+  const target = normalizeFamilyPhrase(requested);
+  if (!source || !target) return false;
+  return source === target || source.endsWith(" " + target);
+}
+
+/**
+ * Returns true when a trustworthy Shopify taxonomy path proves that a product
+ * is inside a requested family. The full path is inspected so broad parents
+ * (Jewelry, Shoes, Furniture, Computers...) automatically include descendants.
+ */
+export function shopifyCategoryMatchesFamily(path: string, requested: string) {
+  const parts = shopifyCategoryParts(path);
+  if (!parts.length || forbiddenCategoryBranch(parts)) return false;
+  const target = normalizeFamilyPhrase(requested);
+  if (!target) return false;
+  return parts.some((part) => genericFamilyPhraseMatches(part, target));
+}
+
+/**
+ * Generic exact/subtype membership for families not present in the small
+ * language-ambiguity bridge. This is what makes pure-family retrieval work for
+ * the rest of the catalog without a hand-authored list per product class.
+ */
+export function classifyGenericFamilyProduct(
+  evidence: FamilyProductEvidence,
+  requested: string,
+): FamilyEvidenceResult | { match: true; reason: "SHOPIFY_CATEGORY" | "CANONICAL" | "MERCHANT_TYPE"; node: "generic" } {
+  const target = normalizeFamilyPhrase(requested);
+  if (!target) return { match: false, reason: "UNCLASSIFIED" };
+
+  const authoritativeNames = evidence.canonicalTypes.length
+    ? evidence.canonicalTypes : evidence.merchantTypes;
+  if (authoritativeNames.some((value) =>
+    ACCESSORY_OR_TOY.test(normalizeQueryText(value))
+  )) {
+    // Do not reject if the shopper explicitly asked for that accessory class.
+    const requestedAccessory = ACCESSORY_OR_TOY.test(normalizeQueryText(requested));
+    if (!requestedAccessory) return { match: false, reason: "CONTRADICTION" };
+  }
+
+  for (const path of evidence.shopifyCategoryPaths) {
+    if (shopifyCategoryMatchesFamily(path, target)) {
+      return { match: true, reason: "SHOPIFY_CATEGORY", node: "generic" };
+    }
+  }
+
+  const types = evidence.canonicalTypes.length
+    ? evidence.canonicalTypes : evidence.merchantTypes;
+  for (const type of types) {
+    if (genericFamilyPhraseMatches(type, target)) {
+      return {
+        match: true,
+        reason: evidence.canonicalTypes.length ? "CANONICAL" : "MERCHANT_TYPE",
+        node: "generic",
+      };
+    }
+  }
+  return { match: false, reason: "UNCLASSIFIED" };
+}
+
 export type FamilyProductEvidence = {
   canonicalTypes: string[];
   merchantTypes: string[];
