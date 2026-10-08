@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { classifyPureFamilyLookup, classifyVerifiedFamilyMember } from "../app/services/search/pure-family-lookup.server";
+import { classifyPureFamilyLookup, classifyVerifiedFamilyMember, retrieveCompleteFamilyCandidates } from "../app/services/search/pure-family-lookup.server";
 import { typedProductFamilyMatches } from "../app/services/search/structured-candidate-retrieval.server";
 
 const makePlan = (query: string, canonical: string, mode: "DIRECT"|"DISCOVERY" = "DIRECT") => ({
@@ -65,6 +65,10 @@ assert.equal(classifyVerifiedFamilyMember([
   { kind: "ALIAS", value: "Bicycle" },
 ], bicycle), null);
 assert.equal(classifyVerifiedFamilyMember([{ kind: "ALIAS", value: "Bicycle" }], bicycle), null);
+assert.equal(classifyVerifiedFamilyMember([
+  { kind: "CANONICAL_PRODUCT_TYPE", value: "Helmet" },
+  { kind: "PRODUCT_TYPE", value: "Bicycle" },
+], bicycle), null);
 
 const broad = { canonical: "clothing", broadCategory: true };
 assert.equal(classifyVerifiedFamilyMember([
@@ -86,4 +90,32 @@ const full = fixtures.filter((item) => classifyVerifiedFamilyMember(item.terms, 
 assert.equal(full.length, 825);
 assert.equal(full.slice(0, 500).length, 500);
 assert.equal(full.at(-1)?.productId, "824");
-console.log("PASS: family-only vs semantic queries, subtype/accessory integrity, translated identity and >500 coverage");
+
+const complete = await retrieveCompleteFamilyCandidates({
+  shop: "test-shop",
+  plan: makePlan("bicycle", "bicycle"),
+  rewrite: makeRewrite("bicycle", "bicycle"),
+}, {
+  scanProfiles: async (_shop, visit) => {
+    for (const entry of fixtures) {
+      await visit({ ...entry, updatedAt: new Date() });
+    }
+    await visit({
+      productId: "helmet", updatedAt: new Date(),
+      terms: [{ kind: "CANONICAL_PRODUCT_TYPE", value: "Bicycle Helmet" }],
+    });
+    return fixtures.length + 1;
+  },
+  findRegistry: async (_shop, ids) =>
+    ids.map((productId) => ({
+      productId,
+      handle: `bike-${productId}`,
+      title: `Bicycle ${productId}`,
+    })),
+});
+assert.ok(complete);
+assert.equal(complete.searchableProducts, 825);
+assert.equal(complete.matchedProfiles, 825);
+assert.equal(complete.scannedProfiles, 826);
+assert.equal(new Set(complete.results.map((x) => x.productId)).size, 825);
+console.log("PASS: complete family source stream and registry batches >500, no accessory leakage");
