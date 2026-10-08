@@ -11,7 +11,6 @@ import { getThemeIntegrationStatus } from "../services/theme/theme-integration.s
 import {
   ensureShopFromAdmin,
   getShopSettings,
-  getSubscriptionSnapshot,
 } from "../services/commerce/shop-registry.server";
 import {
   refreshShopifyAppPricingSubscription,
