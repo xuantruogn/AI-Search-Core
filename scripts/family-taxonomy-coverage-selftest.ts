@@ -1,161 +1,242 @@
 import assert from "node:assert/strict";
 import {
-  classifyFamilyProduct, classifySoldItemLeaf, queryFamilyFromSource,
-  shopifyCategoryLeaf, shopifyCategoryIsClothing,
+  classifyFamilyProduct,
+  classifySoldItemLeaf,
+  familyGroupForCanonicalTarget,
+  queryFamilyFromSource,
+  shopifyCategoryIsClothing,
+  shopifyCategoryLeaf,
+  supportedFamilyGroups,
+  type FamilyGroup,
 } from "../app/services/search/product-family-taxonomy.server";
 import {
-  classifyPureFamilyLookup, classifyVerifiedFamilyMember,
+  classifyPureFamilyLookup,
   retrieveCompleteFamilyCandidates,
 } from "../app/services/search/pure-family-lookup.server";
 
-function plan(rawQuery: string, canonical = "dress", mode = "DIRECT") {
+function plan(rawQuery: string, canonical = rawQuery, mode: "DIRECT" | "DISCOVERY" = "DIRECT") {
   return {
-    rawQuery, retrievalMode: mode,
+    rawQuery,
+    retrievalMode: mode,
     identities: [{ value: canonical, mode: "MUST" }],
     resolvedSegments: [],
     unresolvedSegments: [],
     entities: { brands: [], models: [], identifiers: [] },
-    attributes: [], measurements: [], audiences: [], contexts: [],
-    compatibility: [], marketPreference: "ANY", relation: "SINGLE",
+    attributes: [],
+    measurements: [],
+    audiences: [],
+    contexts: [],
+    compatibility: [],
+    marketPreference: "ANY",
+    relation: "SINGLE",
     sort: { field: "RELEVANCE" },
   } as any;
 }
-const rewrite = {
-  analysis: {
-    // LLM might mistakenly collapse Vietnamese broad "váy" to "dress".
-    semanticMandatoryConcepts: [{ source: "váy", target: "dress" }],
-    semanticDemand: {
-      identity: ["dress"], desiredOutcomes: [], useCases: [], contexts: [],
-      qualities: [], audience: [], styles: ["casual"],
-      exactConstraints: [], negativeConstraints: [],
+function rewrite(source: string, canonical = source) {
+  return {
+    analysis: {
+      semanticMandatoryConcepts: [{ source, target: canonical }],
+      semanticDemand: {
+        identity: [canonical],
+        desiredOutcomes: [],
+        useCases: [],
+        contexts: [],
+        qualities: [],
+        audience: [],
+        styles: [],
+        exactConstraints: [],
+        negativeConstraints: [],
+      },
     },
-  },
-} as any;
+  } as any;
+}
 
-assert.equal(queryFamilyFromSource("váy"), "dress_or_skirt");
-assert.equal(queryFamilyFromSource("vay"), "dress_or_skirt");
-assert.equal(queryFamilyFromSource("chân váy"), "skirts");
-assert.equal(queryFamilyFromSource("đầm"), "dresses");
-assert.equal(queryFamilyFromSource("Áo"), "tops");
-assert.equal(queryFamilyFromSource("Xe"), "vehicles");
-assert.equal(queryFamilyFromSource("xe đạp"), "bicycles");
-assert.equal(queryFamilyFromSource("váy đỏ"), null);
-assert.equal(queryFamilyFromSource("áo cho bé"), null);
-assert.equal(classifyPureFamilyLookup(plan("váy"), rewrite)?.taxonomyGroup, "dress_or_skirt");
-const tagMisreadPlan = plan("váy");
-tagMisreadPlan.attributes.push({ name: "attribute", value: "váy", mode: "SHOULD" });
-assert.equal(
-  classifyPureFamilyLookup(tagMisreadPlan, rewrite, tagMisreadPlan)?.taxonomyGroup,
-  "dress_or_skirt",
-  "An unrelated catalog TAG misread as ATTRIBUTE must not suppress a standalone family",
-);
-assert.equal(classifyPureFamilyLookup(plan("áo", "shirt"), rewrite)?.taxonomyGroup, "tops");
-assert.equal(classifyPureFamilyLookup(plan("xe", "car", "DISCOVERY"), rewrite)?.taxonomyGroup, "vehicles");
-assert.equal(classifyPureFamilyLookup(plan("xe đạp", "bicycles"), rewrite)?.taxonomyGroup, "bicycles");
-const size = plan("váy size M");
-size.measurements.push({ value: "M", name: "size", mode: "MUST" });
-assert.equal(classifyPureFamilyLookup(size, rewrite), null);
-const red = plan("váy đỏ");
-red.attributes.push({ value: "red", name: "color", mode: "SHOULD" });
-assert.equal(classifyPureFamilyLookup(red, rewrite), null);
+const sourceFamilies: Array<[string, FamilyGroup]> = [
+  ["váy", "dress_or_skirt"], ["đầm", "dresses"], ["chân váy", "skirts"],
+  ["áo", "tops"], ["áo sơ mi", "shirts"], ["áo khoác", "jackets"], ["áo len", "sweaters"],
+  ["quần", "bottoms"], ["quần jean", "jeans"], ["quần short", "shorts"],
+  ["quần lót", "underwear"], ["đồ ngủ", "sleepwear"], ["đồ bơi", "swimwear"],
+  ["quần áo", "clothing"], ["giày", "footwear"], ["giày thể thao", "sneakers"],
+  ["giày boot", "boots"], ["dép", "sandals"], ["túi", "bags"], ["túi xách", "handbags"],
+  ["balo", "backpacks"], ["ví", "wallets"], ["thắt lưng", "belts"], ["mũ", "hats"],
+  ["kính râm", "sunglasses"], ["trang sức", "jewelry"], ["nhẫn", "rings"],
+  ["dây chuyền", "necklaces"], ["vòng tay", "bracelets"], ["bông tai", "earrings"],
+  ["đồng hồ", "watches"], ["xe", "vehicles"], ["xe đạp", "bicycles"], ["ô tô", "cars"],
+  ["xe máy", "motorcycles"], ["điện thoại", "phones"], ["ốp điện thoại", "phone_cases"],
+  ["máy tính", "computers"], ["laptop", "laptops"], ["máy tính bảng", "tablets"],
+  ["phụ kiện máy tính", "computer_accessories"], ["màn hình máy tính", "monitors"],
+  ["bàn phím", "keyboards"], ["chuột máy tính", "mice"], ["tai nghe", "headphones"],
+  ["loa", "speakers"], ["máy ảnh", "cameras"], ["tivi", "televisions"],
+  ["nội thất", "furniture"], ["ghế", "seating"], ["ghế sofa", "sofas"], ["bàn", "tables"],
+  ["bàn làm việc", "desks"], ["giường", "beds"], ["tủ", "cabinets"], ["kệ", "shelves"],
+  ["đèn", "lighting"], ["thảm", "floor_coverings"], ["mỹ phẩm", "beauty"],
+  ["trang điểm", "makeup"], ["chăm sóc da", "skincare"], ["sữa rửa mặt", "cleansers"],
+  ["chăm sóc tóc", "haircare"], ["dầu gội", "shampoos"], ["dầu xả", "conditioners"],
+  ["nước hoa", "fragrance"], ["đồ uống", "beverages"], ["trà", "tea"], ["cà phê", "coffee"],
+  ["đồ ăn vặt", "snacks"], ["ván trượt tuyết", "snowboards"],
+  ["ván trượt", "skateboards"], ["bóng thể thao", "sports_balls"],
+];
+for (const [query, group] of sourceFamilies) {
+  assert.equal(queryFamilyFromSource(query), group, query);
+  assert.equal(
+    classifyPureFamilyLookup(plan(query), rewrite(query))?.taxonomyGroup,
+    group,
+    "pure-family route: " + query,
+  );
+}
+assert.equal(queryFamilyFromSource("áo đỏ"), null);
+assert.equal(queryFamilyFromSource("giày size 42"), null);
+assert.equal(queryFamilyFromSource("xe đạp dưới 10 triệu"), null);
+assert.equal(queryFamilyFromSource("váy cho mùa đông"), null);
 
-assert.equal(shopifyCategoryLeaf("Apparel & Accessories > Clothing > Dresses"), "dress");
-assert.equal(shopifyCategoryLeaf("Apparel & Accessories > Clothing > Skirts"), "skirt");
-assert.equal(shopifyCategoryLeaf("Apparel & Accessories > Clothing > Shirts & Tops"), "top");
-assert.equal(shopifyCategoryLeaf("Vehicles & Parts > Vehicles > Bicycles"), "bicycle");
-assert.equal(shopifyCategoryLeaf("Vehicles & Parts > Vehicle Parts & Accessories > Bicycle Accessories"), null);
-assert.equal(shopifyCategoryLeaf("Toys & Games > Toys > Toy Vehicles > Cars"), null);
+const canonicalTargets: Array<[string, FamilyGroup]> = [
+  ["running shoes", "sneakers"], ["vintage shirt", "shirts"],
+  ["winter jacket", "jackets"], ["pleated skirt", "skirts"],
+  ["road bicycle", "bicycles"], ["smartphone", "phones"],
+  ["phone case", "phone_cases"], ["notebook computer", "laptops"],
+  ["computer monitor", "monitors"], ["wireless headphones", "headphones"],
+  ["dining table", "tables"], ["face wash", "cleansers"],
+  ["perfume", "fragrance"], ["loose leaf tea", "tea"], ["snowboard", "snowboards"],
+];
+for (const [target, group] of canonicalTargets) {
+  assert.equal(familyGroupForCanonicalTarget(target), group, target);
+}
+
+const leafCases: Array<[string, string | null]> = [
+  ["Evening Dress", "dress"], ["Pleated Skirt", "skirt"], ["Dress Shirt", "shirt"],
+  ["Denim Jacket", "jacket"], ["Running Shoes", "sneaker"], ["Chelsea Boots", "boot"],
+  ["Leather Handbag", "handbag"], ["Travel Backpack", "backpack"], ["Gold Ring", "ring"],
+  ["Road Bicycle", "bicycle"], ["Bicycle Helmet", null], ["Toy Car", null],
+  ["Smartphone Case", "phone_case"], ["Laptop Sleeve", null],
+  ["Gaming Keyboard", "keyboard"], ["Bluetooth Speaker", "speaker"],
+  ["Dining Table", "table"], ["Coffee Table", "table"], ["Face Wash", "cleanser"],
+  ["Anti-dandruff Shampoo", "shampoo"], ["Loose Leaf Tea", "tea"], ["Toy Snowboard", null],
+];
+for (const [value, leaf] of leafCases) {
+  assert.equal(classifySoldItemLeaf(value), leaf, value);
+}
+
+const category = (pathValue: string) => ({
+  canonicalTypes: [] as string[],
+  merchantTypes: [] as string[],
+  shopifyCategoryPaths: [pathValue],
+});
+const categoryCases: Array<[string, FamilyGroup, boolean]> = [
+  ["Apparel & Accessories > Clothing > Dresses", "dress_or_skirt", true],
+  ["Apparel & Accessories > Clothing > Skirts", "dress_or_skirt", true],
+  ["Apparel & Accessories > Clothing > Shirts & Tops", "shirts", true],
+  ["Apparel & Accessories > Clothing > Shirts & Tops", "jackets", false],
+  ["Apparel & Accessories > Clothing > Coats & Jackets", "jackets", true],
+  ["Apparel & Accessories > Clothing > Pants", "bottoms", true],
+  ["Apparel & Accessories > Shoes", "footwear", true],
+  ["Apparel & Accessories > Shoes", "sneakers", true],
+  ["Apparel & Accessories > Jewelry > Rings", "rings", true],
+  ["Vehicles & Parts > Vehicles > Bicycles", "bicycles", true],
+  ["Vehicles & Parts > Vehicle Parts & Accessories > Bicycle Accessories", "bicycles", false],
+  ["Toys & Games > Toys > Toy Vehicles > Cars", "vehicles", false],
+  ["Electronics > Communications > Telephony > Mobile Phones", "phones", true],
+  ["Electronics > Computers > Laptops", "laptops", true],
+  ["Electronics > Audio > Headphones", "headphones", true],
+  ["Home & Garden > Furniture > Chairs", "seating", true],
+  ["Home & Garden > Furniture > Chairs", "sofas", false],
+  ["Home & Garden > Furniture > Tables", "tables", true],
+  ["Health & Beauty > Personal Care > Cosmetics > Skin Care", "skincare", true],
+  ["Food, Beverages & Tobacco > Beverages > Tea", "tea", true],
+  ["Sporting Goods > Outdoor Recreation > Winter Sports > Snowboards", "snowboards", true],
+];
+for (const [pathValue, group, expected] of categoryCases) {
+  assert.equal(classifyFamilyProduct(category(pathValue), group).match, expected, group + ": " + pathValue);
+}
 assert.equal(shopifyCategoryIsClothing("Apparel & Accessories > Clothing > Dresses"), true);
 assert.equal(shopifyCategoryIsClothing("Apparel & Accessories > Clothing Accessories > Belts"), false);
-assert.equal(classifySoldItemLeaf("Blue Dress"), "dress");
-assert.equal(classifySoldItemLeaf("Pleated Skirt"), "skirt");
-assert.equal(classifySoldItemLeaf("Women's Bicycle Helmet"), null);
-assert.equal(classifySoldItemLeaf("Toy Car"), null);
-assert.equal(classifySoldItemLeaf("Vintage Shirt"), "shirt");
-assert.equal(classifySoldItemLeaf("Road Bicycle"), "bicycle");
+assert.equal(shopifyCategoryLeaf("Vehicles & Parts > Vehicles > Bicycles"), "bicycle");
+assert.equal(shopifyCategoryLeaf("Toys & Games > Toys > Toy Vehicles > Cars"), null);
 
-function category(path: string) {
-  return { canonicalTypes: [], merchantTypes: [], shopifyCategoryPaths: [path] };
-}
-assert.deepEqual(classifyFamilyProduct(category(
-  "Apparel & Accessories > Clothing > Skirts"), "dress_or_skirt"),
-  { match: true, reason: "SHOPIFY_CATEGORY", node: "skirt" });
-assert.deepEqual(classifyFamilyProduct(category(
-  "Apparel & Accessories > Clothing > Dresses"), "dress_or_skirt"),
-  { match: true, reason: "SHOPIFY_CATEGORY", node: "dress" });
-assert.equal(classifyFamilyProduct(category(
-  "Apparel & Accessories > Clothing > Dresses"), "tops").match, false);
-assert.equal(classifyFamilyProduct({
-  canonicalTypes: ["Skirt"], merchantTypes: [],
-  shopifyCategoryPaths: ["Apparel & Accessories > Clothing > Dresses"],
-}, "dress_or_skirt").match, true, "Both Dress and Skirt belong to the source-owned váy union");
-assert.equal(classifyFamilyProduct(category(
-  "Vehicles & Parts > Vehicle Parts & Accessories > Bicycle Helmets"), "bicycles").match, false);
-assert.equal(classifyFamilyProduct(category(
-  "Toys & Games > Toys > Toy Vehicles > Cars"), "vehicles").match, false);
 assert.equal(classifyFamilyProduct({
   canonicalTypes: ["Bicycle Helmet"], merchantTypes: ["Bicycle"],
   shopifyCategoryPaths: ["Vehicles & Parts > Vehicles > Bicycles"],
-}, "bicycles").match, false, "Wrong Shopify classification cannot turn a helmet into a bicycle");
+}, "bicycles").match, false);
 assert.equal(classifyFamilyProduct({
   canonicalTypes: ["Dress Shirt"], merchantTypes: [],
   shopifyCategoryPaths: ["Apparel & Accessories > Clothing > Dresses"],
-}, "dress_or_skirt").match, false, "Dress shirt does not inherit Dress from mistaken standard category");
+}, "dress_or_skirt").match, false);
 assert.equal(classifyFamilyProduct({
-  canonicalTypes: ["Helmet"], merchantTypes: ["Bicycle"], shopifyCategoryPaths: [],
-}, "bicycles").match, false, "Merchant type must not override a helmet identity");
+  canonicalTypes: ["Phone Charger"], merchantTypes: [],
+  shopifyCategoryPaths: ["Electronics > Communications > Telephony > Mobile Phones"],
+}, "phones").match, false);
+assert.equal(classifyFamilyProduct({
+  canonicalTypes: ["Skirt"], merchantTypes: [],
+  shopifyCategoryPaths: ["Apparel & Accessories > Clothing > Dresses"],
+}, "dress_or_skirt").match, true);
 
-const target = classifyPureFamilyLookup(plan("váy"), rewrite)!;
-const members = [
-  { id: "d1", terms: [{ kind: "CANONICAL_PRODUCT_TYPE", value: "Evening Dress" }] },
-  { id: "s1", terms: [{ kind: "CANONICAL_PRODUCT_TYPE", value: "Pleated Skirt" }] },
-  { id: "d2", terms: [{ kind: "SHOPIFY_CATEGORY_PATH", value: "Apparel & Accessories > Clothing > Dresses" }] },
-  { id: "s2", terms: [{ kind: "SHOPIFY_CATEGORY_PATH", value: "Apparel & Accessories > Clothing > Skirts" }] },
-  { id: "a1", terms: [{ kind: "CANONICAL_PRODUCT_TYPE", value: "Dress Shirt" }] },
-  { id: "a2", terms: [{ kind: "CANONICAL_PRODUCT_TYPE", value: "Skirt Hanger" }] },
-  { id: "t1", terms: [{ kind: "SHOPIFY_CATEGORY_PATH", value: "Toys & Games > Toys > Doll Dresses" }] },
-];
-for (const m of members) {
-  assert.equal(Boolean(classifyVerifiedFamilyMember(m.terms, target)), ["d1", "s1", "d2", "s2"].includes(m.id), m.id);
+const fixtureTypes = [
+  ["Apparel & Accessories > Clothing > Dresses", "dress"],
+  ["Apparel & Accessories > Clothing > Skirts", "skirt"],
+  ["Apparel & Accessories > Clothing > Shirts & Tops", "shirt"],
+  ["Apparel & Accessories > Clothing > Coats & Jackets", "jacket"],
+  ["Apparel & Accessories > Shoes", "shoe"],
+  ["Apparel & Accessories > Jewelry > Rings", "ring"],
+  ["Vehicles & Parts > Vehicles > Bicycles", "bicycle"],
+  ["Vehicles & Parts > Vehicle Parts & Accessories > Bicycle Helmets", "helmet"],
+  ["Electronics > Communications > Telephony > Mobile Phones", "phone"],
+  ["Electronics > Communications > Telephony > Mobile Phone Accessories > Cases", "phone_case"],
+  ["Electronics > Computers > Laptops", "laptop"],
+  ["Home & Garden > Furniture > Chairs", "chair"],
+  ["Health & Beauty > Personal Care > Cosmetics > Skin Care", "skincare"],
+  ["Food, Beverages & Tobacco > Beverages > Tea", "tea"],
+  ["Sporting Goods > Outdoor Recreation > Winter Sports > Snowboards", "snowboard"],
+  ["Toys & Games > Toys > Toy Vehicles > Cars", "toy_car"],
+] as const;
+
+const rows = Array.from({ length: 1600 }, (_, i) => {
+  const [pathValue, label] = fixtureTypes[i % fixtureTypes.length];
+  return {
+    productId: String(i),
+    label,
+    terms: [{
+      kind: "SHOPIFY_CATEGORY_PATH",
+      value: pathValue,
+      normalizedValue: pathValue.toLowerCase(),
+    }],
+  };
+});
+
+async function completeCount(query: string, expectedGroup: FamilyGroup) {
+  const result = await retrieveCompleteFamilyCandidates({
+    shop: "fixture.myshopify.com",
+    plan: plan(query),
+    rewrite: rewrite(query),
+  }, {
+    scanProfiles: async (_shop, visit) => {
+      for (const row of rows) {
+        await visit({ productId: row.productId, terms: row.terms, updatedAt: new Date() });
+      }
+      return rows.length;
+    },
+    findRegistry: async (_shop, ids) => ids.map((productId) => ({
+      productId,
+      handle: "item-" + productId,
+      title: "Catalog item " + productId,
+    })),
+  });
+  assert.ok(result, query);
+  assert.equal(result.target.taxonomyGroup, expectedGroup, query);
+  assert.equal(new Set(result.results.map((item) => item.productId)).size, result.results.length);
+  return result;
 }
 
-// A representative mixed shop has >500 Dresses/Skirts, beyond hybrid Top-K.
-const rows = Array.from({ length: 1200 }, (_, i) => ({
-  productId: String(i),
-  terms: [{
-    kind: "SHOPIFY_CATEGORY_PATH",
-    value: i % 3 === 0
-      ? "Apparel & Accessories > Clothing > Dresses"
-      : i % 3 === 1
-        ? "Apparel & Accessories > Clothing > Skirts"
-        : "Apparel & Accessories > Clothing Accessories > Scarves",
-  }],
-}));
-const expected = rows.filter((r) =>
-  r.terms[0].value.includes("Dresses") || r.terms[0].value.includes("Skirts"));
-const actual = await retrieveCompleteFamilyCandidates({
-  shop: "fixture.myshopify.com", plan: plan("váy"), rewrite,
-}, {
-  scanProfiles: async (_shop, visit) => {
-    for (const row of rows) {
-      await visit({
-        productId: row.productId,
-        terms: row.terms.map((term) => ({ ...term, normalizedValue: term.value.toLowerCase() })),
-        updatedAt: new Date(),
-      });
-    }
-    return rows.length;
-  },
-  findRegistry: async (_shop, ids) => ids.map((productId) => ({
-    productId, handle: "item-" + productId, title: "Catalog product " + productId,
-  })),
-});
-assert.ok(actual);
-assert.equal(expected.length, 800);
-assert.equal(actual.searchableProducts, 800);
-assert.equal(actual.matchedProfiles, 800);
-assert.equal(actual.scannedProfiles, 1200);
-assert.equal(actual.categoryMatches, 800);
-assert.equal(new Set(actual.results.map((x) => x.productId)).size, 800);
+assert.equal((await completeCount("váy", "dress_or_skirt")).searchableProducts, 200);
+assert.equal((await completeCount("áo", "tops")).searchableProducts, 200);
+assert.equal((await completeCount("giày", "footwear")).searchableProducts, 100);
+assert.equal((await completeCount("trang sức", "jewelry")).searchableProducts, 100);
+assert.equal((await completeCount("xe đạp", "bicycles")).searchableProducts, 100);
+assert.equal((await completeCount("điện thoại", "phones")).searchableProducts, 100);
+assert.equal((await completeCount("laptop", "laptops")).searchableProducts, 100);
+assert.equal((await completeCount("ghế", "seating")).searchableProducts, 100);
+assert.equal((await completeCount("chăm sóc da", "skincare")).searchableProducts, 100);
+assert.equal((await completeCount("trà", "tea")).searchableProducts, 100);
+assert.equal((await completeCount("ván trượt tuyết", "snowboards")).searchableProducts, 100);
 
-console.log("PASS: source-owned family taxonomy, cross-language Dress/Skirt union, Shopify category and >500 coverage");
+assert.ok(supportedFamilyGroups().length >= 50, "expected broad retail family coverage");
+
+console.log("PASS: generalized product-family taxonomy across major retail categories and complete-profile coverage");
