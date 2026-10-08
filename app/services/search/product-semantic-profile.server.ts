@@ -796,6 +796,32 @@ async function loadShopSemanticRowsUncached(
   return rows;
 }
 
+/** Update variant tuples on an unchanged product without regenerating an embedding.
+ * This supports re-syncing old catalog rows without consuming vector quota.
+ */
+export async function refreshProductVariantSelections(args: {
+  shop: string;
+  productId: string;
+  variants: ProductVariantForIndex[] | undefined;
+}): Promise<boolean> {
+  if (!args.variants) return false;
+  const normalized = normalizeIndexedVariantSelections(args.variants);
+  const row = await db.aiSearchProductSemanticProfile.findUnique({
+    where: { shop_productId: { shop: args.shop, productId: args.productId } },
+    select: { profile: true },
+  });
+  if (!row) return false;
+  const parsed = parseStoredSemanticProfile(row.profile);
+  if (JSON.stringify(parsed.variantSelections) === JSON.stringify(normalized)) return false;
+  await db.aiSearchProductSemanticProfile.update({
+    where: { shop_productId: { shop: args.shop, productId: args.productId } },
+    data: {
+      profile: profileJson(parsed.analysisMeta, parsed.terms, normalized),
+    },
+  });
+  return true;
+}
+
 export async function loadProductVariantSelections(
   shop: string,
   productIds: string[],
