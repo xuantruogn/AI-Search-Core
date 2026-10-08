@@ -83,6 +83,13 @@ assert.deepEqual([...contextIndex.typedColorVocabulary], ["navy"]);
 assert.equal(sourceContextCatalogValueMatch("ATTRIBUTE", "Color: S", "s"), true);
 assert.equal(sourceContextCatalogValueMatch("ATTRIBUTE", "Color: M", "s"), false,
   "empty meaningful token arrays must not create false typed-facet matches");
+const shortOptionIndex = buildShopContextLookupIndex([
+  { kind: "ATTRIBUTE", value: "Color: S", normalizedValue: "color s", tokens: ["color"], productCount: 1, productIds: new Set(["s-variant"]) },
+  { kind: "ATTRIBUTE", value: "Color: M", normalizedValue: "color m", tokens: ["color"], productCount: 1, productIds: new Set(["m-variant"]) },
+] as any);
+const shortOptionCandidates = selectContextScoreCandidates(shortOptionIndex, ["s"], [], []);
+assert.deepEqual(shortOptionCandidates.map((row) => row.value), ["Color: S"],
+  "short source-owned options must retain typed candidates without a catalog-wide scan");
 const largeVocabulary = [
   ...contextFixture,
   ...Array.from({ length: 2000 }, (_, index) => ({
