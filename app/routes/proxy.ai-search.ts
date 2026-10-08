@@ -2367,6 +2367,7 @@ let resultCacheStatus: "HIT" | "MISS" = "MISS";
               score: product.score,
               vectorSimilarity: product.vectorSimilarity,
               primaryVectorSimilarity: product.primaryVectorSimilarity,
+              matchedVariantId: product.matchedVariantId,
             }),
           );
           allProducts = await filterCandidatesAgainstRegistry(
