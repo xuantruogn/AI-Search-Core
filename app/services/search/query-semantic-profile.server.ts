@@ -636,6 +636,7 @@ export function composeFacetEmbeddingInput(
   finalPlan: QueryPlan,
   _expandedPlan: QueryPlan,
   llm: QueryRewriteResult,
+  canonicalReferenceTerms: string[] = [],
 ) {
   // The dense query vector should represent the shopper's natural semantic
   // intent, not a serialized copy of structured facets. Exact attributes,
@@ -670,6 +671,22 @@ export function composeFacetEmbeddingInput(
     .join(". ") || (!llm.fallbackReason && llm.analysis.intent !== "unknown"
       ? llm.analysis.intent : semanticQuery);
   const cleanSemanticQuery = naturalIntent.split(/\s*;\s*/)[0].replace(/\s+/g, " ").trim();
+  // The reference belongs to the shopper's relationship, not to target
+  // identity/exact facts. The LLM's referenceTerms are already in shop language;
+  // do NOT use the source-language rawPlan reference strings for dense input.
+  if (finalPlan.retrievalMode === "COMPLEMENT" &&
+      !llm.fallbackReason && canonicalReferenceTerms.length > 0) {
+    const references = canonicalReferenceTerms
+      .map((value) => value.replace(/\s+/g, " ").trim())
+      .filter(Boolean)
+      .slice(0, 2);
+    const missingReferences = references.filter((reference) =>
+      !normalizeQueryText(cleanSemanticQuery).includes(normalizeQueryText(reference))
+    );
+    if (missingReferences.length > 0) {
+      return `${cleanSemanticQuery} to pair with ${missingReferences.join(" and ")}`.trim();
+    }
+  }
   if (cleanSemanticQuery) return cleanSemanticQuery;
 
   // Deterministic/LLM fallback only: if no semantic sentence survived,
@@ -1006,6 +1023,7 @@ export function buildQuerySemanticProfile(args: {
     finalPlan,
     safeExpandedPlan,
     mergedRewrite,
+    !safeLlm.fallbackReason ? (safeLlm.analysis.referenceTerms ?? []) : [],
   );
 
   return {
