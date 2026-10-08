@@ -56,7 +56,7 @@ const sourceFamilies: Array<[string, FamilyGroup]> = [
   ["áo", "tops"], ["áo sơ mi", "shirts"], ["áo khoác", "jackets"], ["áo len", "sweaters"],
   ["quần", "bottoms"], ["quần jean", "jeans"], ["quần short", "shorts"],
   ["quần lót", "underwear"], ["đồ ngủ", "sleepwear"], ["đồ bơi", "swimwear"],
-  ["quần áo", "clothing"], ["giày", "footwear"], ["giày thể thao", "sneakers"],
+  ["quần áo", "clothing"], ["giày", "shoes"], ["giày thể thao", "sneakers"],
   ["giày boot", "boots"], ["dép", "sandals"], ["túi", "bags"], ["túi xách", "handbags"],
   ["balo", "backpacks"], ["ví", "wallets"], ["thắt lưng", "belts"], ["mũ", "hats"],
   ["kính râm", "sunglasses"], ["trang sức", "jewelry"], ["nhẫn", "rings"],
@@ -129,7 +129,7 @@ const categoryCases: Array<[string, FamilyGroup, boolean]> = [
   ["Apparel & Accessories > Clothing > Shirts & Tops", "jackets", false],
   ["Apparel & Accessories > Clothing > Coats & Jackets", "jackets", true],
   ["Apparel & Accessories > Clothing > Pants", "bottoms", true],
-  ["Apparel & Accessories > Shoes", "footwear", true],
+  ["Apparel & Accessories > Shoes", "shoes", true],
   ["Apparel & Accessories > Shoes", "sneakers", false],
   ["Apparel & Accessories > Jewelry > Rings", "rings", true],
   ["Vehicles & Parts > Vehicles > Bicycles", "bicycles", true],
@@ -236,7 +236,7 @@ async function completeCount(query: string, expectedGroup: FamilyGroup) {
 
 assert.equal((await completeCount("váy", "dress_or_skirt")).searchableProducts, 200);
 assert.equal((await completeCount("áo", "tops")).searchableProducts, 200);
-assert.equal((await completeCount("giày", "footwear")).searchableProducts, 100);
+assert.equal((await completeCount("giày", "shoes")).searchableProducts, 100);
 assert.equal((await completeCount("trang sức", "jewelry")).searchableProducts, 100);
 assert.equal((await completeCount("xe đạp", "bicycles")).searchableProducts, 100);
 assert.equal((await completeCount("điện thoại", "phones")).searchableProducts, 100);
