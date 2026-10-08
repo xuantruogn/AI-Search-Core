@@ -6,7 +6,12 @@
  * counts with Online Store's active/published catalog and indexed eligibility.
  */
 import db from "../app/db.server";
-import { classifyFamilyProduct, classifySoldItemLeaf, shopifyCategoryLeaf } from "../app/services/search/product-family-taxonomy.server";
+import {
+  classifyFamilyProduct,
+  classifyGenericFamilyProduct,
+  classifySoldItemLeaf,
+  shopifyCategoryLeaf,
+} from "../app/services/search/product-family-taxonomy.server";
 import { scanShopSemanticProfiles } from "../app/services/search/product-semantic-profile.server";
 
 const shop = (process.argv[2] || "").trim().toLowerCase();
@@ -28,10 +33,26 @@ const counters = {
   tops: 0,
   vehicles: 0,
   bicycles: 0,
+  commonFamilies: {
+    shoes: 0,
+    bags: 0,
+    jewelry: 0,
+    watches: 0,
+    phones: 0,
+    laptops: 0,
+    headphones: 0,
+    cameras: 0,
+    furniture: 0,
+    cosmetics: 0,
+    toys: 0,
+    books: 0,
+  } as Record<string, number>,
 };
 const sampleMissing: string[] = [];
 const sampleUnmapped: Array<{ productId: string; canonical: string; merchantType: string; shopifyCategory: string }> = [];
 const sampleConflict: Array<{ productId: string; canonical: string; category: string }> = [];
+const categoryPathCounts = new Map<string, number>();
+const canonicalTypeCounts = new Map<string, number>();
 
 await scanShopSemanticProfiles(shop, ({ productId, terms }) => {
   counters.scanned++;
@@ -43,6 +64,12 @@ await scanShopSemanticProfiles(shop, ({ productId, terms }) => {
   };
   if (evidence.shopifyCategoryPaths.length) counters.standardCategory++;
   if (evidence.canonicalTypes.length) counters.canonicalType++;
+  for (const path of evidence.shopifyCategoryPaths) {
+    categoryPathCounts.set(path, (categoryPathCounts.get(path) ?? 0) + 1);
+  }
+  for (const type of evidence.canonicalTypes) {
+    canonicalTypeCounts.set(type, (canonicalTypeCounts.get(type) ?? 0) + 1);
+  }
   if (!evidence.canonicalTypes.length && !evidence.merchantTypes.length &&
       !evidence.shopifyCategoryPaths.length) {
     counters.missingAllTypedIdentity++;
@@ -75,7 +102,18 @@ await scanShopSemanticProfiles(shop, ({ productId, terms }) => {
   if (classifyFamilyProduct(evidence, "tops").match) counters.tops++;
   if (classifyFamilyProduct(evidence, "vehicles").match) counters.vehicles++;
   if (classifyFamilyProduct(evidence, "bicycle").match) counters.bicycles++;
+  for (const family of Object.keys(counters.commonFamilies)) {
+    if (classifyGenericFamilyProduct(evidence, family).match) {
+      counters.commonFamilies[family] += 1;
+    }
+  }
 });
+
+const topEntries = (map: Map<string, number>, limit = 40) =>
+  [...map.entries()]
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .slice(0, limit)
+    .map(([value, count]) => ({ value, count }));
 
 console.log(JSON.stringify({
   shop,
@@ -83,6 +121,8 @@ console.log(JSON.stringify({
   searchableWithVectorCount: totals[1],
   indexedButNotEligible: totals[0] - totals[1],
   ...counters,
+  topShopifyCategoryPaths: topEntries(categoryPathCounts),
+  topCanonicalProductTypes: topEntries(canonicalTypeCounts),
   sampleMissing, sampleUnmapped, sampleConflict,
   reminder: "Compare family counts to Shopify active/published products; missing category/PSF coverage cannot be proven from embeddings.",
 }, null, 2));
