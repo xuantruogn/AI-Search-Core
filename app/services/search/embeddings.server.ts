@@ -8,6 +8,7 @@ let openaiClientCreatedAt = 0;
 let openaiRequestCount = 0;
 let openaiWarmupPromise: Promise<void> | null = null;
 let openaiWarmupCompletedAt = 0;
+let openaiWarmupAttemptedAt = 0;
 const openaiDispatcher = new Agent({
   connections: 8,
   pipelining: 1,
@@ -70,6 +71,12 @@ export async function warmOpenAiConnection() {
   if (!isOpenAiConfigured()) return;
 
   const now = Date.now();
+  // Rate-limit failed bootstrap warmups too: an unavailable provider must not
+  // trigger a new network request on every storefront runtime-config load.
+  if (now - openaiWarmupAttemptedAt < 5 * 60_000) {
+    return Promise.resolve();
+  }
+  openaiWarmupAttemptedAt = now;
   if (openaiWarmupCompletedAt > 0 && now - openaiWarmupCompletedAt < 5 * 60_000) {
     return;
   }
