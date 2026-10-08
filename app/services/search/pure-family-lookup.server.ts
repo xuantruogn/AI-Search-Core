@@ -187,6 +187,14 @@ export function classifyVerifiedFamilyMember(
     return verdict.reason === "SHOPIFY_CATEGORY" ? "CATEGORY" : "SUBTYPE";
   }
 
+  // Preserve the strongest old authority before generic hierarchy matching.
+  // Exact sold-item identity must remain EXACT, not be flattened to SUBTYPE
+  // merely because the generic classifier can also prove membership.
+  const exactTyped = typed.some((term) =>
+    normalizeQueryText(term.value) === normalizeQueryText(target.canonical),
+  );
+  if (exactTyped) return "EXACT";
+
   // Any canonical family may be proven by a Shopify standard-category
   // ancestor/leaf. This is catalog-wide: shoes, bags, jewelry, phones,
   // laptops, furniture, beauty, toys... do not need a bespoke code branch.
