@@ -89,37 +89,18 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
   const url = new URL(request.url);
 
-  const activeTab = url.searchParams.get("tab") || "indexed"; // 'indexed' | 'unindexed'
   const page = Math.max(1, parseInt(url.searchParams.get("page") || "1", 10));
   const pageSize = 50; // THAY ĐỔI THÀNH 50 SẢN PHẨM / TRANG
   const skip = (page - 1) * pageSize;
 
-  // 1. Đếm tổng quan kho hàng
-  const [job, totalProducts, indexedProductsCount] = await Promise.all([
+  // One registry per shop. Badges show problems on individual products.
+  const [job, totalProducts] = await Promise.all([
     getLatestCatalogSyncJob(session.shop),
     prisma.aiSearchIndexedProduct.count({ where: { shop: session.shop } }),
-    prisma.aiSearchIndexedProduct.count({
-      where: {
-        shop: session.shop,
-        hasVector: true,
-        documentHash: { not: null },
-      },
-    }),
   ]);
 
-  const unindexedProductsCount = Math.max(0, totalProducts - indexedProductsCount);
-
-  // 2. Lọc đúng sản phẩm cho từng Tab
-  const targetHasVector = activeTab === "indexed";
-  const targetTotal = targetHasVector ? indexedProductsCount : unindexedProductsCount;
-
   const rawProducts = await prisma.aiSearchIndexedProduct.findMany({
-    where: {
-      shop: session.shop,
-      ...(targetHasVector
-        ? { hasVector: true, documentHash: { not: null } }
-        : { OR: [{ hasVector: false }, { documentHash: null }] }),
-    },
+    where: { shop: session.shop },
     orderBy: { updatedAt: "desc" },
     skip,
     take: pageSize,
@@ -158,22 +139,17 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     };
   });
 
-  const totalPages = Math.ceil(targetTotal / pageSize) || 1;
+  const totalPages = Math.ceil(totalProducts / pageSize) || 1;
 
   return {
     shop: session.shop,
     job,
-    stats: {
-      total: totalProducts,
-      indexed: indexedProductsCount,
-      unindexed: unindexedProductsCount,
-    },
+    stats: { total: totalProducts },
     tableData: {
-      activeTab,
       page,
       pageSize,
       totalPages,
-      totalItems: targetTotal,
+      totalItems: totalProducts,
       products,
     },
   };
@@ -354,31 +330,6 @@ const catalogCss = `
     word-break: break-word;
   }
   
-  /* TABS STYLES - GREEN FOR INDEXED, RED FOR UNINDEXED */
-  .cat-tabs {
-    display: flex;
-    gap: 12px;
-    border-bottom: 1px solid #e2e4ed;
-    margin-bottom: 16px;
-  }
-  .cat-tab-item {
-    padding: 10px 16px;
-    font-size: 14px;
-    font-weight: 700;
-    color: #5c6270;
-    cursor: pointer;
-    border-bottom: 2px solid transparent;
-    transition: all 0.2s ease;
-  }
-  .cat-tab-item.tab-indexed.active {
-    color: #008060;
-    border-bottom-color: #008060;
-  }
-  .cat-tab-item.tab-unindexed.active {
-    color: #d32f2f;
-    border-bottom-color: #d32f2f;
-  }
-
   /* ADVANCED PAGINATION STYLES */
   .cat-pagination {
     display: flex;
@@ -447,7 +398,6 @@ export default function CatalogSyncPage() {
   const statusRequestInFlight = useRef(false);
   const loadCatalogStatus = statusFetcher.load;
 
-  const [activeTab, setActiveTab] = useState<"indexed" | "unindexed">("indexed");
   const [currentPage, setCurrentPage] = useState(1);
 
   const isActionBusy = actionFetcher.state !== "idle";
@@ -463,10 +413,9 @@ export default function CatalogSyncPage() {
   const currentTableData = tableFetcher.data?.tableData || initialData.tableData;
   const currentStats = tableFetcher.data?.stats || initialData.stats;
 
-  const loadTableData = (tab: "indexed" | "unindexed", page: number) => {
-    setActiveTab(tab);
+  const loadTableData = (page: number) => {
     setCurrentPage(page);
-    tableFetcher.load(`.?tab=${tab}&page=${page}`);
+    tableFetcher.load(`.?page=${page}`);
   };
 
   useEffect(() => {
@@ -607,18 +556,6 @@ export default function CatalogSyncPage() {
                 <strong>{currentStats.total}</strong>
               </div>
 
-              <div className="cat-status-row">
-                <span style={{ color: "#5c6270" }}>Indexed Products:</span>
-                <strong style={{ color: "#008060" }}>{currentStats.indexed}</strong>
-              </div>
-
-              <div className="cat-status-row">
-                <span style={{ color: "#5c6270" }}>Unindexed Products:</span>
-                <strong style={{ color: currentStats.unindexed > 0 ? "#d32f2f" : "#1a1c23" }}>
-                  {currentStats.unindexed}
-                </strong>
-              </div>
-
               {liveJob?.lastError ? (
                 <div style={{ marginTop: 10, padding: 10, background: "#ffebe9", color: "#d32f2f", borderRadius: 8, fontSize: 12 }}>
                   <strong>Error details:</strong> {initialData.job.lastError}
@@ -653,20 +590,8 @@ export default function CatalogSyncPage() {
 
       {/* BLOCK 3: PRODUCT REGISTRY WITH FULL PAGINATION CONTROLS */}
       <div className="cat-card">
-        {/* ENGLISH TABS HEADER */}
-        <div className="cat-tabs">
-          <div
-            className={`cat-tab-item tab-indexed ${activeTab === "indexed" ? "active" : ""}`}
-            onClick={() => loadTableData("indexed", 1)}
-          >
-            ✅ Indexed Products ({currentStats.indexed})
-          </div>
-          <div
-            className={`cat-tab-item tab-unindexed ${activeTab === "unindexed" ? "active" : ""}`}
-            onClick={() => loadTableData("unindexed", 1)}
-          >
-            ⏳ Unindexed Products ({currentStats.unindexed})
-          </div>
+        <div className="cat-card-title">
+          <span>Products ({currentStats.total})</span>
         </div>
 
         {/* TABLE CONTENT */}
@@ -674,9 +599,8 @@ export default function CatalogSyncPage() {
           <table className="cat-table">
             <thead>
               <tr>
-                <th style={{ width: "42%" }}>Product Title</th>
-                <th style={{ width: "33%" }}>Handle / Path</th>
-                <th style={{ width: "25%" }}>{activeTab === "indexed" ? "Issue" : "Reason"}</th>
+                <th style={{ width: "58%" }}>Product Title</th>
+                <th style={{ width: "42%" }}>Handle / Path</th>
               </tr>
             </thead>
             <tbody>
@@ -704,12 +628,12 @@ export default function CatalogSyncPage() {
 
                   return (
                     <tr key={product.id}>
-                      <td style={{ fontWeight: 700, color: "#1a1c23" }}>{product.title}</td>
-                      <td style={{ color: "#5c6270" }}>{product.handle}</td>
-                      <td>
+                      <td style={{ fontWeight: 700, color: "#1a1c23" }}>
+                        <span>{product.title}</span>
                         {issue ? (
                           <span
                             style={{
+                              marginLeft: 8,
                               padding: "4px 10px",
                               borderRadius: 12,
                               fontSize: 11,
@@ -720,21 +644,16 @@ export default function CatalogSyncPage() {
                           >
                             {issue.label}
                           </span>
-                        ) : (
-                          <span style={{ color: "#8c9196" }}>—</span>
-                        )}
+                        ) : null}
                       </td>
+                      <td style={{ color: "#5c6270" }}>{product.handle}</td>
                     </tr>
                   );
                 })
               ) : (
                 <tr>
-                  <td colSpan={3} style={{ textAlign: "center", padding: 24, color: "#8c9196" }}>
-                    {isTableLoading
-                      ? "Loading product list..."
-                      : activeTab === "indexed"
-                      ? "No indexed products found."
-                      : "No unindexed products found."}
+                  <td colSpan={2} style={{ textAlign: "center", padding: 24, color: "#8c9196" }}>
+                    {isTableLoading ? "Loading product list..." : "No products found."}
                   </td>
                 </tr>
               )}
@@ -755,7 +674,7 @@ export default function CatalogSyncPage() {
               className="cat-page-btn"
               title="First Page"
               disabled={currentPage <= 1 || isTableLoading}
-              onClick={() => loadTableData(activeTab, 1)}
+              onClick={() => loadTableData(1)}
             >
               «
             </button>
@@ -765,7 +684,7 @@ export default function CatalogSyncPage() {
               className="cat-page-btn"
               style={{ padding: "0 10px" }}
               disabled={currentPage <= 1 || isTableLoading}
-              onClick={() => loadTableData(activeTab, currentPage - 1)}
+              onClick={() => loadTableData(currentPage - 1)}
             >
               ◄ Previous
             </button>
@@ -776,7 +695,7 @@ export default function CatalogSyncPage() {
                 key={p}
                 className={`cat-page-btn ${p === currentPage ? "active" : ""}`}
                 disabled={isTableLoading}
-                onClick={() => loadTableData(activeTab, p)}
+                onClick={() => loadTableData(p)}
               >
                 {p}
               </button>
@@ -787,7 +706,7 @@ export default function CatalogSyncPage() {
               className="cat-page-btn"
               style={{ padding: "0 10px" }}
               disabled={currentPage >= currentTableData.totalPages || isTableLoading}
-              onClick={() => loadTableData(activeTab, currentPage + 1)}
+              onClick={() => loadTableData(currentPage + 1)}
             >
               Next ►
             </button>
@@ -797,7 +716,7 @@ export default function CatalogSyncPage() {
               className="cat-page-btn"
               title="Last Page"
               disabled={currentPage >= currentTableData.totalPages || isTableLoading}
-              onClick={() => loadTableData(activeTab, currentTableData.totalPages)}
+              onClick={() => loadTableData(currentTableData.totalPages)}
             >
               »
             </button>
