@@ -128,6 +128,10 @@ assert.equal(shopifyCategoryMatchesFamily(
 assert.equal(shopifyCategoryMatchesFamily(
   "Media > Books > Fiction Books", "books"), true);
 assert.equal(shopifyCategoryMatchesFamily(
+  "Apparel & Accessories > Jewelry > Watches", "watch"), true);
+assert.equal(shopifyCategoryMatchesFamily(
+  "Vehicles & Parts > Vehicles > Buses", "bus"), true);
+assert.equal(shopifyCategoryMatchesFamily(
   "Electronics > Electronics Accessories > Mobile Phone Accessories", "phones"), false);
 assert.equal(shopifyCategoryMatchesFamily(
   "Apparel & Accessories > Clothing Accessories > Shoe Accessories", "shoes"), false);
