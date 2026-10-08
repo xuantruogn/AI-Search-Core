@@ -94,6 +94,9 @@ const FAMILY_HEADS = {
   // Food / beverages
   tea: ["tea", "teas", "loose leaf tea", "tra"],
   coffee: ["coffee", "coffees", "coffee beans", "ca phe"],
+  juice: ["juice", "juices", "fruit juice", "fruit juices", "nuoc ep"],
+  water: ["water", "waters", "bottled water", "mineral water", "nuoc uong", "nuoc khoang"],
+  soft_drink: ["soft drink", "soft drinks", "soda", "sodas", "nuoc ngot"],
   snack: ["snack", "snacks", "chips", "cracker", "crackers", "do an vat"],
 
   // Sports
@@ -174,6 +177,7 @@ const GROUP_MEMBERS = {
   lighting: ["lamp"],
   floor_coverings: ["rug"],
   beauty: ["makeup", "skincare", "cleanser", "shampoo", "conditioner", "fragrance"],
+  cosmetics: ["makeup", "skincare", "cleanser", "fragrance"],
   makeup: ["makeup"],
   skincare: ["skincare", "cleanser"],
   cleansers: ["cleanser"],
@@ -181,9 +185,12 @@ const GROUP_MEMBERS = {
   shampoos: ["shampoo"],
   conditioners: ["conditioner"],
   fragrance: ["fragrance"],
-  beverages: ["tea", "coffee"],
+  beverages: ["tea", "coffee", "juice", "water", "soft_drink"],
   tea: ["tea"],
   coffee: ["coffee"],
+  juices: ["juice"],
+  waters: ["water"],
+  soft_drinks: ["soft_drink"],
   snacks: ["snack"],
   boardsports: ["snowboard", "skateboard", "ski"],
   snowboards: ["snowboard"],
@@ -271,7 +278,7 @@ const QUERY_FAMILIES: Record<string, FamilyGroup> = {
   "tham": "floor_coverings", "rug": "floor_coverings", "rugs": "floor_coverings",
 
   // Beauty
-  "my pham": "beauty", "beauty": "beauty", "cosmetics": "beauty",
+  "my pham": "cosmetics", "cosmetics": "cosmetics", "beauty": "beauty",
   "trang diem": "makeup", "makeup": "makeup",
   "cham soc da": "skincare", "skincare": "skincare", "skin care": "skincare",
   "sua rua mat": "cleansers", "cleanser": "cleansers", "cleansers": "cleansers",
@@ -281,8 +288,11 @@ const QUERY_FAMILIES: Record<string, FamilyGroup> = {
   "nuoc hoa": "fragrance", "perfume": "fragrance", "fragrance": "fragrance",
 
   // Food / sports
-  "do uong": "beverages", "beverage": "beverages", "beverages": "beverages",
+  "do uong": "beverages", "nuoc uong": "beverages", "beverage": "beverages", "beverages": "beverages",
   "tra": "tea", "tea": "tea", "ca phe": "coffee", "coffee": "coffee",
+  "nuoc ep": "juices", "juice": "juices", "juices": "juices",
+  "nuoc khoang": "waters", "bottled water": "waters", "mineral water": "waters",
+  "nuoc ngot": "soft_drinks", "soft drink": "soft_drinks", "soft drinks": "soft_drinks", "soda": "soft_drinks",
   "do an vat": "snacks", "snack": "snacks", "snacks": "snacks",
   "van truot tuyet": "snowboards", "snowboard": "snowboards", "snowboards": "snowboards",
   "van truot": "skateboards", "skateboard": "skateboards", "skateboards": "skateboards",
@@ -396,6 +406,25 @@ export function shopifyCategoryLeaf(path: string): FamilyNode | null {
   return classifySoldItemLeaf(leaf);
 }
 
+const CATEGORY_ANCESTOR_RULES: Partial<Record<
+  FamilyGroup,
+  { ancestors: readonly string[]; deny?: RegExp }
+>> = {
+  clothing: {
+    ancestors: ["clothing"],
+    deny: /\baccessor(?:y|ies)\b/,
+  },
+  furniture: {
+    ancestors: ["furniture"],
+  },
+  beverages: {
+    ancestors: ["beverages"],
+  },
+  cosmetics: {
+    ancestors: ["cosmetics"],
+  },
+};
+
 function categoryProvesGroup(path: string, group: FamilyGroup) {
   const segments = shopifyCategoryParts(path);
   if (!segments.length || forbiddenCategoryBranch(segments)) return false;
@@ -408,15 +437,20 @@ function categoryProvesGroup(path: string, group: FamilyGroup) {
     // would make generic Shoes falsely prove Sneakers.
     return aggregateMembers.every((node) => accepted.has(node));
   }
-  // Broad catalog roots may prove only broad shopper groups and only when the
-  // product is below that root. Never use an ancestor Vehicles/Clothing to
-  // prove a narrow leaf such as bicycle/dress.
-  if (group === "clothing") {
-    return segments.slice(0, -1).some((segment) => segment === "clothing") &&
-      !segments.slice(1).some((segment) => /\baccessor(?:y|ies)\b/.test(segment));
-  }
-  if (group === "furniture") {
-    return segments.slice(0, -1).some((segment) => segment === "furniture");
+  // Broad category queries may inherit a trusted Shopify ancestor even when
+  // a newly introduced leaf is not in FAMILY_HEADS yet. This keeps recall
+  // future-proof without allowing that ancestor to prove a narrower sibling.
+  const rule = CATEGORY_ANCESTOR_RULES[group];
+  if (rule) {
+    const descendants = segments.slice(1);
+    const hasAncestor = segments.slice(0, -1).some((segment) =>
+      rule.ancestors.includes(segment)
+    );
+    if (!hasAncestor) return false;
+    if (rule.deny && descendants.some((segment) => rule.deny!.test(segment))) {
+      return false;
+    }
+    return true;
   }
   return false;
 }
