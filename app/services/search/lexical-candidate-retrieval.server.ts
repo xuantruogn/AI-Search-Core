@@ -32,7 +32,7 @@ export async function retrieveLexicalCandidates(args: {
   // scan even on warm Search V11 queries, and arbitrary LIMIT 500 ordering
   // could hide an exact title. The migration installs a compound FULLTEXT
   // index on (title, handle). BM25/dense cover non-lexical recall.
-  if (!/^[\\p{L}\\p{N}]+$/u.test(anchor)) return [];
+  if (!/^[\p{L}\p{N}]+$/u.test(anchor)) return [];
   const booleanQuery = `${anchor}*`;
   const rows = await db.$queryRaw<
     Array<{ productId: string; handle: string; title: string }>
