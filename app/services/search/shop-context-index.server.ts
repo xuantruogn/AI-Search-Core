@@ -127,10 +127,16 @@ type ShopContextCacheEntry = {
   catalogRevision: string;
   terms: ContextTerm[];
   index: ShopContextLookupIndex;
+  postingCount: number;
 };
 
 const contextCache = new Map<string, ShopContextCacheEntry>();
 const pendingContextLoads = new Map<string, Promise<LoadedShopContext>>();
+const shopContextGeneration = new Map<string, number>();
+const MAX_TOTAL_SHOP_CONTEXT_POSTINGS = (() => {
+  const n = Number.parseInt(process.env.AI_SEARCH_SHOP_CONTEXT_CACHE_MAX_POSTINGS || "", 10);
+  return Number.isSafeInteger(n) && n >= 50_000 ? Math.min(n, 10_000_000) : 1_000_000;
+})();
 const MAX_TOTAL_SHOP_CONTEXT_TERMS = (() => {
   const value = Number.parseInt(
     process.env.AI_SEARCH_SHOP_CONTEXT_CACHE_MAX_TOTAL_TERMS || "",
@@ -147,17 +153,24 @@ function touchContextCache(shop: string, entry: ShopContextCacheEntry) {
 }
 
 function enforceContextCacheBudget() {
-  let totalTerms = [...contextCache.values()].reduce(
-    (sum, entry) => sum + entry.terms.length,
-    0,
-  );
-  while (contextCache.size > 50 || totalTerms > MAX_TOTAL_SHOP_CONTEXT_TERMS) {
+  let totalTerms = 0;
+  let totalPostings = 0;
+  for (const entry of contextCache.values()) {
+    totalTerms += entry.terms.length;
+    totalPostings += entry.postingCount;
+  }
+  while (
+    contextCache.size > 50 ||
+    totalTerms > MAX_TOTAL_SHOP_CONTEXT_TERMS ||
+    totalPostings > MAX_TOTAL_SHOP_CONTEXT_POSTINGS
+  ) {
     const oldest = contextCache.entries().next().value as
       | [string, ShopContextCacheEntry]
       | undefined;
     if (!oldest) break;
     contextCache.delete(oldest[0]);
     totalTerms -= oldest[1].terms.length;
+    totalPostings -= oldest[1].postingCount;
   }
 }
 
@@ -685,6 +698,12 @@ export function collectProductContextTerms(
 function invalidateShopContextCaches(shop: string) {
   const normalizedShop = shop.trim().toLowerCase();
   contextCache.delete(normalizedShop);
+  shopContextGeneration.set(
+    normalizedShop, (shopContextGeneration.get(normalizedShop) ?? 0) + 1,
+  );
+  for (const key of pendingContextLoads.keys()) {
+    if (key.startsWith(normalizedShop + "\u0000")) pendingContextLoads.delete(key);
+  }
   invalidateShopSearchDictionary(normalizedShop);
 }
 
@@ -830,6 +849,7 @@ async function loadShopContextUncached(
     };
   }
 
+  const generation = shopContextGeneration.get(shop) ?? 0;
   const dbStartedAt = Date.now();
   const aggregated = new Map<string, ContextTerm>();
 
@@ -864,13 +884,16 @@ async function loadShopContextUncached(
   const terms = [...aggregated.values()];
   const index = buildShopContextLookupIndex(terms);
   const aggregateCodeMs = Date.now() - aggregateStartedAt;
-  touchContextCache(shop, {
-    expiresAt: Date.now() + SHOP_CONTEXT_CACHE_TTL_MS,
-    catalogRevision,
-    terms,
-    index,
-  });
-  enforceContextCacheBudget();
+  if (generation === (shopContextGeneration.get(shop) ?? 0)) {
+    touchContextCache(shop, {
+      expiresAt: Date.now() + SHOP_CONTEXT_CACHE_TTL_MS,
+      catalogRevision,
+      terms,
+      index,
+      postingCount: terms.reduce((sum, term) => sum + term.productIds.size, 0),
+    });
+    enforceContextCacheBudget();
+  }
   return {
     terms,
     index,
