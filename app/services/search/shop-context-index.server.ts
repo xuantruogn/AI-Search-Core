@@ -2225,6 +2225,8 @@ export async function applyShopContextToQuery({
   console.log("[AI Search] Shop context selected by code", {
     shop,
     availableTerms: terms.length,
+    indexedContextCandidates: contextTermCandidates.length,
+    scoredContextCandidates: scoredTerms.length,
     identitySignals: identitySignals.map((signal) => signal.value),
     matchedIdentityProducts: matchingProductIds.size,
     canonicalTypeProducts: canonicalContextProductIds.size,
