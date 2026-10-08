@@ -16,7 +16,16 @@ import { kickProductSyncQueue } from "../services/products/product-sync-queue.se
 import prisma from "../db.server";
 
 
-type CatalogProductIssueKind = "error" | "warning" | "muted";
+type CatalogProductIssueKind = "error" | "warning" | "muted" | "success";
+
+function formatCatalogTimestamp(value: string | null): string {
+  if (!value) return "—";
+  const timestamp = new Date(value);
+  if (!Number.isFinite(timestamp.getTime())) return "—";
+  // Consistent between React SSR and hydration; do not mistake this for
+  // Shopify product.updatedAt or the merchant's browser-local timezone.
+  return timestamp.toISOString().slice(0, 16).replace("T", " ") + " UTC";
+}
 
 function getCatalogProductIssue(product: {
   status: string;
@@ -78,8 +87,16 @@ function getCatalogProductIssue(product: {
     return { label: "Pending index", kind: "muted" as CatalogProductIssueKind };
   }
 
+  if (product.vectorStatus === "STAGING" || product.vectorStatus === "PENDING") {
+    return { label: "Indexing", kind: "muted" as CatalogProductIssueKind };
+  }
+
   if (!product.searchable) {
     return { label: "Not searchable", kind: "warning" as CatalogProductIssueKind };
+  }
+
+  if (product.vectorStatus !== "READY") {
+    return { label: "Index needs attention", kind: "warning" as CatalogProductIssueKind };
   }
 
   return null;
@@ -116,6 +133,9 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       searchable: true,
       blockedReason: true,
       enrichmentStatus: true,
+      lastIndexedAt: true,
+      lastCatalogSeenAt: true,
+      updatedAt: true,
     },
   });
 
@@ -135,7 +155,11 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       productId: p.productId,
       handle: p.handle,
       title: p.title,
-      issue,
+      status: issue ?? { label: "Indexed", kind: "success" as CatalogProductIssueKind },
+      enrichmentStatus: p.enrichmentStatus,
+      lastIndexedAt: p.lastIndexedAt?.toISOString() ?? null,
+      lastCatalogSeenAt: p.lastCatalogSeenAt?.toISOString() ?? null,
+      statusChangedAt: p.updatedAt.toISOString(),
     };
   });
 
@@ -312,6 +336,7 @@ const catalogCss = `
   }
   .cat-table {
     width: 100%;
+    min-width: 920px;
     table-layout: fixed;
     border-collapse: collapse;
     font-size: 13px;
@@ -593,66 +618,75 @@ export default function CatalogSyncPage() {
         <div className="cat-card-title">
           <span>Products ({currentStats.total})</span>
         </div>
+        <p style={{ margin: "0 0 14px", fontSize: 12, color: "#5c6270" }}>
+          Last Indexed = latest successful vector write. Catalog Checked = latest full catalog scan
+          confirming this product in Shopify. Times are shown in UTC; a catalog check does not
+          mean the vector has been refreshed.
+        </p>
 
         {/* TABLE CONTENT */}
         <div style={{ overflowX: "auto", opacity: isTableLoading ? 0.6 : 1, transition: "opacity 0.2s" }}>
           <table className="cat-table">
             <thead>
               <tr>
-                <th style={{ width: "58%" }}>Product Title</th>
-                <th style={{ width: "42%" }}>Handle / Path</th>
+                <th style={{ width: "31%" }}>Product Title</th>
+                <th style={{ width: "20%" }}>Handle / Path</th>
+                <th style={{ width: "19%" }}>Index Status</th>
+                <th style={{ width: "15%" }}>Last Indexed</th>
+                <th style={{ width: "15%" }}>Catalog Checked</th>
               </tr>
             </thead>
             <tbody>
               {currentTableData.products.length > 0 ? (
                 currentTableData.products.map((product) => {
-                  const issue = product.issue;
-                  const issueStyle =
-                    issue?.kind === "error"
-                      ? {
-                          background: "#ffebe9",
-                          color: "#d32f2f",
-                          border: "1px solid #f3b8b8",
-                        }
-                      : issue?.kind === "warning"
-                        ? {
-                            background: "#fff6df",
-                            color: "#8a5b00",
-                            border: "1px solid #f3d489",
-                          }
-                        : {
-                            background: "#f1f2f3",
-                            color: "#5c6270",
-                            border: "1px solid #e2e4ed",
-                          };
-
+                  const statusStyle =
+                    product.status.kind === "error"
+                      ? { background: "#ffebe9", color: "#a82828", border: "1px solid #f3b8b8" }
+                      : product.status.kind === "warning"
+                        ? { background: "#fff6df", color: "#8a5b00", border: "1px solid #f3d489" }
+                        : product.status.kind === "success"
+                          ? { background: "#e4f8f0", color: "#006e52", border: "1px solid #b5e6d0" }
+                          : { background: "#f1f2f3", color: "#5c6270", border: "1px solid #e2e4ed" };
+                  const lastIndexed = formatCatalogTimestamp(product.lastIndexedAt);
+                  const catalogChecked = formatCatalogTimestamp(product.lastCatalogSeenAt);
                   return (
                     <tr key={product.id}>
-                      <td style={{ fontWeight: 700, color: "#1a1c23" }}>
-                        <span>{product.title}</span>
-                        {issue ? (
-                          <span
-                            style={{
-                              marginLeft: 8,
-                              padding: "4px 10px",
-                              borderRadius: 12,
-                              fontSize: 11,
-                              fontWeight: 700,
-                              display: "inline-block",
-                              ...issueStyle,
-                            }}
-                          >
-                            {issue.label}
-                          </span>
+                      <td style={{ fontWeight: 700, color: "#1a1c23" }}>{product.title}</td>
+                      <td style={{ color: "#5c6270" }}>{product.handle}</td>
+                      <td title={`Registry status last changed: ${formatCatalogTimestamp(product.statusChangedAt)}`}>
+                        <span style={{
+                          display: "inline-block",
+                          padding: "4px 10px",
+                          borderRadius: 12,
+                          fontSize: 11,
+                          fontWeight: 700,
+                          ...statusStyle,
+                        }}>
+                          {product.status.label}
+                        </span>
+                        {product.status.kind === "success" &&
+                          ["BASE_ONLY", "PENDING", "FALLBACK"].includes(product.enrichmentStatus) ? (
+                          <div style={{ marginTop: 4, color: "#8a5b00", fontSize: 11 }}>
+                            {product.enrichmentStatus === "FALLBACK"
+                              ? "Basic analysis"
+                              : "Analysis pending"}
+                          </div>
                         ) : null}
                       </td>
-                      <td style={{ color: "#5c6270" }}>{product.handle}</td>
+                      <td style={{ color: "#5c6270", fontVariantNumeric: "tabular-nums" }}
+                        title="Most recent successful vector write, not the last Shopify edit">
+                        {lastIndexed === "—" ? "Never indexed" : lastIndexed}
+                      </td>
+                      <td style={{ color: "#5c6270", fontVariantNumeric: "tabular-nums" }}
+                        title="Last authoritative catalog scan that saw this product; not proof of a fresh vector">
+                        {catalogChecked === "—" ? "Not checked" : catalogChecked}
+                      </td>
                     </tr>
                   );
                 })
               ) : (
                 <tr>
-                  <td colSpan={2} style={{ textAlign: "center", padding: 24, color: "#8c9196" }}>
+                  <td colSpan={5} style={{ textAlign: "center", padding: 24, color: "#8c9196" }}>
                     {isTableLoading ? "Loading product list..." : "No products found."}
                   </td>
                 </tr>
