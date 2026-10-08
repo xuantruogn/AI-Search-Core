@@ -3221,6 +3221,8 @@ let resultCacheStatus: "HIT" | "MISS" = "MISS";
               productId: `gid://shopify/Product/${product.id}`,
               handle: product.handle,
               score: product.score,
+              vectorSimilarity: product.vectorSimilarity,
+              primaryVectorSimilarity: product.primaryVectorSimilarity,
             })),
             proofBasedEmpty: proofBasedNoResult,
             analyzedQuery: preparedRewrite.query,
