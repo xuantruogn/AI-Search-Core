@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import {
-  classifyFamilyProduct, classifySoldItemLeaf, queryFamilyFromSource,
-  shopifyCategoryLeaf, shopifyCategoryIsClothing,
+  classifyFamilyProduct, classifyGenericFamilyProduct, classifySoldItemLeaf,
+  queryFamilyFromSource, sourceCanonicalFamilyFromSource,
+  shopifyCategoryLeaf, shopifyCategoryIsClothing, shopifyCategoryMatchesFamily,
 } from "../app/services/search/product-family-taxonomy.server";
 import {
   classifyPureFamilyLookup, classifyVerifiedFamilyMember,
@@ -40,6 +41,18 @@ assert.equal(queryFamilyFromSource("Áo"), "tops");
 assert.equal(queryFamilyFromSource("Xe"), "vehicles");
 assert.equal(queryFamilyFromSource("xe đạp"), "bicycle");
 assert.equal(queryFamilyFromSource("váy đỏ"), null);
+assert.equal(sourceCanonicalFamilyFromSource("giày"), "shoes");
+assert.equal(sourceCanonicalFamilyFromSource("túi xách"), "handbags");
+assert.equal(sourceCanonicalFamilyFromSource("trang sức"), "jewelry");
+assert.equal(sourceCanonicalFamilyFromSource("đồng hồ"), "watches");
+assert.equal(sourceCanonicalFamilyFromSource("điện thoại"), "phones");
+assert.equal(sourceCanonicalFamilyFromSource("laptop"), "laptops");
+assert.equal(sourceCanonicalFamilyFromSource("tai nghe"), "headphones");
+assert.equal(sourceCanonicalFamilyFromSource("máy ảnh"), "cameras");
+assert.equal(sourceCanonicalFamilyFromSource("nội thất"), "furniture");
+assert.equal(sourceCanonicalFamilyFromSource("mỹ phẩm"), "cosmetics");
+assert.equal(sourceCanonicalFamilyFromSource("đồ chơi"), "toys");
+assert.equal(sourceCanonicalFamilyFromSource("giày đỏ"), null);
 assert.equal(queryFamilyFromSource("áo cho bé"), null);
 assert.equal(classifyPureFamilyLookup(plan("váy"), rewrite)?.taxonomyGroup, "dress_or_skirt");
 const tagMisreadPlan = plan("váy");
@@ -52,6 +65,11 @@ assert.equal(
 assert.equal(classifyPureFamilyLookup(plan("áo", "shirt"), rewrite)?.taxonomyGroup, "tops");
 assert.equal(classifyPureFamilyLookup(plan("xe", "car", "DISCOVERY"), rewrite)?.taxonomyGroup, "vehicles");
 assert.equal(classifyPureFamilyLookup(plan("xe đạp", "bicycle"), rewrite)?.taxonomyGroup, "bicycle");
+assert.equal(classifyPureFamilyLookup(plan("giày", "shoes"), rewrite)?.canonical, "shoes");
+assert.equal(classifyPureFamilyLookup(plan("trang sức", "jewelry"), rewrite)?.canonical, "jewelry");
+assert.equal(classifyPureFamilyLookup(plan("điện thoại", "phones"), rewrite)?.canonical, "phones");
+assert.equal(classifyPureFamilyLookup(plan("laptop", "laptops"), rewrite)?.canonical, "laptops");
+assert.equal(classifyPureFamilyLookup(plan("nội thất", "furniture"), rewrite)?.canonical, "furniture");
 const size = plan("váy size M");
 size.measurements.push({ value: "M", name: "size", mode: "MUST" });
 assert.equal(classifyPureFamilyLookup(size, rewrite), null);
@@ -73,6 +91,43 @@ assert.equal(classifySoldItemLeaf("Women's Bicycle Helmet"), null);
 assert.equal(classifySoldItemLeaf("Toy Car"), null);
 assert.equal(classifySoldItemLeaf("Vintage Shirt"), "top");
 assert.equal(classifySoldItemLeaf("Road Bicycle"), "bicycle");
+
+assert.equal(shopifyCategoryMatchesFamily(
+  "Apparel & Accessories > Shoes > Athletic Shoes", "shoes"), true);
+assert.equal(shopifyCategoryMatchesFamily(
+  "Apparel & Accessories > Jewelry > Necklaces", "jewelry"), true);
+assert.equal(shopifyCategoryMatchesFamily(
+  "Electronics > Communications > Telephony > Mobile Phones", "phones"), true);
+assert.equal(shopifyCategoryMatchesFamily(
+  "Electronics > Computers > Laptops", "laptops"), true);
+assert.equal(shopifyCategoryMatchesFamily(
+  "Furniture > Chairs > Office Chairs", "furniture"), true);
+assert.equal(shopifyCategoryMatchesFamily(
+  "Health & Beauty > Personal Care > Cosmetics > Makeup", "cosmetics"), true);
+assert.equal(shopifyCategoryMatchesFamily(
+  "Toys & Games > Toys > Dolls", "toys"), true);
+assert.equal(shopifyCategoryMatchesFamily(
+  "Media > Books > Fiction Books", "books"), true);
+assert.equal(shopifyCategoryMatchesFamily(
+  "Electronics > Electronics Accessories > Mobile Phone Accessories", "phones"), false);
+assert.equal(shopifyCategoryMatchesFamily(
+  "Apparel & Accessories > Clothing Accessories > Shoe Accessories", "shoes"), false);
+
+for (const [requested, path] of [
+  ["shoes", "Apparel & Accessories > Shoes > Athletic Shoes"],
+  ["jewelry", "Apparel & Accessories > Jewelry > Necklaces"],
+  ["phones", "Electronics > Communications > Telephony > Mobile Phones"],
+  ["laptops", "Electronics > Computers > Laptops"],
+  ["furniture", "Furniture > Chairs > Office Chairs"],
+  ["cosmetics", "Health & Beauty > Personal Care > Cosmetics > Makeup"],
+  ["toys", "Toys & Games > Toys > Dolls"],
+  ["books", "Media > Books > Fiction Books"],
+] as const) {
+  const verdict = classifyGenericFamilyProduct({
+    canonicalTypes: [], merchantTypes: [], shopifyCategoryPaths: [path],
+  }, requested);
+  assert.equal(verdict.match, true, requested);
+}
 
 function category(path: string) {
   return { canonicalTypes: [], merchantTypes: [], shopifyCategoryPaths: [path] };
