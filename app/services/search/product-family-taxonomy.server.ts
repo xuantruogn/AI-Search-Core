@@ -376,12 +376,27 @@ function suffixMatches(actual: string, suffix: string) {
 export function classifySoldItemLeaf(raw: string): FamilyNode | null {
   const value = normalizeQueryText(raw);
   if (!value || NON_REAL_ITEM_MODIFIER.test(value)) return null;
-  for (const [node, heads] of Object.entries(FAMILY_HEADS) as Array<[FamilyNode, readonly string[]]>) {
-    if (heads.some((head) => suffixMatches(value, normalizeQueryText(head)))) {
-      return node;
+
+  const matches: Array<{ node: FamilyNode; head: string }> = [];
+  for (const [node, heads] of Object.entries(FAMILY_HEADS) as Array<
+    [FamilyNode, readonly string[]]
+  >) {
+    for (const rawHead of heads) {
+      const head = normalizeQueryText(rawHead);
+      if (suffixMatches(value, head)) matches.push({ node, head });
     }
   }
-  return null;
+  if (!matches.length) return null;
+
+  // The most specific sold-item phrase owns identity. This prevents a generic
+  // suffix such as "shoes" from stealing "running shoes", while still letting
+  // "vintage running shoes" resolve to sneaker.
+  matches.sort((left, right) =>
+    right.head.split(" ").length - left.head.split(" ").length ||
+    right.head.length - left.head.length ||
+    left.node.localeCompare(right.node)
+  );
+  return matches[0].node;
 }
 
 function shopifyCategoryParts(path: string) {
