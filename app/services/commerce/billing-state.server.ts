@@ -375,34 +375,41 @@ export async function ensureBillingV2State(shop: string) {
     subscription = null;
   }
 
-  // If the pointer is stale/missing, recover from an actual ACTIVE/FROZEN
-  // record, or from any still-valid CANCELLED subscription. Shopify marks
-  // subscriptions CANCELLED when the app is uninstalled, while the merchant
-  // can reinstall and use the already-paid remainder of the billing period.
-  if (
-    !subscription ||
-    (
-      subscription.status !== "ACTIVE" &&
-      subscription.status !== "FROZEN" &&
-      !(
-        subscription.status === "CANCELLED" &&
-        subscription.cancellationStatus === "NON_RENEWING" &&
-        subscription.currentPeriodEndsAt &&
-        subscription.currentPeriodEndsAt > new Date()
-      )
-    )
-  ) {
+  // Reinstall recovery is an entitlement decision, not a generic
+  // subscription-lifecycle decision.
+  //
+  // 1. A trial that was forfeited by uninstall is NEVER restored.
+  // 2. FROZEN is not restorable because Shopify uses it for non-payment.
+  // 3. A paid period is restorable only when the local reconciliation has
+  //    preserved PAID/RECOVERED payment evidence and the subscription still
+  //    has time remaining.
+  // 4. FULL refund is a hard stop. CANCELLED by itself is NOT a refund.
+  //
+  // The provider's actual charge/refund ledger is still reconciled separately;
+  // these fields are the local financial evidence used by the entitlement
+  // engine until that provider ledger is available.
+  const now = new Date();
+  const hasPaidEntitlementEvidence =
+    subscription &&
+    subscription.trialStatus !== "ACTIVE" &&
+    subscription.trialStatus !== "CANCELLED" &&
+    (subscription.paymentStatus === "PAID" ||
+      subscription.paymentStatus === "RECOVERED") &&
+    subscription.refundStatus !== "FULL" &&
+    subscription.currentPeriodEndsAt !== null &&
+    subscription.currentPeriodEndsAt > now &&
+    (subscription.status === "ACTIVE" ||
+      subscription.status === "CANCELLED");
+
+  if (!hasPaidEntitlementEvidence) {
     subscription = await db.billingSubscription.findFirst({
       where: {
         shop,
-        OR: [
-          { status: "ACTIVE" },
-          { status: "FROZEN" },
-          {
-            status: "CANCELLED",
-            currentPeriodEndsAt: { gt: new Date() },
-          },
-        ],
+        refundStatus: { not: "FULL" },
+        paymentStatus: { in: ["PAID", "RECOVERED"] },
+        trialStatus: { notIn: ["ACTIVE", "CANCELLED"] },
+        currentPeriodEndsAt: { gt: now },
+        status: { in: ["ACTIVE", "CANCELLED"] },
       },
       orderBy: { updatedAt: "desc" },
     });
@@ -812,6 +819,7 @@ export type BillingBackendContract = {
     frozenAt: string | null;
     lastSyncedAt: string | null;
     charge: null | {
+      shopifyChargeId: string | null;
       status: BillingChargeStatus;
       amount: number | null;
       currency: string | null;
@@ -909,6 +917,7 @@ export async function emitBillingBackendContract({
         },
         orderBy: { billingPeriodStart: "desc" },
         select: {
+          shopifyChargeId: true,
           status: true,
           amount: true,
           currency: true,
@@ -1020,6 +1029,7 @@ export async function emitBillingBackendContract({
       lastSyncedAt: iso(snapshot.lastSyncedAt),
       charge: currentCharge
         ? {
+            shopifyChargeId: currentCharge.shopifyChargeId ?? null,
             status: currentCharge.status,
             amount: currentCharge.amount ? Number(currentCharge.amount) : null,
             currency: currentCharge.currency ?? null,
