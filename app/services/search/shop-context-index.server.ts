@@ -907,11 +907,13 @@ export function shouldEnforceDirectIdentity(args: {
   retrievalMode: string;
   signals: Array<{ fallback?: boolean }>;
   hasIdentityMatch: boolean;
+  hasSourceOwnedTargetIdentity?: boolean;
 }): boolean {
   // Raw-query fallback is a recall hint when the planner found no typed
   // identity. It must not turn broad terms such as "clothing" into a leaf
   // product-type hard filter.
-  return args.retrievalMode === "DIRECT" &&
+  return (args.retrievalMode === "DIRECT" ||
+      (args.retrievalMode === "COMPLEMENT" && args.hasSourceOwnedTargetIdentity === true)) &&
     args.hasIdentityMatch &&
     args.signals.some((signal) => signal.fallback !== true);
 }
@@ -3533,14 +3535,15 @@ export async function filterResultsByExplicitGender<
   // They must never become a hard eligibility filter: a product may satisfy
   // the shopper need without storing every word from an expansion phrase.
   const hasIdentityMatch = scored.some((item) => item.identityMatch >= 0.5);
+  const hasSourceOwnedTargetIdentity =
+    (currentRetrievalMode === "DIRECT" || currentRetrievalMode === "COMPLEMENT") &&
+    (rewrite.analysis.sourceOwnedTargetIdentities?.length ?? 0) > 0;
   const directIdentityGrounded = shouldEnforceDirectIdentity({
     retrievalMode: currentRetrievalMode,
     signals: identitySignals,
     hasIdentityMatch,
+    hasSourceOwnedTargetIdentity,
   });
-  const hasSourceOwnedTargetIdentity =
-    currentRetrievalMode === "DIRECT" &&
-    (rewrite.analysis.sourceOwnedTargetIdentities?.length ?? 0) > 0;
   const hasFamilyCategoryMatch =
     familyCategorySignals.length > 0 &&
     scored.some((item) => item.categoryMatch >= 0.75);
@@ -3721,11 +3724,9 @@ export async function filterResultsByExplicitGender<
     return [{
       ...result,
       score: typedRerankScore,
-      // DIRECT search uses a tiered internal sort: first keep strongly grounded
-      // product identity, then prefer exact merchant/source facets, and only
-      // then compare semantic/vector score. This keeps ordinary color/material
-      // soft (nearby alternatives remain) while making an exact typed facet
-      // reliably outrank nearby shades/styles within the same product family.
+      // Named target identity owns the first tier, including COMPLEMENT.
+      // Primary full Demand then precedes soft source facets and lane boosts;
+      // reference ownership and exact exclusions were validated above.
       _identityTier:
         directIdentityGrounded && item.identityMatch >= 0.75
           ? 2
@@ -3748,9 +3749,9 @@ export async function filterResultsByExplicitGender<
       // The primary vector is the full Supply↔Demand semantic assessment.
       // Keep it distinct from branch recall and PSF lexical overlap.
       _jointDemandEvidence:
-        currentRetrievalMode === "DISCOVERY"
+        Number.isFinite(item.primaryDemandVectorSimilarity)
           ? item.primaryDemandVectorSimilarity
-          : 0,
+          : -1,
       _preferredFacetMatches: item.preferredFacetMatches,
       _sourceDiscoveryTier:
         currentRetrievalMode === "DISCOVERY" && item.sourceDiscoveryGrounding
@@ -3779,10 +3780,8 @@ export async function filterResultsByExplicitGender<
   });
   filtered.sort((left, right) =>
     right._identityTier - left._identityTier ||
+    right._jointDemandEvidence - left._jointDemandEvidence ||
     right._directSourceFacetTier - left._directSourceFacetTier ||
-    (currentRetrievalMode === "DISCOVERY"
-      ? right._jointDemandEvidence - left._jointDemandEvidence
-      : 0) ||
     (currentRetrievalMode === "DISCOVERY" && sourceCoverageSignals.length >= 2
       ? Number(right._sourceNeedCoverage === 1) - Number(left._sourceNeedCoverage === 1)
       : 0) ||

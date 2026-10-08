@@ -12,9 +12,9 @@ const direct = applyFinalRelevanceCutoff({
   semanticThreshold: 0.35,
   results: [
     { ...base("exact"), lexicalMatchType: "EXACT_TITLE" as const, retrievalSources: ["LEXICAL" as const] },
-    { ...base("semantic-good"), vectorSimilarity: 0.42, retrievalSources: ["SEMANTIC" as const] },
-    { ...base("semantic-weak"), vectorSimilarity: 0.31, retrievalSources: ["SEMANTIC" as const] },
-    { ...base("hybrid"), vectorSimilarity: 0.37, sparseScore: 3, sparseRank: 7, retrievalSources: ["SEMANTIC" as const, "SPARSE" as const] },
+    { ...base("semantic-good"), vectorSimilarity: 0.42, primaryVectorSimilarity: 0.42, retrievalSources: ["SEMANTIC" as const] },
+    { ...base("semantic-weak"), vectorSimilarity: 0.31, primaryVectorSimilarity: 0.31, retrievalSources: ["SEMANTIC" as const] },
+    { ...base("hybrid"), vectorSimilarity: 0.37, primaryVectorSimilarity: 0.37, sparseScore: 3, sparseRank: 7, retrievalSources: ["SEMANTIC" as const, "SPARSE" as const] },
     { ...base("sparse-top"), sparseScore: 10, sparseRank: 1, retrievalSources: ["SPARSE" as const] },
     { ...base("sparse-tail"), sparseScore: 2, sparseRank: 30, retrievalSources: ["SPARSE" as const] },
     { ...base("closed-world"), structuredAnchorKinds: ["IDENTIFIER"], retrievalSources: ["STRUCTURED" as const] },
@@ -81,7 +81,7 @@ const discoveryJointDemand = applyFinalRelevanceCutoff({
 });
 assert.deepEqual(
   discoveryJointDemand.map((r: any) => r.productId),
-  ["joint-primary", "exact-authority"],
+  ["joint-primary"],
   "DISCOVERY sparse/branch agreement cannot replace full primary Supply↔Demand evidence",
 );
 
@@ -120,8 +120,8 @@ const complementJointDemand = applyFinalRelevanceCutoff({
 });
 assert.deepEqual(
   complementJointDemand.map((r: any) => r.productId),
-  ["relation-primary", "relation-exact"],
-  "COMPLEMENT requires primary relation/Demand evidence unless exact authority independently proves the result",
+  ["relation-primary"],
+  "COMPLEMENT requires primary relation/Demand evidence ; exact compatibility alone cannot prove the relation",
 );
 
 console.log("PASS: final relevance cutoff preserves authority/semantic evidence and removes weak sparse tail");

@@ -13,9 +13,9 @@ import { normalizeQueryText } from "./deterministic-query-parser.server";
 import { sourceProductTypeOwnsTarget } from "./query-planner.server";
 
 export const QUERY_SEMANTIC_PROFILE_VERSION =
-  "query-semantic-profile-v5-soft-semantic-polarity";
+  "query-semantic-profile-v6-parser-target-authority";
 export const QUERY_EMBEDDING_PIPELINE_VERSION =
-  "semantic-expansion-v16-source-role-joint-demand";
+  "semantic-expansion-v17-source-authority-full-demand";
 
 export type QuerySemanticProfile = {
   rawPlan: QueryPlan;
@@ -25,25 +25,8 @@ export type QuerySemanticProfile = {
   embeddingInput: string;
 };
 
-const GENERIC_DISCOVERY_FAMILIES = new Set([
-  "apparel",
-  "clothing",
-  "fashion",
-  "gear",
-  "equipment",
-  "accessory",
-  "accessories",
-  "outfit",
-  "outfits",
-  "products",
-  "items",
-]);
-
-export function isGenericDiscoveryFamily(value: string) {
-  const normalized = normalizeQueryText(value);
-  return Boolean(normalized) &&
-    GENERIC_DISCOVERY_FAMILIES.has(normalized.split(" ").at(-1)!);
-}
+export { isGenericDiscoveryFamily } from "./query-family.server";
+import { isGenericDiscoveryFamily } from "./query-family.server";
 
 function buildFallbackDiscoverySemanticTerms(plan: QueryPlan) {
   const allowedFields = new Set([
@@ -730,7 +713,13 @@ export function buildQuerySemanticProfile(args: {
 
   const targetSemanticMustTerms =
     safeLlm.analysis.semanticMustTerms ?? [];
-  const sourceOwnedDemandIdentities = sourceOwnedSemanticDemandIdentities({
+  const parserOwnedTargetIdentities = args.rawPlan.identities
+    .filter((item) => item.mode === "MUST" && item.confidence >= 0.85 &&
+      ["CODE", "DICTIONARY"].includes(item.source))
+    .map((item) => item.value);
+  const sourceOwnedDemandIdentities = [...new Set([
+    ...parserOwnedTargetIdentities,
+    ...sourceOwnedSemanticDemandIdentities({
     originalQuery: args.originalQuery,
     identities: safeLlm.analysis.semanticDemand?.identity ?? [],
     mandatoryConcepts: safeLlm.analysis.semanticMandatoryConcepts ?? [],
@@ -740,7 +729,10 @@ export function buildQuerySemanticProfile(args: {
       ...(safeLlm.analysis.semanticDemand?.qualities ?? []),
       ...(safeLlm.analysis.semanticDemand?.styles ?? []),
     ],
-  });
+    }),
+  ])].filter((value, index, values) => values.findIndex((candidate) =>
+    normalizeQueryText(candidate) === normalizeQueryText(value),
+  ) === index);
   const sourceOwnedExactConstraints = sourceOwnedSemanticExactConstraints({
     originalQuery: args.originalQuery,
     exactConstraints: safeLlm.analysis.semanticDemand?.exactConstraints ?? [],
@@ -938,6 +930,14 @@ export function buildQuerySemanticProfile(args: {
     analysis: {
       ...mergedRewriteBaseWithDemand.analysis,
       retrievalMode,
+      semanticDemand: mergedRewriteBaseWithDemand.analysis.semanticDemand
+        ? {
+            ...mergedRewriteBaseWithDemand.analysis.semanticDemand,
+            // Parser-owned source target cannot be revoked by LLM omission or
+            // replaced by an expanded product class. Preserve semantic axes.
+            identity: sourceOwnedDemandIdentities,
+          }
+        : undefined,
       referenceTerms:
         retrievalMode === "COMPLEMENT"
           ? [...new Set(trustedReferenceTerms)]
@@ -949,16 +949,15 @@ export function buildQuerySemanticProfile(args: {
     rawPlan: args.rawPlan,
     value: mergedRewrite.query,
   });
-  const embeddingInput = stripReferenceScopedFacetsFromEmbedding({
-    originalQuery: args.originalQuery,
-    rawPlan: args.rawPlan,
-    value: composeFacetEmbeddingInput(
-      embeddingSeed,
-      finalPlan,
-      safeExpandedPlan,
-      safeLlm,
-    ),
-  });
+  // Reference facets are excluded from target fact authority, not from full
+  // Demand meaning. Keep the source relation (including reference color/size)
+  // in the primary vector; composeFacetEmbeddingInput already preserves roles.
+  const embeddingInput = composeFacetEmbeddingInput(
+    embeddingSeed,
+    finalPlan,
+    safeExpandedPlan,
+    mergedRewrite,
+  );
 
   return {
     rawPlan: args.rawPlan,
