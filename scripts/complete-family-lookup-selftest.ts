@@ -31,7 +31,7 @@ assert.deepEqual(classifyPureFamilyLookup(makePlan("bicycle", "bicycle"), makeRe
 assert.deepEqual(classifyPureFamilyLookup(
   makePlan("clothes", "clothes", "DISCOVERY"),
   makeRewrite("clothes", "clothes"),
-), { canonical: "clothing", broadCategory: true });
+), { canonical: "clothing", broadCategory: false, taxonomyGroup: "clothing" });
 
 const translatedPlan = makePlan("Xe đạp", "bicycle");
 translatedPlan.identities = [];
