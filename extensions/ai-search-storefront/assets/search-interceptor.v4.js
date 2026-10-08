@@ -1948,7 +1948,9 @@
       /^gid:\/\/shopify\/ProductVariant\/(\d+)$/,
     );
     if (!match || !(card instanceof Element)) return;
-    for (const anchor of card.querySelectorAll('a[href*="/products/"]')) {
+    const anchors = Array.from(card.querySelectorAll('a[href*="/products/"]'));
+    if (card.matches('a[href*="/products/"]')) anchors.unshift(card);
+    for (const anchor of anchors) {
       try {
         const url = new URL(anchor.href, location.origin);
         if (url.origin !== location.origin ||
