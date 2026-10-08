@@ -18,7 +18,7 @@ function pageHtml(options = {}) {
       '<div class="product-count" role="status"><span id="ProductCount">245 kết quả</span></div>' +
       '<div class="facets__filters"><span data-facet-filter-count>Màu (245)</span></div>'
     : "";
-  return `<!doctype html><html lang="${options.multipleCounters ? "vi" : "en"}"><head><script>
+  return `<!doctype html><html lang="${options.multipleCounters ? "vi" : "en"}"><head><meta charset="utf-8"><script>
     window.AI_SEARCH_ENGINE="v4";
     window.AI_SEARCH_CONFIG={version:4,theme_map_version:4,theme_id:"1",search_url:"/search",search_endpoint:"/apps/ai-search"};
   </script><script src="/runtime.js" defer></script></head><body>
