@@ -74,6 +74,29 @@ export function classifyPureFamilyLookup(
       broadCategory: false,
     };
   }
+
+  // Catalog-owned exact family: if the complete shopper phrase is a typed
+  // PRODUCT_TYPE/CATEGORY already present in this shop, it owns identity even
+  // when an LLM invents soft style/use-case prose on a later pass.
+  const exactCatalogFamilies = [...new Set(
+    plan.resolvedSegments
+      .filter((span) =>
+        ["PRODUCT_TYPE", "CATEGORY"].includes(span.field) &&
+        normalizeQueryText(span.text) === source &&
+        (span.confidence ?? 0) >= 0.84,
+      )
+      .map((span) => normalizeQueryText(span.canonicalValue))
+      .filter(Boolean),
+  )];
+  if (exactCatalogFamilies.length === 1) {
+    const canonical = exactCatalogFamilies[0] === "clothes"
+      ? "clothing" : exactCatalogFamilies[0];
+    return {
+      canonical,
+      broadCategory: BROAD_CATEGORY_IDENTITIES.has(canonical),
+    };
+  }
+
   // The remaining families are not exact source-owned bridge phrases, so
   // a dictionary/LLM modifier can still mean the shopper supplied constraints.
   // For exact "váy"/"áo"/"xe" the original source contains only the family;
