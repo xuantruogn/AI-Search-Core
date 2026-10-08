@@ -720,17 +720,20 @@ export async function replaceProductShopContextWithTerms({
   productId,
   analysis,
   terms,
+  variants,
 }: {
   shop: string;
   productId: string;
   analysis: ProductSemanticAnalysis | null;
   terms: ReturnType<typeof collectProductContextTerms>;
+  variants?: ProductForIndex["variants"];
 }) {
   const count = await replaceProductSemanticProfile({
     shop,
     productId,
     analysis,
     terms,
+    variants,
   });
 
   invalidateShopContextCaches(shop);
@@ -753,6 +756,7 @@ export async function replaceProductShopContext({
     productId: product.id,
     analysis,
     terms,
+    variants: product.variants,
   });
 }
 
