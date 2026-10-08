@@ -42,6 +42,13 @@ assert.equal(queryFamilyFromSource("xe đạp"), "bicycle");
 assert.equal(queryFamilyFromSource("váy đỏ"), null);
 assert.equal(queryFamilyFromSource("áo cho bé"), null);
 assert.equal(classifyPureFamilyLookup(plan("váy"), rewrite)?.taxonomyGroup, "dress_or_skirt");
+const tagMisreadPlan = plan("váy");
+tagMisreadPlan.attributes.push({ name: "attribute", value: "váy", mode: "SHOULD" });
+assert.equal(
+  classifyPureFamilyLookup(tagMisreadPlan, rewrite, tagMisreadPlan)?.taxonomyGroup,
+  "dress_or_skirt",
+  "An unrelated catalog TAG misread as ATTRIBUTE must not suppress a standalone family",
+);
 assert.equal(classifyPureFamilyLookup(plan("áo", "shirt"), rewrite)?.taxonomyGroup, "tops");
 assert.equal(classifyPureFamilyLookup(plan("xe", "car", "DISCOVERY"), rewrite)?.taxonomyGroup, "vehicles");
 assert.equal(classifyPureFamilyLookup(plan("xe đạp", "bicycle"), rewrite)?.taxonomyGroup, "bicycle");
