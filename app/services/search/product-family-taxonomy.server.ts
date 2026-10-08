@@ -1,4 +1,4 @@
-import { normalizeQueryText } from "./deterministic-query-parser.server";
+import { normalizeQueryText, normalizeUnicodeQueryText } from "./deterministic-query-parser.server";
 
 /**
  * Small, explicit taxonomy bridge for source-owned broad nouns. This is NOT
@@ -95,16 +95,12 @@ const SOURCE_CANONICAL_FAMILIES: Record<string, string> = {
   "tui": "bags",
   "tui xach": "handbags",
   "ba lo": "backpacks",
-  "vi": "wallets",
   "trang suc": "jewelry",
   "day chuyen": "necklaces",
-  "nhan": "rings",
   "vong tay": "bracelets",
   "khuyen tai": "earrings",
   "dong ho": "watches",
-  "kinh": "eyewear",
   "kinh mat": "eyewear",
-  "mu": "hats",
   "dien thoai": "phones",
   "dien thoai di dong": "mobile phones",
   "may tinh": "computers",
@@ -116,11 +112,8 @@ const SOURCE_CANONICAL_FAMILIES: Record<string, string> = {
   "tivi": "televisions",
   "tv": "televisions",
   "noi that": "furniture",
-  "ghe": "chairs",
-  "ban": "tables",
   "giuong": "beds",
   "nem": "mattresses",
-  "den": "lighting",
   "my pham": "cosmetics",
   "cham soc da": "skin care",
   "nuoc hoa": "fragrances",
@@ -130,8 +123,22 @@ const SOURCE_CANONICAL_FAMILIES: Record<string, string> = {
   "balo": "backpacks",
 };
 
+/** Accent-preserving aliases for short Vietnamese words that collide when folded. */
+const SOURCE_CANONICAL_FAMILIES_UNICODE: Record<string, string> = {
+  "ví": "wallets",
+  "nhẫn": "rings",
+  "mũ": "hats",
+  "kính": "eyewear",
+  "bàn": "tables",
+  "ghế": "chairs",
+  "đèn": "lighting",
+};
+
 export function sourceCanonicalFamilyFromSource(query: string): string | null {
-  return SOURCE_CANONICAL_FAMILIES[normalizeQueryText(query)] ?? null;
+  const unicode = normalizeUnicodeQueryText(query);
+  return SOURCE_CANONICAL_FAMILIES_UNICODE[unicode] ??
+    SOURCE_CANONICAL_FAMILIES[normalizeQueryText(query)] ??
+    null;
 }
 
 function suffixMatches(actual: string, suffix: string) {
