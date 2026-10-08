@@ -66,6 +66,32 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const callbackChargeId =
     billingUrl.searchParams.get("charge_id")?.trim() || null;
 
+  if (!isBillingCallback) {
+    try {
+      const refreshed = await refreshShopifyAppPricingSubscription({
+        shop: session.shop,
+        admin,
+        source: "RECONCILIATION",
+      });
+
+      if (refreshed.subscription.shopifySubscriptionId) {
+        await reconcileShopifySubscriptionFromAdmin({
+          shop: session.shop,
+          admin,
+          expectedSubscriptionGid:
+            refreshed.subscription.shopifySubscriptionId,
+          source: "RECONCILIATION",
+        });
+      }
+    } catch (error) {
+      console.error("[BILLING REINSTALL] billing-page Shopify reconciliation failed", {
+        debugId,
+        shop: session.shop,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
   // The confirmation redirect is a synchronous billing boundary. Do not wait
   // for the webhook/background commercial reconcile to make the UI correct.
   // Re-query Shopify Admin here, persist the confirmed billing state, then
