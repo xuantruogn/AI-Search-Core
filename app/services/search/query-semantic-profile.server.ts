@@ -1018,12 +1018,23 @@ export function buildQuerySemanticProfile(args: {
   // Reference facets are excluded from target fact authority, not from full
   // Demand meaning. Keep the source relation (including reference color/size)
   // in the primary vector; composeFacetEmbeddingInput already preserves roles.
+  // A same-language shopper reference is already canonical and carries exact
+  // qualifiers the LLM might omit ("black skirt"). Across languages never send
+  // untranslated source references into the dense query: use LLM-translated
+  // referenceTerms while retaining the full original separately for provenance.
+  const sourceLanguage = safeLlm.analysis.detectedLanguage?.toLowerCase().split("-")[0];
+  const shopLanguage = safeLlm.analysis.shopLanguage?.toLowerCase().split("-")[0];
+  const referenceTermsForDense = safeLlm.fallbackReason
+    ? []
+    : sourceLanguage && shopLanguage && sourceLanguage === shopLanguage
+      ? trustedReferenceTerms
+      : (safeLlm.analysis.referenceTerms ?? []);
   const embeddingInput = composeFacetEmbeddingInput(
     embeddingSeed,
     finalPlan,
     safeExpandedPlan,
     mergedRewrite,
-    !safeLlm.fallbackReason ? (safeLlm.analysis.referenceTerms ?? []) : [],
+    referenceTermsForDense,
   );
 
   return {
