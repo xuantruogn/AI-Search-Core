@@ -2193,8 +2193,9 @@
               productHandleFromCard(
                 card,
               ),
-            matchedVariantId:
-              plan.matched_variants?.[targetProductIds[index]] || undefined,
+            ...(plan.matched_variants?.[targetProductIds[index]]
+              ? { matchedVariantId: plan.matched_variants[targetProductIds[index]] }
+              : {}),
           };
         },
       );
