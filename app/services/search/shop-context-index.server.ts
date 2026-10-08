@@ -923,6 +923,13 @@ async function loadShopContext(shop: string): Promise<LoadedShopContext> {
   }
 }
 
+/** A single revision-keyed catalog aggregation is shared with the query
+ * dictionary. Both consumers reuse term postings without a second JSON scan.
+ * The dictionary should never mutate these source-owned term sets. */
+export async function getShopContextCatalogTerms(shop: string): Promise<ContextTerm[]> {
+  return (await loadShopContext(shop)).terms;
+}
+
 export async function warmShopContext(shop: string) {
   await loadShopContext(shop);
 }
