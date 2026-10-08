@@ -158,4 +158,72 @@ assert.equal(actual.scannedProfiles, 1200);
 assert.equal(actual.categoryMatches, 800);
 assert.equal(new Set(actual.results.map((x) => x.productId)).size, 800);
 
-console.log("PASS: source-owned family taxonomy, cross-language Dress/Skirt union, Shopify category and >500 coverage");
+
+
+for (const [query, group] of [
+  ["giày", "footwear"], ["túi xách", "bags"], ["trang sức", "jewelry"],
+  ["đồng hồ", "watches"], ["điện thoại", "phones"], ["máy tính", "computers"],
+  ["máy ảnh", "cameras"], ["nội thất", "furniture"], ["mỹ phẩm", "beauty"],
+  ["chăm sóc da", "skincare"], ["đồ chơi", "toys"], ["sách", "books"],
+  ["đồ cho thú cưng", "pet_supplies"], ["thực phẩm", "grocery"],
+] as const) {
+  assert.equal(queryFamilyFromSource(query), group, query);
+}
+
+for (const [path, group] of [
+  ["Apparel & Accessories > Shoes > Sneakers", "footwear"],
+  ["Apparel & Accessories > Handbags, Wallets & Cases > Handbags", "bags"],
+  ["Apparel & Accessories > Jewelry > Rings", "jewelry"],
+  ["Apparel & Accessories > Watches", "watches"],
+  ["Electronics > Communications > Telephony > Mobile Phones", "phones"],
+  ["Electronics > Computers > Laptops", "computers"],
+  ["Electronics > Cameras & Optics > Cameras > Digital Cameras", "cameras"],
+  ["Home & Garden > Furniture > Chairs", "furniture"],
+  ["Health & Beauty > Personal Care > Cosmetics > Skin Care", "skincare"],
+  ["Toys & Games > Toys > Dolls", "toys"],
+  ["Media > Books", "books"],
+  ["Animals & Pet Supplies > Pet Supplies > Pet Beds", "pet_supplies"],
+  ["Food, Beverages & Tobacco > Food Items > Snacks", "grocery"],
+] as const) {
+  assert.equal(classifyFamilyProduct(category(path), group as any).match, true, path);
+}
+
+assert.equal(classifyFamilyProduct(category(
+  "Electronics > Electronics Accessories > Mobile Phone Cases"), "phones").match, false);
+assert.equal(classifyFamilyProduct(category(
+  "Apparel & Accessories > Jewelry Accessories > Jewelry Cleaners"), "jewelry").match, false);
+assert.equal(classifyFamilyProduct(category(
+  "Animals & Pet Supplies > Pet Supplies > Pet Food"), "grocery").match, false,
+  "Pet food remains pet supplies rather than grocery");
+
+const genericCategoryPlan = plan("snowboards", "snowboards");
+genericCategoryPlan.resolvedSegments = [{
+  text: "snowboards", canonicalValue: "Snowboards", field: "CATEGORY",
+  confidence: 1, start: 0, end: 1,
+}];
+const genericCategoryRewrite = {
+  analysis: {
+    semanticMandatoryConcepts: [{ source: "snowboards", target: "Snowboards" }],
+    semanticDemand: {
+      identity: ["Snowboards"], desiredOutcomes: [], useCases: [], contexts: [],
+      qualities: [], audience: [], styles: [], exactConstraints: [], negativeConstraints: [],
+    },
+  },
+} as any;
+const genericTarget = classifyPureFamilyLookup(genericCategoryPlan, genericCategoryRewrite)!;
+assert.equal(genericTarget.categoryTarget, true);
+assert.equal(
+  classifyVerifiedFamilyMember([
+    { kind: "SHOPIFY_CATEGORY_PATH", value: "Sporting Goods > Winter Sports > Snowboarding > Snowboards" },
+  ], genericTarget),
+  "CATEGORY",
+);
+assert.equal(
+  classifyVerifiedFamilyMember([
+    { kind: "SHOPIFY_CATEGORY_PATH", value: "Sporting Goods > Winter Sports > Snowboarding > Snowboard Bindings" },
+  ], genericTarget),
+  null,
+  "A sibling/accessory category must not inherit Snowboards",
+);
+
+console.log("PASS: generalized source-owned family taxonomy, Shopify hierarchy and >500 coverage");
