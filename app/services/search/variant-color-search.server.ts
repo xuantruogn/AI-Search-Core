@@ -7,13 +7,8 @@ import {
 } from "./product-semantic-profile.server";
 import { parseDeterministicQuery } from "./deterministic-query-parser.server";
 
-const COLOR_NAMES = new Set([
-  "red", "blue", "green", "black", "white", "yellow", "pink", "purple",
-  "orange", "brown", "grey", "gray", "beige", "navy", "burgundy",
-  "gold", "silver", "cream", "ivory", "khaki", "teal", "turquoise",
-]);
 const TRANSLATED_COLORS: Record<string, string> = {
-  "do": "red", "mau do": "red", "đỏ": "red",
+  "do": "red", "đo": "red", "mau do": "red", "mau đo": "red",
   "den": "black", "mau den": "black",
   "trang": "white", "mau trang": "white",
   "xanh duong": "blue", "xanh da troi": "blue",
@@ -55,9 +50,22 @@ export function requestedVariantFacets(
     }).context?.typedColorVocabulary ?? [],
   );
   if (!vocabulary.size) return null;
+  // Trust only source-owned catalog color signals. The palette is built
+  // from typed Color options, so store-specific shades (olive, cherry, teal)
+  // must work without a hard-coded English color whitelist.
+  const sourceBrandTerms = (rewrite.planning?.resolvedSegments ?? [])
+    .filter((segment) => ["BRAND", "VENDOR"].includes(segment.field))
+    .map((segment) => normalizeSemanticValue(segment.canonicalValue));
+  const sourceColorSegments = (rewrite.planning?.resolvedSegments ?? [])
+    .filter((segment) => segment.field === "ATTRIBUTE")
+    .map((segment) => normalizeSemanticValue(segment.canonicalValue));
   const colors = currentTargetColors(originalQuery, rewrite, vocabulary)
-    .map(canonicalColor)
-    .filter((color) => COLOR_NAMES.has(color));
+    .filter((raw) => {
+      const normalized = normalizeSemanticValue(raw);
+      return !sourceBrandTerms.includes(normalized) ||
+        sourceColorSegments.includes(normalized);
+    })
+    .map(canonicalColor);
   const distinct = [...new Set(colors)];
   if (distinct.length !== 1) return null;
   // A negated color is an exclusion, not a requested variant selection.
