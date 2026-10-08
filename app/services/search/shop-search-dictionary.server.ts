@@ -1,6 +1,5 @@
 import { normalizeQueryText } from "./deterministic-query-parser.server";
 import { createHash } from "node:crypto";
-import { scanShopSemanticProfiles } from "./product-semantic-profile.server";
 import { getSearchCatalogRevisionCached } from "./search-catalog-revision.server";
 
 export type DictionaryField =
@@ -198,66 +197,55 @@ async function loadShopSearchDictionaryUncached(
   }
 
   const grouped = new Map<string, DictionaryEntry & { productIds: Set<string> }>();
-  let newestTimestamp = 0;
 
-  // Stream one JSON profile at a time. A large shop can have millions of
-  // flattened semantic terms; materializing all of them just to build a
-  // dictionary creates an avoidable memory spike on cache miss.
-  await scanShopSemanticProfiles(
-    shop,
-    ({ productId, terms, updatedAt }) => {
-      newestTimestamp = Math.max(newestTimestamp, updatedAt.getTime());
+  // Shop Context already aggregates the same searchable semantic profiles by
+  // (kind, normalizedValue), including source-owned product ID postings. Build
+  // the dictionary from that revision-keyed snapshot instead of starting a
+  // second full catalog scan. Dynamic import avoids the invalidation cycle
+  // between the dictionary and Shop Context modules.
+  const { getShopContextCatalogTerms } = await import("./shop-context-index.server");
+  const catalogTerms = await getShopContextCatalogTerms(shop);
+  for (const row of catalogTerms) {
+    const field = mapKind(row.kind);
+    if (!field) continue;
+    const normalized = normalizeQueryText(row.normalizedValue || row.value);
+    if (!normalized) continue;
 
-      for (const row of terms) {
-        const field = mapKind(row.kind);
-        if (!field) continue;
-        const normalized = normalizeQueryText(
-          row.normalizedValue || row.value,
-        );
-        if (!normalized) continue;
+    const canonical = row.value;
+    const canonicalNormalized = normalizeQueryText(canonical);
+    const key = `${field}\u0000${normalized}\u0000${canonicalNormalized}`;
+    const existing = grouped.get(key);
+    if (existing) {
+      for (const productId of row.productIds) existing.productIds.add(productId);
+      continue;
+    }
 
-        // Keep the semantic canonical value intact. Shopify productType is a
-        // separate merchant taxonomy signal and may be broad.
-        const canonical = row.value;
-        const canonicalNormalized = normalizeQueryText(canonical);
-        const key = `${field}\u0000${normalized}\u0000${canonicalNormalized}`;
-        const existing = grouped.get(key);
-        if (existing) {
-          existing.productIds.add(productId);
-          continue;
-        }
-
-        grouped.set(key, {
-          normalized,
-          canonical,
-          aliases: [],
-          field,
-          productCount: 1,
-          productIds: new Set([productId]),
-          conceptId: createHash("sha256")
-            .update(
-              `${shop}\u0000${field}\u0000${canonicalNormalized}`,
-              "utf8",
-            )
-            .digest("hex")
-            .slice(0, 24),
-          aliasLanguage: null,
-          source: [
-            "PRODUCT_TYPE",
-            "VENDOR",
-            "SKU",
-            "BARCODE",
-            "TAG",
-            "VARIANT",
-            "VARIANT_OPTION",
-          ].includes(row.kind)
-            ? "SHOPIFY"
-            : "ENRICHMENT",
-          confidence: confidenceForKind(row.kind, normalized),
-        });
-      }
-    },
-  );
+    grouped.set(key, {
+      normalized,
+      canonical,
+      aliases: [],
+      field,
+      productCount: row.productCount,
+      productIds: new Set(row.productIds),
+      conceptId: createHash("sha256")
+        .update(`${shop}\u0000${field}\u0000${canonicalNormalized}`, "utf8")
+        .digest("hex")
+        .slice(0, 24),
+      aliasLanguage: null,
+      source: [
+        "PRODUCT_TYPE",
+        "VENDOR",
+        "SKU",
+        "BARCODE",
+        "TAG",
+        "VARIANT",
+        "VARIANT_OPTION",
+      ].includes(row.kind)
+        ? "SHOPIFY"
+        : "ENRICHMENT",
+      confidence: confidenceForKind(row.kind, normalized),
+    });
+  }
 
   const entries = [...grouped.values()].map(({ productIds, ...entry }) => ({
     ...entry,
@@ -266,7 +254,7 @@ async function loadShopSearchDictionaryUncached(
   const value: ShopSearchDictionary = {
     shop,
     entries,
-    version: `context-v3-revision:${catalogRevision}:${entries.length}:${newestTimestamp}`,
+    version: `context-v4-shared-revision:${catalogRevision}:${entries.length}`,
     loadedAt: Date.now(),
     matchIndex: buildMatchIndex(entries),
   };
