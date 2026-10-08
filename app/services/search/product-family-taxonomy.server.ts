@@ -1,4 +1,4 @@
-import { normalizeQueryText } from "./deterministic-query-parser.server";
+import { normalizeQueryText, normalizeUnicodeQueryText } from "./deterministic-query-parser.server";
 
 /**
  * Small, explicit taxonomy bridge for source-owned broad nouns. This is NOT
@@ -75,6 +75,72 @@ export function queryFamilyFromSource(query: string): FamilyGroup | null {
   return QUERY_FAMILIES[normalizeQueryText(query)] ?? null;
 }
 
+/**
+ * Canonical bridges only for common exact standalone Vietnamese family nouns.
+ * These do not establish membership; they only name the target family.
+ * Product membership still requires Shopify taxonomy/canonical product type.
+ */
+const SOURCE_CANONICAL_FAMILIES: Record<string, string> = {
+  "ao khoac": "jacket",
+  "ao so mi": "shirt",
+  "ao thun": "t shirt",
+  "ao len": "sweater",
+  "ao ni": "sweatshirt",
+  "quan": "pants",
+  "quan dai": "pants",
+  "quan short": "shorts",
+  "quan dui": "shorts",
+  "giay": "shoes",
+  "dep": "sandals",
+  "tui": "bags",
+  "tui xach": "handbags",
+  "ba lo": "backpacks",
+  "trang suc": "jewelry",
+  "day chuyen": "necklaces",
+  "vong tay": "bracelets",
+  "khuyen tai": "earrings",
+  "dong ho": "watches",
+  "kinh mat": "eyewear",
+  "dien thoai": "phones",
+  "dien thoai di dong": "mobile phones",
+  "may tinh": "computers",
+  "laptop": "laptops",
+  "may tinh bang": "tablets",
+  "tai nghe": "headphones",
+  "loa": "speakers",
+  "may anh": "cameras",
+  "tivi": "televisions",
+  "tv": "televisions",
+  "noi that": "furniture",
+  "giuong": "beds",
+  "nem": "mattresses",
+  "my pham": "cosmetics",
+  "cham soc da": "skin care",
+  "nuoc hoa": "fragrances",
+  "dau goi": "shampoo",
+  "do choi": "toys",
+  "sach": "books",
+  "balo": "backpacks",
+};
+
+/** Accent-preserving aliases for short Vietnamese words that collide when folded. */
+const SOURCE_CANONICAL_FAMILIES_UNICODE: Record<string, string> = {
+  "ví": "wallets",
+  "nhẫn": "rings",
+  "mũ": "hats",
+  "kính": "eyewear",
+  "bàn": "tables",
+  "ghế": "chairs",
+  "đèn": "lighting",
+};
+
+export function sourceCanonicalFamilyFromSource(query: string): string | null {
+  const unicode = normalizeUnicodeQueryText(query);
+  return SOURCE_CANONICAL_FAMILIES_UNICODE[unicode] ??
+    SOURCE_CANONICAL_FAMILIES[normalizeQueryText(query)] ??
+    null;
+}
+
 function suffixMatches(actual: string, suffix: string) {
   return actual === suffix || actual.endsWith(" " + suffix);
 }
@@ -121,6 +187,99 @@ export function shopifyCategoryIsClothing(path: string) {
   // Require a typed Clothing/Apparel ancestor (or actual clothing leaf).
   return segments.some((segment) => APPAREL_CATEGORY_SEGMENTS.has(segment)) &&
     segments.length >= 2;
+}
+
+
+/**
+ * Generic taxonomy matching for every Shopify category family.
+ *
+ * A query family is canonicalized separately (dictionary/LLM/source bridge).
+ * Membership then comes from the product's typed Shopify category path or
+ * exact sold-item type. Dense/BM25 text is never used as membership proof.
+ */
+function singularFamilyToken(token: string) {
+  if (token.length > 4 && token.endsWith("ies")) return token.slice(0, -3) + "y";
+  if (token.length > 5 && token.endsWith("sses")) return token.slice(0, -2);
+  if (token.length > 4 && /(?:ches|shes|xes|zes|ses)$/.test(token)) {
+    return token.slice(0, -2);
+  }
+  if (token.length > 3 && token.endsWith("s") &&
+      !token.endsWith("ss") && !token.endsWith("us") && !token.endsWith("is")) {
+    return token.slice(0, -1);
+  }
+  return token;
+}
+function normalizeFamilyPhrase(value: string) {
+  return normalizeQueryText(value)
+    .split(" ")
+    .filter(Boolean)
+    .map(singularFamilyToken)
+    .join(" ");
+}
+function genericFamilyPhraseMatches(actual: string, requested: string) {
+  const source = normalizeFamilyPhrase(actual);
+  const target = normalizeFamilyPhrase(requested);
+  if (!source || !target) return false;
+  return source === target || source.endsWith(" " + target);
+}
+
+/**
+ * Returns true when a trustworthy Shopify taxonomy path proves that a product
+ * is inside a requested family. The full path is inspected so broad parents
+ * (Jewelry, Shoes, Furniture, Computers...) automatically include descendants.
+ */
+export function shopifyCategoryMatchesFamily(path: string, requested: string) {
+  const parts = shopifyCategoryParts(path);
+  const target = normalizeFamilyPhrase(requested);
+  if (!parts.length || !target) return false;
+  // Accessory/toy/equipment branches are forbidden only when the shopper is
+  // asking for the parent product. They are valid when that branch itself is
+  // the requested family (e.g. "toys", "accessories", "equipment").
+  const targetAllowsDeniedBranch = CATEGORY_SUBGROUP_DENIAL.test(target);
+  if (!targetAllowsDeniedBranch && forbiddenCategoryBranch(parts)) return false;
+  return parts.some((part) => genericFamilyPhraseMatches(part, target));
+}
+
+/**
+ * Generic exact/subtype membership for families not present in the small
+ * language-ambiguity bridge. This is what makes pure-family retrieval work for
+ * the rest of the catalog without a hand-authored list per product class.
+ */
+export function classifyGenericFamilyProduct(
+  evidence: FamilyProductEvidence,
+  requested: string,
+): FamilyEvidenceResult | { match: true; reason: "SHOPIFY_CATEGORY" | "CANONICAL" | "MERCHANT_TYPE"; node: "generic" } {
+  const target = normalizeFamilyPhrase(requested);
+  if (!target) return { match: false, reason: "UNCLASSIFIED" };
+
+  const authoritativeNames = evidence.canonicalTypes.length
+    ? evidence.canonicalTypes : evidence.merchantTypes;
+  if (authoritativeNames.some((value) =>
+    ACCESSORY_OR_TOY.test(normalizeQueryText(value))
+  )) {
+    // Do not reject if the shopper explicitly asked for that accessory class.
+    const requestedAccessory = ACCESSORY_OR_TOY.test(normalizeQueryText(requested));
+    if (!requestedAccessory) return { match: false, reason: "CONTRADICTION" };
+  }
+
+  for (const path of evidence.shopifyCategoryPaths) {
+    if (shopifyCategoryMatchesFamily(path, target)) {
+      return { match: true, reason: "SHOPIFY_CATEGORY", node: "generic" };
+    }
+  }
+
+  const types = evidence.canonicalTypes.length
+    ? evidence.canonicalTypes : evidence.merchantTypes;
+  for (const type of types) {
+    if (genericFamilyPhraseMatches(type, target)) {
+      return {
+        match: true,
+        reason: evidence.canonicalTypes.length ? "CANONICAL" : "MERCHANT_TYPE",
+        node: "generic",
+      };
+    }
+  }
+  return { match: false, reason: "UNCLASSIFIED" };
 }
 
 export type FamilyProductEvidence = {

@@ -2,7 +2,13 @@ import { listSearchableIndexedProducts } from "../commerce/indexed-products.serv
 import { normalizeQueryText, parseDeterministicQuery } from "./deterministic-query-parser.server";
 import { scanShopSemanticProfiles } from "./product-semantic-profile.server";
 import { typedProductFamilyMatches } from "./structured-candidate-retrieval.server";
-import { classifyFamilyProduct, queryFamilyFromSource, type FamilyGroup } from "./product-family-taxonomy.server";
+import {
+  classifyFamilyProduct,
+  classifyGenericFamilyProduct,
+  queryFamilyFromSource,
+  sourceCanonicalFamilyFromSource,
+  type FamilyGroup,
+} from "./product-family-taxonomy.server";
 import type { QueryPlan } from "./query-plan.server";
 import type { QueryRewriteResult } from "./query-rewriter.server";
 import type { SearchResult } from "./semantic-search.server";
@@ -43,6 +49,7 @@ export function classifyPureFamilyLookup(
   const source = normalizeQueryText(plan.rawQuery);
   if (!source) return null;
   const sourceTaxonomyGroup = queryFamilyFromSource(plan.rawQuery);
+  const sourceCanonicalFamily = sourceCanonicalFamilyFromSource(plan.rawQuery);
 
   const parsed = parseDeterministicQuery(plan.rawQuery);
   if (parsed.price || parsed.measurements.length || parsed.compatibility.length ||
@@ -61,6 +68,35 @@ export function classifyPureFamilyLookup(
       taxonomyGroup: sourceTaxonomyGroup,
     };
   }
+  if (sourceCanonicalFamily) {
+    return {
+      canonical: sourceCanonicalFamily,
+      broadCategory: false,
+    };
+  }
+
+  // Catalog-owned exact family: if the complete shopper phrase is a typed
+  // PRODUCT_TYPE/CATEGORY already present in this shop, it owns identity even
+  // when an LLM invents soft style/use-case prose on a later pass.
+  const exactCatalogFamilies = [...new Set(
+    plan.resolvedSegments
+      .filter((span) =>
+        ["PRODUCT_TYPE", "CATEGORY"].includes(span.field) &&
+        normalizeQueryText(span.text) === source &&
+        (span.confidence ?? 0) >= 0.84,
+      )
+      .map((span) => normalizeQueryText(span.canonicalValue))
+      .filter(Boolean),
+  )];
+  if (exactCatalogFamilies.length === 1) {
+    const canonical = exactCatalogFamilies[0] === "clothes"
+      ? "clothing" : exactCatalogFamilies[0];
+    return {
+      canonical,
+      broadCategory: BROAD_CATEGORY_IDENTITIES.has(canonical),
+    };
+  }
+
   // The remaining families are not exact source-owned bridge phrases, so
   // a dictionary/LLM modifier can still mean the shopper supplied constraints.
   // For exact "váy"/"áo"/"xe" the original source contains only the family;
@@ -144,19 +180,27 @@ export function classifyVerifiedFamilyMember(
   if (target.taxonomyGroup) {
     const verdict = classifyFamilyProduct(evidence, target.taxonomyGroup);
     if (!verdict.match) return null;
+    const exactTyped = typed.some((term) =>
+      normalizeQueryText(term.value) === normalizeQueryText(target.canonical),
+    );
+    if (exactTyped) return "EXACT";
     return verdict.reason === "SHOPIFY_CATEGORY" ? "CATEGORY" : "SUBTYPE";
   }
 
-  // For exact bicycle/dress/skirt terms, a standardized Shopify category
-  // can prove membership even when the LLM did not create a canonical type.
-  const standardLeafGroup: FamilyGroup | null =
-    ["bicycle", "dress", "skirt"].includes(normalizeQueryText(target.canonical))
-      ? normalizeQueryText(target.canonical) as FamilyGroup
-      : null;
-  if (standardLeafGroup && taxonomyPaths.length > 0) {
-    const verdict = classifyFamilyProduct(evidence, standardLeafGroup);
-    if (verdict.match && verdict.reason === "SHOPIFY_CATEGORY") return "CATEGORY";
-    if (!verdict.match && verdict.reason === "CONTRADICTION") return null;
+  // Preserve the strongest old authority before generic hierarchy matching.
+  // Exact sold-item identity must remain EXACT, not be flattened to SUBTYPE
+  // merely because the generic classifier can also prove membership.
+  const exactTyped = typed.some((term) =>
+    normalizeQueryText(term.value) === normalizeQueryText(target.canonical),
+  );
+  if (exactTyped) return "EXACT";
+
+  // Any canonical family may be proven by a Shopify standard-category
+  // ancestor/leaf. This is catalog-wide: shoes, bags, jewelry, phones,
+  // laptops, furniture, beauty, toys... do not need a bespoke code branch.
+  const genericVerdict = classifyGenericFamilyProduct(evidence, target.canonical);
+  if (genericVerdict.match) {
+    return genericVerdict.reason === "SHOPIFY_CATEGORY" ? "CATEGORY" : "SUBTYPE";
   }
   if (!typed.length) return null;
   const exact = typed.some((term) =>
