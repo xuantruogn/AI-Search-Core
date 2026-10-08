@@ -74,6 +74,21 @@ assert.equal(classifyPureFamilyLookup(plan("trang sức", "jewelry"), rewrite)?.
 assert.equal(classifyPureFamilyLookup(plan("điện thoại", "phones"), rewrite)?.canonical, "phones");
 assert.equal(classifyPureFamilyLookup(plan("laptop", "laptops"), rewrite)?.canonical, "laptops");
 assert.equal(classifyPureFamilyLookup(plan("nội thất", "furniture"), rewrite)?.canonical, "furniture");
+const exactCatalogPlan = plan("shoes", "shoes");
+exactCatalogPlan.resolvedSegments = [{
+  text: "shoes", canonicalValue: "Shoes", field: "PRODUCT_TYPE", confidence: 0.96,
+}];
+const noisyRewrite = {
+  analysis: {
+    ...rewrite.analysis,
+    semanticDemand: {
+      ...rewrite.analysis.semanticDemand,
+      styles: ["casual"], // model-added soft prose, not shopper-owned
+    },
+  },
+} as any;
+assert.equal(classifyPureFamilyLookup(exactCatalogPlan, noisyRewrite)?.canonical, "shoes",
+  "Exact catalog family must not be truncated because LLM invented a soft style");
 const size = plan("váy size M");
 size.measurements.push({ value: "M", name: "size", mode: "MUST" });
 assert.equal(classifyPureFamilyLookup(size, rewrite), null);
