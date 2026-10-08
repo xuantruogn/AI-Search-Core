@@ -227,9 +227,13 @@ function genericFamilyPhraseMatches(actual: string, requested: string) {
  */
 export function shopifyCategoryMatchesFamily(path: string, requested: string) {
   const parts = shopifyCategoryParts(path);
-  if (!parts.length || forbiddenCategoryBranch(parts)) return false;
   const target = normalizeFamilyPhrase(requested);
-  if (!target) return false;
+  if (!parts.length || !target) return false;
+  // Accessory/toy/equipment branches are forbidden only when the shopper is
+  // asking for the parent product. They are valid when that branch itself is
+  // the requested family (e.g. "toys", "accessories", "equipment").
+  const targetAllowsDeniedBranch = CATEGORY_SUBGROUP_DENIAL.test(target);
+  if (!targetAllowsDeniedBranch && forbiddenCategoryBranch(parts)) return false;
   return parts.some((part) => genericFamilyPhraseMatches(part, target));
 }
 
