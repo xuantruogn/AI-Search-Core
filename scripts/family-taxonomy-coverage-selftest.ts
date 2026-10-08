@@ -78,6 +78,10 @@ assert.deepEqual(classifyFamilyProduct(category(
   { match: true, reason: "SHOPIFY_CATEGORY", node: "dress" });
 assert.equal(classifyFamilyProduct(category(
   "Apparel & Accessories > Clothing > Dresses"), "tops").match, false);
+assert.equal(classifyFamilyProduct({
+  canonicalTypes: ["Skirt"], merchantTypes: [],
+  shopifyCategoryPaths: ["Apparel & Accessories > Clothing > Dresses"],
+}, "dress_or_skirt").match, true, "Both Dress and Skirt belong to the source-owned váy union");
 assert.equal(classifyFamilyProduct(category(
   "Vehicles & Parts > Vehicle Parts & Accessories > Bicycle Helmets"), "bicycle").match, false);
 assert.equal(classifyFamilyProduct(category(
