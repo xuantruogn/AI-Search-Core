@@ -1,6 +1,5 @@
 import { normalizeQueryText } from "./deterministic-query-parser.server";
 import { createHash } from "node:crypto";
-import { scanShopSemanticProfiles } from "./product-semantic-profile.server";
 import { getSearchCatalogRevisionCached } from "./search-catalog-revision.server";
 
 export type DictionaryField =
@@ -58,6 +57,7 @@ type DictionaryCacheEntry = {
 };
 const cache = new Map<string, DictionaryCacheEntry>();
 const pendingLoads = new Map<string, Promise<ShopSearchDictionary>>();
+const dictionaryGeneration = new Map<string, number>();
 
 function identityTokenVariants(token: string) {
   const variants = new Set([token]);
@@ -197,67 +197,57 @@ async function loadShopSearchDictionaryUncached(
     return cached.value;
   }
 
+  const generation = dictionaryGeneration.get(shop) ?? 0;
   const grouped = new Map<string, DictionaryEntry & { productIds: Set<string> }>();
-  let newestTimestamp = 0;
 
-  // Stream one JSON profile at a time. A large shop can have millions of
-  // flattened semantic terms; materializing all of them just to build a
-  // dictionary creates an avoidable memory spike on cache miss.
-  await scanShopSemanticProfiles(
-    shop,
-    ({ productId, terms, updatedAt }) => {
-      newestTimestamp = Math.max(newestTimestamp, updatedAt.getTime());
+  // Shop Context already aggregates the same searchable semantic profiles by
+  // (kind, normalizedValue), including source-owned product ID postings. Build
+  // the dictionary from that revision-keyed snapshot instead of starting a
+  // second full catalog scan. Dynamic import avoids the invalidation cycle
+  // between the dictionary and Shop Context modules.
+  const { getShopContextCatalogTerms } = await import("./shop-context-index.server");
+  const catalogSnapshot = await getShopContextCatalogTerms(shop);
+  for (const row of catalogSnapshot.terms) {
+    const field = mapKind(row.kind);
+    if (!field) continue;
+    const normalized = normalizeQueryText(row.normalizedValue || row.value);
+    if (!normalized) continue;
 
-      for (const row of terms) {
-        const field = mapKind(row.kind);
-        if (!field) continue;
-        const normalized = normalizeQueryText(
-          row.normalizedValue || row.value,
-        );
-        if (!normalized) continue;
+    const canonical = row.value;
+    const canonicalNormalized = normalizeQueryText(canonical);
+    const key = `${field}\u0000${normalized}\u0000${canonicalNormalized}`;
+    const existing = grouped.get(key);
+    if (existing) {
+      for (const productId of row.productIds) existing.productIds.add(productId);
+      continue;
+    }
 
-        // Keep the semantic canonical value intact. Shopify productType is a
-        // separate merchant taxonomy signal and may be broad.
-        const canonical = row.value;
-        const canonicalNormalized = normalizeQueryText(canonical);
-        const key = `${field}\u0000${normalized}\u0000${canonicalNormalized}`;
-        const existing = grouped.get(key);
-        if (existing) {
-          existing.productIds.add(productId);
-          continue;
-        }
-
-        grouped.set(key, {
-          normalized,
-          canonical,
-          aliases: [],
-          field,
-          productCount: 1,
-          productIds: new Set([productId]),
-          conceptId: createHash("sha256")
-            .update(
-              `${shop}\u0000${field}\u0000${canonicalNormalized}`,
-              "utf8",
-            )
-            .digest("hex")
-            .slice(0, 24),
-          aliasLanguage: null,
-          source: [
-            "PRODUCT_TYPE",
-            "VENDOR",
-            "SKU",
-            "BARCODE",
-            "TAG",
-            "VARIANT",
-            "VARIANT_OPTION",
-          ].includes(row.kind)
-            ? "SHOPIFY"
-            : "ENRICHMENT",
-          confidence: confidenceForKind(row.kind, normalized),
-        });
-      }
-    },
-  );
+    grouped.set(key, {
+      normalized,
+      canonical,
+      aliases: [],
+      field,
+      productCount: row.productCount,
+      productIds: new Set(row.productIds),
+      conceptId: createHash("sha256")
+        .update(`${shop}\u0000${field}\u0000${canonicalNormalized}`, "utf8")
+        .digest("hex")
+        .slice(0, 24),
+      aliasLanguage: null,
+      source: [
+        "PRODUCT_TYPE",
+        "VENDOR",
+        "SKU",
+        "BARCODE",
+        "TAG",
+        "VARIANT",
+        "VARIANT_OPTION",
+      ].includes(row.kind)
+        ? "SHOPIFY"
+        : "ENRICHMENT",
+      confidence: confidenceForKind(row.kind, normalized),
+    });
+  }
 
   const entries = [...grouped.values()].map(({ productIds, ...entry }) => ({
     ...entry,
@@ -266,17 +256,21 @@ async function loadShopSearchDictionaryUncached(
   const value: ShopSearchDictionary = {
     shop,
     entries,
-    version: `context-v3-revision:${catalogRevision}:${entries.length}:${newestTimestamp}`,
+    version: `context-v4-shared-revision:${catalogSnapshot.catalogRevision}:${entries.length}`,
     loadedAt: Date.now(),
     matchIndex: buildMatchIndex(entries),
   };
   const cacheEntry: DictionaryCacheEntry = {
     expiresAt: Date.now() + CACHE_SAFETY_TTL_MS,
-    catalogRevision,
+    catalogRevision: catalogSnapshot.catalogRevision,
     value,
   };
-  touchCache(shop, cacheEntry);
-  enforceCacheBudget();
+  // An indexing webhook can invalidate the dictionary while its full
+  // catalog aggregation is still running. Do not resurrect that stale result.
+  if (generation === (dictionaryGeneration.get(shop) ?? 0)) {
+    touchCache(shop, cacheEntry);
+    enforceCacheBudget();
+  }
   return value;
 }
 
@@ -317,5 +311,12 @@ export async function getShopSearchDictionary(
 }
 
 export function invalidateShopSearchDictionary(shop: string) {
-  cache.delete(shop.trim().toLowerCase());
+  const normalizedShop = shop.trim().toLowerCase();
+  cache.delete(normalizedShop);
+  dictionaryGeneration.set(
+    normalizedShop, (dictionaryGeneration.get(normalizedShop) ?? 0) + 1,
+  );
+  for (const key of pendingLoads.keys()) {
+    if (key.startsWith(normalizedShop + "\u0000")) pendingLoads.delete(key);
+  }
 }

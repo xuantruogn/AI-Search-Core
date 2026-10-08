@@ -56,7 +56,7 @@ const MIN_TTL_MS = 60 * 1000;
 const DEFAULT_QUERY_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const MAX_RECEIPT_TTL_MS = 24 * 60 * 60 * 1000;
 const FULL_SEARCH_CACHE_PIPELINE_VERSION =
-  "full-search-cache-v78-source-authority-full-demand-2026-10-08";
+  "full-search-cache-v80-proxy-signature-fulltext-cache-roundtrip-2026-10-08";
 
 export type CachedSearchSortIntent =
   | "RELEVANCE"
@@ -106,7 +106,7 @@ function createReceiptId() {
   return `srch_${randomBytes(18).toString("base64url")}`;
 }
 
-function normalizeRankedProducts(products: CachedRankedProduct[]) {
+export function normalizeRankedProducts(products: CachedRankedProduct[]) {
   const seen = new Set<string>();
   const result: CachedRankedProduct[] = [];
   for (const product of products) {
@@ -374,7 +374,7 @@ export async function saveSearchQueryCache(args: {
   };
 }
 
-function parseProducts(value: string): CachedRankedProduct[] | null {
+export function parseProducts(value: string): CachedRankedProduct[] | null {
   try {
     const parsed = JSON.parse(value) as unknown;
     if (!Array.isArray(parsed)) return null;
@@ -385,12 +385,29 @@ function parseProducts(value: string): CachedRankedProduct[] | null {
       if (
         typeof row.productId !== "string" ||
         typeof row.handle !== "string" ||
-        typeof row.score !== "number"
+        typeof row.score !== "number" ||
+        !Number.isFinite(row.score)
       ) return null;
+      // Historical receipts may not have similarity fields. When present,
+      // preserve their provenance on round-trip through the persistent cache.
+      // Without these values analytics and subsequent relevance diagnostics
+      // silently diverge between cold results and cache hits.
+      const vectorSimilarity =
+        typeof row.vectorSimilarity === "number" &&
+        Number.isFinite(row.vectorSimilarity)
+          ? row.vectorSimilarity
+          : undefined;
+      const primaryVectorSimilarity =
+        typeof row.primaryVectorSimilarity === "number" &&
+        Number.isFinite(row.primaryVectorSimilarity)
+          ? row.primaryVectorSimilarity
+          : undefined;
       products.push({
         productId: row.productId,
         handle: row.handle,
         score: row.score,
+        ...(vectorSimilarity !== undefined ? { vectorSimilarity } : {}),
+        ...(primaryVectorSimilarity !== undefined ? { primaryVectorSimilarity } : {}),
       });
     }
     return products;

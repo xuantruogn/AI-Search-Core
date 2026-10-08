@@ -2525,206 +2525,115 @@
     );
   }
 
-  function updateResultCount(
-    mount,
-    metadata,
-  ) {
-    const totalProducts =
-      Number(
-        metadata.totalProducts,
-      );
+  /**
+   * Shopify search facets render their native total independently of the
+   * product-card grid. Theme families commonly have BOTH ProductCount and
+   * ProductCountDesktop plus other aria-live statuses, so a unique
+   * [role=status] lookup is not a valid contract for result count updates.
+   *
+   * Only rewrite text that is explicitly a search/product-result count, in
+   * the search main container. Never change facet option counts, prices,
+   * card badges, or unrelated aria-live announcements.
+   */
+  function updateResultCount(mount, metadata) {
+    const totalProducts = Number(metadata?.totalProducts);
+    if (!Number.isSafeInteger(totalProducts) || totalProducts < 0) return;
 
-    if (
-      !Number.isSafeInteger(
-        totalProducts,
-      ) ||
-      totalProducts < 0
-    ) {
-      return;
-    }
+    const scope =
+      mount.closest("main") ||
+      mount.closest('[id^="shopify-section-"]') ||
+      mount.closest("section") ||
+      mount.parentElement;
+    if (!scope) return;
 
-    const scopes = [
-      mount.closest(
-        "section",
-      ),
+    const selector = [
+      "#ProductCount",
+      "#ProductCountDesktop",
+      '[id^="ProductCount-"]',
+      "[data-search-results-count]",
+      "[data-product-count]",
+      ".product-count__text",
+      ".facets__product-count",
+      '[class*="product-count"]',
+      '[class*="search-results-count"]',
+      '[class*="search-result-count"]',
+      '[role="status"]',
+    ].join(", ");
 
-      mount.closest(
-        '[id^="shopify-section-"]',
-      ),
+    // Prefer the innermost count node: setting the parent textContent could
+    // otherwise destroy a theme's loading spinner or live-region markup.
+    const candidates = Array.from(scope.querySelectorAll(selector))
+      .filter((node) => !mount.contains(node))
+      .sort((a, b) => (a.contains(b) ? 1 : b.contains(a) ? -1 : 0));
+    const updated = new Set();
+    const locale = document.documentElement.lang || navigator.language || "en";
+    const formattedCount = new Intl.NumberFormat(locale).format(totalProducts);
+    const countAfterNumber =
+      /(\d(?:[\d.,\u00a0\u202f ]*\d)?)(?=\s*(?:kết\s+quả|sản\s+phẩm|results?|products?|items?)(?![\p{L}]))/iu;
+    const countAfterLabel =
+      /(?:kết\s+quả|sản\s+phẩm|results?|products?|items?)\s*:?\s*(\d(?:[\d.,\u00a0\u202f ]*\d)?)/iu;
+    let changed = 0;
+    let recognized = 0;
 
-      mount.closest(
-        "main",
-      ),
-    ].filter(Boolean);
+    for (const node of candidates) {
+      if (Array.from(updated).some((inner) => node.contains(inner))) continue;
+      const current = node.textContent || "";
+      if (!current.trim()) continue;
 
-    let statusElement =
-      null;
-
-    for (
-      const scope of scopes
-    ) {
-      const candidates =
-        Array.from(
-          scope.querySelectorAll(
-            '[role="status"]',
-          ),
-        ).filter(
-          function (
-            element,
-          ) {
-            if (
-              mount.contains(
-                element,
-              )
-            ) {
-              return false;
+      const numberMatch = countAfterNumber.exec(current) || countAfterLabel.exec(current);
+      if (numberMatch) {
+        const numeric = numberMatch[1];
+        const index = numberMatch.index + numberMatch[0].indexOf(numeric);
+        recognized += 1;
+        // Locate the original number inside a text node rather than replacing
+        // innerHTML/textContent of a possibly structured Shopify status.
+        const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);
+        let offset = 0;
+        let textNode = walker.nextNode();
+        while (textNode) {
+          const value = textNode.nodeValue || "";
+          const localIndex = index - offset;
+          if (localIndex >= 0 && localIndex + numeric.length <= value.length) {
+            if (value.slice(localIndex, localIndex + numeric.length) !== formattedCount) {
+              textNode.nodeValue =
+                value.slice(0, localIndex) +
+                formattedCount +
+                value.slice(localIndex + numeric.length);
+              changed += 1;
             }
-
-            if (
-              element.getAttribute(
-                "aria-hidden",
-              ) === "true"
-            ) {
-              return false;
-            }
-
-            if (
-              !(
-                element.textContent ||
-                ""
-              ).trim()
-            ) {
-              return false;
-            }
-
-            return true;
-          },
-        );
-
-      if (
-        candidates.length ===
-        1
-      ) {
-        statusElement =
-          candidates[0];
-
-        break;
-      }
-    }
-
-    if (!statusElement) {
-      console.info(
-        logPrefix,
-        "resultCount skipped",
-        {
-          reason:
-            "RESULT_COUNT_STATUS_NOT_UNIQUE",
-
-          totalProducts,
-        },
-      );
-
-      return;
-    }
-
-    const currentText =
-      statusElement.textContent ||
-      "";
-
-    const countToken =
-      currentText.match(
-        /\d(?:[\d.,\u00A0\u202F ]*\d)?/,
-      );
-
-    if (
-      !countToken ||
-      typeof countToken.index !==
-        "number"
-    ) {
-      const locale =
-        document.documentElement.lang ||
-        navigator.language ||
-        "en";
-
-      const formattedCount =
-        new Intl.NumberFormat(locale).format(
-          totalProducts,
-        );
-
-      const normalizedText =
-        currentText
-          .normalize("NFKC")
-          .toLocaleLowerCase(locale);
-
-      const replacementText =
-        /không\s+tìm\s+thấy\s+kết\s+quả/.test(
-          normalizedText,
-        )
-          ? `${formattedCount} kết quả`
-          : /no\s+(?:search\s+)?results?(?:\s+found)?/.test(
-                normalizedText,
-              )
-            ? `${formattedCount} ${totalProducts === 1 ? "result" : "results"}`
-            : null;
-
-      if (replacementText) {
-        statusElement.textContent =
-          replacementText;
-
-        console.info(
-          logPrefix,
-          "resultCount replaced native empty state",
-          {
-            totalProducts,
-            previousText:
-              currentText,
-            updatedText:
-              replacementText,
-          },
-        );
-
-        return;
+            updated.add(node);
+            break;
+          }
+          offset += value.length;
+          textNode = walker.nextNode();
+        }
+        continue;
       }
 
-      console.info(
-        logPrefix,
-        "resultCount skipped",
-        {
-          reason:
-            "RESULT_COUNT_NUMBER_NOT_FOUND",
+      const normalized = current.normalize("NFKC").toLocaleLowerCase();
+      const nativeEmpty =
+        /không\s+tìm\s+thấy\s+kết\s+quả/.test(normalized) ||
+        /no\s+(?:search\s+)?results?(?:\s+found)?/.test(normalized);
+      if (!nativeEmpty) continue;
 
-          totalProducts,
-          currentText,
-        },
-      );
-
-      return;
+      const isVietnamese = locale.toLowerCase().startsWith("vi");
+      const replacement = isVietnamese
+        ? `${formattedCount} kết quả`
+        : `${formattedCount} ${totalProducts === 1 ? "result" : "results"}`;
+      if (node.textContent !== replacement) {
+        // Native empty-status messages have no useful child controls.
+        node.textContent = replacement;
+        changed += 1;
+      }
+      updated.add(node);
+      recognized += 1;
     }
 
-    statusElement.textContent =
-      currentText.slice(
-        0,
-        countToken.index,
-      ) +
-      String(
-        totalProducts,
-      ) +
-      currentText.slice(
-        countToken.index +
-          countToken[0].length,
-      );
-
-    console.info(
-      logPrefix,
-      "resultCount updated",
-      {
-        totalProducts,
-        previousText:
-          currentText,
-        updatedText:
-          statusElement.textContent,
-      },
-    );
+    console.info(logPrefix, "resultCount synchronized", {
+      totalProducts,
+      recognized,
+      changed,
+    });
   }
 
   let searchTitleSuffix = null;

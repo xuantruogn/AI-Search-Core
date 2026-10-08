@@ -32,6 +32,9 @@ type SemanticCoverageCacheEntry = {
 
 const SEMANTIC_COVERAGE_CACHE_TTL_MS = 60_000;
 const semanticCoverageCache = new Map<string, SemanticCoverageCacheEntry>();
+// Structured retrieval and RAW/FINAL proof can ask for coverage concurrently.
+// Coalesce the same shop+revision so one query causes just one DB/Qdrant count pair.
+const pendingSemanticCoverageReads = new Map<string, Promise<SemanticPayloadCoverage>>();
 
 function cacheSemanticCoverage(
   shop: string,
@@ -559,45 +562,59 @@ export async function getSemanticPayloadCoverage(shop: string) {
     return cached.coverage;
   }
 
-  await ensureProductCollection();
-  const qdrant = getQdrantClient();
-  const [registryCount, indexed] = await Promise.all([
-    db.aiSearchIndexedProduct.count({
-      where: {
-        shop: normalizedShop,
-        searchable: true,
-        hasVector: true,
-      },
-    }),
-    qdrant.count(QDRANT_COLLECTION, {
-      filter: {
-        must: [
-          { key: "shop", match: { value: normalizedShop } },
-          { key: "searchable", match: { value: true } },
-          {
-            key: "semanticPayloadVersion",
-            match: { value: PRODUCT_VECTOR_SEMANTIC_PAYLOAD_VERSION },
-          },
-          { key: "semanticPayloadComplete", match: { value: true } },
-        ],
-      },
-      exact: true,
-    }),
-  ]);
+  const pendingKey = `${normalizedShop}\u0000${revision}`;
+  const pending = pendingSemanticCoverageReads.get(pendingKey);
+  if (pending) return pending;
 
-  const indexedCount = Number(indexed.count ?? 0);
-  const coverage = {
-    registryCount,
-    indexedCount,
-    complete: registryCount > 0 && indexedCount === registryCount,
-  };
-  cacheSemanticCoverage(normalizedShop, {
-    expiresAt: Date.now() + SEMANTIC_COVERAGE_CACHE_TTL_MS,
-    revision,
-    coverage,
-    kindCounts: new Map(),
-  });
-  return coverage;
+  const task = (async (): Promise<SemanticPayloadCoverage> => {
+    await ensureProductCollection();
+    const qdrant = getQdrantClient();
+    const [registryCount, indexed] = await Promise.all([
+      db.aiSearchIndexedProduct.count({
+        where: {
+          shop: normalizedShop,
+          searchable: true,
+          hasVector: true,
+        },
+      }),
+      qdrant.count(QDRANT_COLLECTION, {
+        filter: {
+          must: [
+            { key: "shop", match: { value: normalizedShop } },
+            { key: "searchable", match: { value: true } },
+            {
+              key: "semanticPayloadVersion",
+              match: { value: PRODUCT_VECTOR_SEMANTIC_PAYLOAD_VERSION },
+            },
+            { key: "semanticPayloadComplete", match: { value: true } },
+          ],
+        },
+        exact: true,
+      }),
+    ]);
+
+    const indexedCount = Number(indexed.count ?? 0);
+    const coverage: SemanticPayloadCoverage = {
+      registryCount,
+      indexedCount,
+      complete: registryCount > 0 && indexedCount === registryCount,
+    };
+    cacheSemanticCoverage(normalizedShop, {
+      expiresAt: Date.now() + SEMANTIC_COVERAGE_CACHE_TTL_MS,
+      revision,
+      coverage,
+      kindCounts: new Map(),
+    });
+    return coverage;
+  })();
+  pendingSemanticCoverageReads.set(pendingKey, task);
+  try {
+    return await task;
+  } finally {
+    if (pendingSemanticCoverageReads.get(pendingKey) === task) {
+      pendingSemanticCoverageReads.delete(pendingKey);
+    }
+  }
 }
 
 export async function countProductsMatchingSemanticGroups({

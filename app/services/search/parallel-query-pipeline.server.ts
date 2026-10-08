@@ -33,6 +33,20 @@ async function safeProveNoResult(args: {
   }
 }
 
+/** RAW and FINAL proof are equivalent only when every source-owned
+ * closed-world input is identical. Semantic wording/route can change without
+ * creating new proof facts, but a changed confidence, mode or typed value may
+ * change CERTAIN_NO_RESULT and must trigger a fresh proof. */
+export function equivalentAbsenceProofInputs(left: QueryPlan, right: QueryPlan) {
+  const owned = (plan: QueryPlan) => JSON.stringify({
+    identities: plan.identities,
+    entities: plan.entities,
+    compatibility: plan.compatibility,
+    measurements: plan.measurements,
+  });
+  return owned(left) === owned(right);
+}
+
 export type ParallelQueryPipelineResult = {
   rawPlan: QueryPlan;
   profile: QuerySemanticProfile | null;
@@ -117,10 +131,12 @@ export async function prepareParallelQueryPipeline(args: {
       rawPlan,
       profile,
       rawProof,
-      finalProof: safeProveNoResult({
-        shop: args.shop,
-        plan: rawPlan,
-        phase: "FINAL",
+      // No LLM/pass-2 mutation occurred. The FINAL constraints are literally
+      // the RAW plan, so a second catalog proof would repeat the same Qdrant
+      // counts/profile scan with no possibility of changing the answer.
+      finalProof: Promise.resolve({
+        ...rawProof,
+        phase: "FINAL" as const,
       }),
       earlyNoResult: false,
       timing: {
@@ -149,11 +165,13 @@ export async function prepareParallelQueryPipeline(args: {
     rawPlan,
     profile,
     rawProof,
-    finalProof: safeProveNoResult({
-      shop: args.shop,
-      plan: profile.finalPlan,
-      phase: "FINAL",
-    }),
+    finalProof: equivalentAbsenceProofInputs(rawPlan, profile.finalPlan)
+      ? Promise.resolve({ ...rawProof, phase: "FINAL" as const })
+      : safeProveNoResult({
+          shop: args.shop,
+          plan: profile.finalPlan,
+          phase: "FINAL",
+        }),
     earlyNoResult: false,
     timing: {
       rawPlanMs,

@@ -28,9 +28,15 @@ export async function retrieveLexicalCandidates(args: {
 
   const anchor = [...tokens].sort((a, b) => b.length - a.length)[0];
   if (!anchor || anchor.length < 3) return [];
-  const likeAnchor = `%${anchor}%`;
-
-  const rows = await db.$queryRaw<
+  // MySQL FULLTEXT is indexed; LIKE '%token%' forced a per-shop table
+  // scan even on warm Search V11 queries, and arbitrary LIMIT 500 ordering
+  // could hide an exact title. The migration installs a compound FULLTEXT
+  // index on (title, handle). BM25/dense cover non-lexical recall.
+  if (!/^[\p{L}\p{N}]+$/u.test(anchor)) return [];
+  const booleanQuery = `${anchor}*`;
+  let rows: Array<{ productId: string; handle: string; title: string }>;
+  try {
+    rows = await db.$queryRaw<
     Array<{ productId: string; handle: string; title: string }>
   >(Prisma.sql`
     SELECT \`productId\`, \`handle\`, \`title\`
@@ -38,12 +44,20 @@ export async function retrieveLexicalCandidates(args: {
     WHERE \`shop\` = ${args.shop}
       AND \`searchable\` = true
       AND \`hasVector\` = true
-      AND (
-        LOWER(\`title\`) LIKE ${likeAnchor}
-        OR LOWER(\`handle\`) LIKE ${likeAnchor}
-      )
+      AND MATCH(\`title\`, \`handle\`) AGAINST (${booleanQuery} IN BOOLEAN MODE)
+    ORDER BY MATCH(\`title\`, \`handle\`) AGAINST (${booleanQuery} IN BOOLEAN MODE) DESC,
+             \`productId\` ASC
     LIMIT 500
-  `);
+    `);
+  } catch (error) {
+    // An index migration or MySQL fulltext subsystem issue must not fail the
+    // entire hybrid pipeline. Dense, sparse and structured lanes still run.
+    console.error("[AI Search][LEXICAL] fulltext lane unavailable", {
+      shop: args.shop,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return [];
+  }
 
   const normalizedQuery = normalizeQueryText(args.query);
   return rows

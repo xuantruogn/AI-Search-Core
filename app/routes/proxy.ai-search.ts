@@ -75,6 +75,7 @@ import {
 import { ensureProductCollection } from "../services/search/qdrant.server";
 import { warmGeminiConnection } from "../services/search/gemini-query-rewriter.server";
 import { getShopSearchDictionary } from "../services/search/shop-search-dictionary.server";
+import { buildSearchCacheRequestVariant } from "../services/search/search-cache-request-variant.server";
 import {
   fetchProductsByGids as fetchAppSelfRenderProductsByGids,
   renderAppSelfSearchPage,
@@ -91,33 +92,13 @@ const queryEmbeddingCache = new Map<
   { embedding: number[]; timestamp: number }
 >();
 const EMBEDDING_CACHE_TTL = 24 * 60 * 60 * 1000;
-
-const SEARCH_CACHE_IGNORED_PARAMS = new Set([
-  "q",
-  "page",
-  "receipt",
-  "format",
-  "mode",
-  "theme_id",
-  "map_fingerprint",
-  "native_search_url",
-  "native_search_path",
-  "section_id",
-  "ids",
-  NATIVE_BYPASS_PARAM,
-]);
-
-function buildSearchCacheRequestVariant(url: URL) {
-  return [...url.searchParams.entries()]
-    .filter(([key]) => !SEARCH_CACHE_IGNORED_PARAMS.has(key))
-    .sort(([leftKey, leftValue], [rightKey, rightValue]) =>
-      leftKey === rightKey
-        ? leftValue.localeCompare(rightValue)
-        : leftKey.localeCompare(rightKey),
-    )
-    .map(([key, value]) => encodeURIComponent(key) + "=" + encodeURIComponent(value))
-    .join("&");
-}
+// A 1536D vector costs ~12 KiB as JS numbers, 3072D ~24 KiB.
+// Ten thousand vectors could pin 120–240 MiB per worker. Bound by memory.
+const EMBEDDING_CACHE_MAX_BYTES = (() => {
+  const mb = Number.parseInt(process.env.AI_SEARCH_EMBEDDING_CACHE_MAX_MB || "", 10);
+  return (Number.isSafeInteger(mb) && mb >= 4 ? Math.min(mb, 128) : 24) * 1024 * 1024;
+})();
+let embeddingCacheBytes = 0;
 
 function buildEmbeddingCacheKey(shop: string, query: string) {
   return [
@@ -129,16 +110,28 @@ function buildEmbeddingCacheKey(shop: string, query: string) {
   ].join("\u0000");
 }
 
+function dropCachedEmbedding(key: string) {
+  const previous = queryEmbeddingCache.get(key);
+  if (!previous) return;
+  embeddingCacheBytes -= previous.embedding.length * 8;
+  queryEmbeddingCache.delete(key);
+}
+
 function getCachedQueryEmbedding(
   shop: string,
   query: string,
 ): number[] | null {
   const key = buildEmbeddingCacheKey(shop, query);
   const cached = queryEmbeddingCache.get(key);
-  if (cached && Date.now() - cached.timestamp < EMBEDDING_CACHE_TTL) {
-    return cached.embedding;
+  if (!cached) return null;
+  if (Date.now() - cached.timestamp >= EMBEDDING_CACHE_TTL) {
+    dropCachedEmbedding(key);
+    return null;
   }
-  return null;
+  // True LRU: frequently-used query vectors remain cached under the byte cap.
+  queryEmbeddingCache.delete(key);
+  queryEmbeddingCache.set(key, cached);
+  return cached.embedding;
 }
 
 function setCachedQueryEmbedding(
@@ -146,12 +139,21 @@ function setCachedQueryEmbedding(
   query: string,
   embedding: number[],
 ) {
+  const bytes = embedding.length * 8;
+  if (bytes === 0 || bytes > EMBEDDING_CACHE_MAX_BYTES) return;
   const key = buildEmbeddingCacheKey(shop, query);
-  if (queryEmbeddingCache.size > 10000) {
-    const oldestKey = queryEmbeddingCache.keys().next().value;
-    if (oldestKey) queryEmbeddingCache.delete(oldestKey);
+  dropCachedEmbedding(key);
+  // Prevent a hot worker from retaining an unbounded collection of vectors.
+  while (
+    queryEmbeddingCache.size > 0 &&
+    (embeddingCacheBytes + bytes > EMBEDDING_CACHE_MAX_BYTES ||
+      queryEmbeddingCache.size >= 10_000)
+  ) {
+    const oldestKey = queryEmbeddingCache.keys().next().value as string;
+    dropCachedEmbedding(oldestKey);
   }
   queryEmbeddingCache.set(key, { embedding, timestamp: Date.now() });
+  embeddingCacheBytes += bytes;
 }
 
 function warmSearchRuntime(shop: string) {
@@ -2550,27 +2552,43 @@ let resultCacheStatus: "HIT" | "MISS" = "MISS";
           );
       }
 
-      const structuredPrefetchStartedAt = Date.now();
-      const structuredPromise = queryPlan
+      // Measure the actual lifetimes of the independent retrieval promises.
+      // The previous structuredMs used the timestamp at the end of the whole
+      // pipeline, including LLM/context/proof and semantic work, so it could
+      // make an inexpensive structured lookup appear to be the bottleneck.
+      const structuredStartedAt = Date.now();
+      let structuredRetrievalMs = 0;
+      const structuredPromise = (queryPlan
         ? retrieveStructuredCandidates({
             shop: session.shop,
             plan: queryPlan,
             limit: SEARCH_LIMIT,
           })
-        : Promise.resolve([]);
+        : Promise.resolve([])).finally(() => {
+        structuredRetrievalMs = Date.now() - structuredStartedAt;
+      });
+      const lexicalStartedAt = Date.now();
+      let lexicalRetrievalMs = 0;
       const lexicalPromise = retrieveLexicalCandidates({
         shop: session.shop,
         query,
         limit: Math.min(100, SEARCH_LIMIT),
+      }).finally(() => {
+        lexicalRetrievalMs = Date.now() - lexicalStartedAt;
       });
-      const sparsePromise =
+      const sparseStartedAt = Date.now();
+      let sparseRetrievalMs = 0;
+      const sparsePromise = (
         queryPlan?.route === "STRUCTURED_ONLY"
           ? Promise.resolve([])
           : retrieveSparseCandidates({
               shop: session.shop,
               query,
               limit: Math.min(100, SEARCH_LIMIT),
-            });
+            })
+      ).finally(() => {
+        sparseRetrievalMs = Date.now() - sparseStartedAt;
+      });
 
       if (queryPlan) {
         console.log("[AI Search][QUERY PLAN]", {
@@ -2830,7 +2848,9 @@ let resultCacheStatus: "HIT" | "MISS" = "MISS";
       console.log("[AI Search][PARALLEL RETRIEVAL]", {
         shop: session.shop,
         route: queryPlan?.route ?? "LEGACY",
-        structuredMs: Date.now() - structuredPrefetchStartedAt,
+        structuredMs: structuredRetrievalMs,
+        lexicalMs: lexicalRetrievalMs,
+        sparseMs: sparseRetrievalMs,
         finalProof: finalProof?.status ?? "DISABLED",
         resultCount: rawSearchResults.length,
         hybridFusion: hybridFusionDiagnostics,
@@ -3221,6 +3241,8 @@ let resultCacheStatus: "HIT" | "MISS" = "MISS";
               productId: `gid://shopify/Product/${product.id}`,
               handle: product.handle,
               score: product.score,
+              vectorSimilarity: product.vectorSimilarity,
+              primaryVectorSimilarity: product.primaryVectorSimilarity,
             })),
             proofBasedEmpty: proofBasedNoResult,
             analyzedQuery: preparedRewrite.query,

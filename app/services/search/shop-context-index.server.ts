@@ -99,6 +99,8 @@ export type ContextualQueryResult = QueryRewriteResult & {
     ungroundedExplicitFeature: boolean;
     discoverySourceGroundedProductIds: string[];
     discoveryExpansionGroundedProductIds: string[];
+    /** Typed color vocabulary built once with the shop-context index. */
+    typedColorVocabulary: string[];
   };
 };
 
@@ -108,9 +110,11 @@ type ShopContextLookupIndex = {
   byNormalized: Map<string, ContextTerm[]>;
   contextProductIds: Set<string>;
   canonicalProductIds: Set<string>;
+  typedColorVocabulary: Set<string>;
 };
 
 type LoadedShopContext = {
+  catalogRevision: string;
   terms: ContextTerm[];
   index: ShopContextLookupIndex;
   cacheStatus: "HIT" | "MISS";
@@ -124,10 +128,16 @@ type ShopContextCacheEntry = {
   catalogRevision: string;
   terms: ContextTerm[];
   index: ShopContextLookupIndex;
+  postingCount: number;
 };
 
 const contextCache = new Map<string, ShopContextCacheEntry>();
 const pendingContextLoads = new Map<string, Promise<LoadedShopContext>>();
+const shopContextGeneration = new Map<string, number>();
+const MAX_TOTAL_SHOP_CONTEXT_POSTINGS = (() => {
+  const n = Number.parseInt(process.env.AI_SEARCH_SHOP_CONTEXT_CACHE_MAX_POSTINGS || "", 10);
+  return Number.isSafeInteger(n) && n >= 50_000 ? Math.min(n, 10_000_000) : 1_000_000;
+})();
 const MAX_TOTAL_SHOP_CONTEXT_TERMS = (() => {
   const value = Number.parseInt(
     process.env.AI_SEARCH_SHOP_CONTEXT_CACHE_MAX_TOTAL_TERMS || "",
@@ -144,17 +154,24 @@ function touchContextCache(shop: string, entry: ShopContextCacheEntry) {
 }
 
 function enforceContextCacheBudget() {
-  let totalTerms = [...contextCache.values()].reduce(
-    (sum, entry) => sum + entry.terms.length,
-    0,
-  );
-  while (contextCache.size > 50 || totalTerms > MAX_TOTAL_SHOP_CONTEXT_TERMS) {
+  let totalTerms = 0;
+  let totalPostings = 0;
+  for (const entry of contextCache.values()) {
+    totalTerms += entry.terms.length;
+    totalPostings += entry.postingCount;
+  }
+  while (
+    contextCache.size > 50 ||
+    totalTerms > MAX_TOTAL_SHOP_CONTEXT_TERMS ||
+    totalPostings > MAX_TOTAL_SHOP_CONTEXT_POSTINGS
+  ) {
     const oldest = contextCache.entries().next().value as
       | [string, ShopContextCacheEntry]
       | undefined;
     if (!oldest) break;
     contextCache.delete(oldest[0]);
     totalTerms -= oldest[1].terms.length;
+    totalPostings -= oldest[1].postingCount;
   }
 }
 
@@ -193,14 +210,19 @@ function meaningfulTokens(value: string) {
     .filter((token) => token.length >= 2 && !VI_STOP_WORDS.has(token));
 }
 
-function buildShopContextLookupIndex(terms: ContextTerm[]): ShopContextLookupIndex {
+export function buildShopContextLookupIndex(terms: ContextTerm[]): ShopContextLookupIndex {
   const byToken = new Map<string, ContextTerm[]>();
   const byKind = new Map<string, ContextTerm[]>();
   const byNormalized = new Map<string, ContextTerm[]>();
   const contextProductIds = new Set<string>();
   const canonicalProductIds = new Set<string>();
+  const typedColorVocabulary = new Set<string>();
 
   for (const term of terms) {
+    if (term.kind === "ATTRIBUTE" || term.kind === "VARIANT_OPTION") {
+      const typedColor = term.value.match(/^\s*colou?r\s*[=:]\s*(.+?)\s*$/i);
+      if (typedColor) typedColorVocabulary.add(normalizeContextTerm(typedColor[1]));
+    }
     const kindList = byKind.get(term.kind) ?? [];
     kindList.push(term);
     byKind.set(term.kind, kindList);
@@ -208,6 +230,21 @@ function buildShopContextLookupIndex(terms: ContextTerm[]): ShopContextLookupInd
     const normalizedList = byNormalized.get(term.normalizedValue) ?? [];
     normalizedList.push(term);
     byNormalized.set(term.normalizedValue, normalizedList);
+
+    // Typed one-letter option values (e.g. "Size: S", "Color: M") have no
+    // meaningfulTokens() entry. Index the exact assigned value as an alias so
+    // a source-owned short code is still considered for later exact checking.
+    if (["ATTRIBUTE", "VARIANT_OPTION"].includes(term.kind)) {
+      const assigned = term.value.match(
+        /^\s*(?:colou?r|size|material|fabric|finish|pattern)\s*[=:]\s*(.+?)\s*$/i,
+      )?.[1];
+      const normalizedAssigned = assigned ? normalizeContextTerm(assigned) : "";
+      if (normalizedAssigned && normalizedAssigned !== term.normalizedValue) {
+        const assignedRows = byNormalized.get(normalizedAssigned) ?? [];
+        assignedRows.push(term);
+        byNormalized.set(normalizedAssigned, assignedRows);
+      }
+    }
 
     for (const token of new Set(term.tokens)) {
       const tokenList = byToken.get(token) ?? [];
@@ -227,6 +264,7 @@ function buildShopContextLookupIndex(terms: ContextTerm[]): ShopContextLookupInd
     byNormalized,
     contextProductIds,
     canonicalProductIds,
+    typedColorVocabulary,
   };
 }
 
@@ -290,6 +328,29 @@ function candidateIdentityContextTerms(
     }
   }
   return [...candidates];
+}
+
+/**
+ * All terms capable of scoring in the shop-context pass. Exact matches,
+ * direct source/signal token overlap, source-owned semantic MUST values and
+ * expansion leaf morphology are captured by the prebuilt inverted index.
+ * Unrelated terms have score zero and need no per-query scoring/filter work.
+ */
+export function selectContextScoreCandidates(
+  index: ShopContextLookupIndex,
+  signalValues: string[],
+  semanticMustFacetTokens: Iterable<string>,
+  discoveryExpansionValues: string[],
+) {
+  return [...new Set([
+    ...candidateContextTerms(index, signalValues),
+    ...[...semanticMustFacetTokens].flatMap((token) =>
+      index.byNormalized.get(token) ?? [],
+    ),
+    ...(discoveryExpansionValues.length > 0
+      ? candidateIdentityContextTerms(index, discoveryExpansionValues)
+      : []),
+  ])];
 }
 
 const GENERIC_DISCOVERY_LEAF_TOKENS = new Set([
@@ -638,6 +699,12 @@ export function collectProductContextTerms(
 function invalidateShopContextCaches(shop: string) {
   const normalizedShop = shop.trim().toLowerCase();
   contextCache.delete(normalizedShop);
+  shopContextGeneration.set(
+    normalizedShop, (shopContextGeneration.get(normalizedShop) ?? 0) + 1,
+  );
+  for (const key of pendingContextLoads.keys()) {
+    if (key.startsWith(normalizedShop + "\u0000")) pendingContextLoads.delete(key);
+  }
   invalidateShopSearchDictionary(normalizedShop);
 }
 
@@ -774,6 +841,7 @@ async function loadShopContextUncached(
   ) {
     touchContextCache(shop, cached);
     return {
+      catalogRevision,
       terms: cached.terms,
       index: cached.index,
       cacheStatus: "HIT" as const,
@@ -783,6 +851,7 @@ async function loadShopContextUncached(
     };
   }
 
+  const generation = shopContextGeneration.get(shop) ?? 0;
   const dbStartedAt = Date.now();
   const aggregated = new Map<string, ContextTerm>();
 
@@ -817,14 +886,18 @@ async function loadShopContextUncached(
   const terms = [...aggregated.values()];
   const index = buildShopContextLookupIndex(terms);
   const aggregateCodeMs = Date.now() - aggregateStartedAt;
-  touchContextCache(shop, {
-    expiresAt: Date.now() + SHOP_CONTEXT_CACHE_TTL_MS,
-    catalogRevision,
-    terms,
-    index,
-  });
-  enforceContextCacheBudget();
+  if (generation === (shopContextGeneration.get(shop) ?? 0)) {
+    touchContextCache(shop, {
+      expiresAt: Date.now() + SHOP_CONTEXT_CACHE_TTL_MS,
+      catalogRevision,
+      terms,
+      index,
+      postingCount: terms.reduce((sum, term) => sum + term.productIds.size, 0),
+    });
+    enforceContextCacheBudget();
+  }
   return {
+    catalogRevision,
     terms,
     index,
     cacheStatus: "MISS" as const,
@@ -848,6 +921,7 @@ async function loadShopContext(shop: string): Promise<LoadedShopContext> {
   ) {
     touchContextCache(normalizedShop, cached);
     return {
+      catalogRevision,
       terms: cached.terms,
       index: cached.index,
       cacheStatus: "HIT",
@@ -874,6 +948,14 @@ async function loadShopContext(shop: string): Promise<LoadedShopContext> {
       pendingContextLoads.delete(pendingKey);
     }
   }
+}
+
+/** A single revision-keyed catalog aggregation is shared with the query
+ * dictionary. Both consumers reuse term postings without a second JSON scan.
+ * The dictionary should never mutate these source-owned term sets. */
+export async function getShopContextCatalogTerms(shop: string) {
+  const loaded = await loadShopContext(shop);
+  return { terms: loaded.terms, catalogRevision: loaded.catalogRevision };
 }
 
 export async function warmShopContext(shop: string) {
@@ -1442,9 +1524,10 @@ export async function applyShopContextToQuery({
         normalizeContextTerm(rewrite.planning?.semanticQuery ?? rewrite.analysis.intent),
     )
     .map((segment) => segment.canonicalValue)
-    .filter((value) => terms.some((term) =>
-      term.kind === "CATEGORY" && term.normalizedValue === normalizeContextTerm(value),
-    ));
+    .filter((value) =>
+      (contextIndex.byNormalized.get(normalizeContextTerm(value)) ?? [])
+        .some((term) => term.kind === "CATEGORY"),
+    );
   const sourceOwnedDiscoveryIdentityTargets = currentContextRetrievalMode === "DISCOVERY"
     ? [...new Set([
         ...resolvedPrimaryCategories,
@@ -1474,10 +1557,9 @@ export async function applyShopContextToQuery({
   ]);
   const hasExplicitSemanticMustFacet =
     semanticMustFacetTokens.size > 0 &&
-    terms.some(
-      (term) =>
-        semanticMustFacetKinds.has(term.kind) &&
-        semanticMustFacetTokens.has(term.normalizedValue),
+    [...semanticMustFacetTokens].some((token) =>
+      (contextIndex.byNormalized.get(token) ?? [])
+        .some((term) => semanticMustFacetKinds.has(term.kind)),
     );
   const productTypeTokens = new Set(
     meaningfulTokens(rewrite.analysis.productType),
@@ -1496,9 +1578,22 @@ export async function applyShopContextToQuery({
   const skipContextEnrichment =
     rewrite.analysis.decisionReason.includes("LLM_DEFERRED_BACKGROUND");
   const scoreStartedAt = Date.now();
+  // The index already maps normalized values and tokens to relevant terms.
+  // Only these can score: ordinary signal overlap, an explicit semantic MUST,
+  // or an expansion-grounded discovery leaf (including plural morphology).
+  // Scanning every catalog term here was O(shop vocabulary × query signals)
+  // even on warm cache hits.
+  const contextTermCandidates = skipContextEnrichment
+    ? []
+    : selectContextScoreCandidates(
+        contextIndex,
+        signals.map((signal) => signal.normalized),
+        semanticMustFacetTokens,
+        currentContextRetrievalMode === "DISCOVERY" ? discoveryExpansionValues : [],
+      );
   const scoredTerms = skipContextEnrichment
     ? []
-    : terms
+    : contextTermCandidates
     .filter(
       (term) =>
         // Establish product identity before considering attributes. A catalog
@@ -1743,7 +1838,10 @@ export async function applyShopContextToQuery({
     allowDirectExpansionEvidence
       ? [
           ...new Set(
-            terms
+            directEvidenceExpansionValues
+              .flatMap((value) =>
+                contextIndex.byNormalized.get(normalizeContextTerm(value)) ?? [],
+              )
               .filter((term) => {
                 if (term.kind !== "CANONICAL_PRODUCT_TYPE") return false;
                 // DIRECT expansion evidence must name a concrete catalog leaf,
@@ -1779,7 +1877,7 @@ export async function applyShopContextToQuery({
     familyProductIds.size > 0 &&
     semanticExpansionValues.length > 0
   ) {
-    for (const term of terms) {
+    for (const term of candidateContextTerms(contextIndex, semanticExpansionValues)) {
       if (
         ![
           "CANONICAL_PRODUCT_TYPE",
@@ -1832,7 +1930,7 @@ export async function applyShopContextToQuery({
     directSourceFacetSignals.filter((signal) => !isCommerceOnlyValue(signal));
   const collectDirectFacetProducts = (facet: string) => {
     const productIds = new Set<string>();
-    for (const term of terms) {
+    for (const term of candidateContextTerms(contextIndex, [facet])) {
       if (
         ![
           "ATTRIBUTE",
@@ -1905,7 +2003,7 @@ export async function applyShopContextToQuery({
     sourceOwnedDiscoveryIdentityTargets.length > 0
       ? [
           ...new Set(
-            terms
+            candidateIdentityContextTerms(contextIndex, sourceOwnedDiscoveryIdentityTargets)
               .filter((term) =>
                 sourceOwnedDiscoveryIdentityTargets.some((target) =>
                   discoverySourceIdentityCatalogMatch({
@@ -1925,7 +2023,7 @@ export async function applyShopContextToQuery({
   const ungroundedSourceProductClass = canonicalTypeCoverageComplete &&
     sourceOwnedDiscoveryIdentityTargets.some((target) =>
       discoveryIdentityTargetLooksLikeProductClass(target, semanticExpansionValues) &&
-      !terms.some((term) =>
+      !candidateIdentityContextTerms(contextIndex, [target]).some((term) =>
         (term.kind === "CATEGORY" && term.normalizedValue === normalizeContextTerm(target)) ||
         (["USE_CASE", "SOFT_CONTEXT"].includes(term.kind) &&
           sourceContextCatalogValueMatch(term.kind, term.value, target)) ||
@@ -1944,7 +2042,7 @@ export async function applyShopContextToQuery({
       normalizeContextTerm(segment.canonicalValue).includes(normalizeContextTerm(explicitFeature)),
     );
   const ungroundedExplicitFeature = Boolean(unresolvedFeature &&
-    !terms.some((term) =>
+    !candidateContextTerms(contextIndex, [explicitFeature!]).some((term) =>
       ["ATTRIBUTE", "VARIANT_OPTION", "USE_CASE", "COMPATIBILITY"].includes(term.kind) &&
       sourceContextCatalogValueMatch(term.kind, term.value, explicitFeature!),
     ));
@@ -2025,7 +2123,7 @@ export async function applyShopContextToQuery({
     discoverySourceFacetSignals.length > 0
       ? [
           ...new Set(
-            terms
+            candidateContextTerms(contextIndex, discoverySourceFacetSignals)
               .filter(
                 (term) =>
                   [
@@ -2072,7 +2170,7 @@ export async function applyShopContextToQuery({
   );
   const sourceNeedSupport = new Map<string, Set<number>>();
   if (discriminativeDiscoveryNeeds.length >= 3) {
-    for (const term of terms) {
+    for (const term of candidateContextTerms(contextIndex, discriminativeDiscoveryNeeds)) {
       if (!["USE_CASE", "SOFT_CONTEXT", "COMPATIBILITY"].includes(term.kind)) continue;
       discriminativeDiscoveryNeeds.forEach((need, index) => {
         if (!sourceContextCatalogValueMatch(term.kind, term.value, need)) return;
@@ -2177,6 +2275,8 @@ export async function applyShopContextToQuery({
   console.log("[AI Search] Shop context selected by code", {
     shop,
     availableTerms: terms.length,
+    indexedContextCandidates: contextTermCandidates.length,
+    scoredContextCandidates: scoredTerms.length,
     identitySignals: identitySignals.map((signal) => signal.value),
     matchedIdentityProducts: matchingProductIds.size,
     canonicalTypeProducts: canonicalContextProductIds.size,
@@ -2244,6 +2344,7 @@ export async function applyShopContextToQuery({
       ungroundedExplicitFeature,
       discoverySourceGroundedProductIds,
       discoveryExpansionGroundedProductIds,
+      typedColorVocabulary: [...contextIndex.typedColorVocabulary],
     },
   };
 }
@@ -2352,7 +2453,7 @@ function sourceSemanticTermForCanonical(
 
 function objectiveFacetAssignmentValue(value: string) {
   const match = value.match(
-    /^\s*(?:color|colour|material|fabric|finish|pattern)\s*=\s*(.+?)\s*$/i,
+    /^\s*(?:color|colour|material|fabric|finish|pattern)\s*[=:]\s*(.+?)\s*$/i,
   );
   return match?.[1] ? normalizeContextTerm(match[1]) : null;
 }
@@ -2388,6 +2489,14 @@ export function sourceContextCatalogValueMatch(
 
   const signalTokens = meaningfulTokens(normalizedSignal);
   const valueTokens = meaningfulTokens(normalizedValue);
+  // Empty token arrays must not satisfy [].every() and fabricate evidence.
+  // Single-letter variant codes (e.g. S) only match an explicit exact value.
+  if (signalTokens.length === 0) {
+    const assigned = kind === "ATTRIBUTE"
+      ? objectiveFacetAssignmentValue(catalogValue)
+      : null;
+    return normalizedValue === normalizedSignal || assigned === normalizedSignal;
+  }
 
   if (kind === "ATTRIBUTE") {
     const assigned = objectiveFacetAssignmentValue(catalogValue);
@@ -2819,15 +2928,21 @@ export async function filterResultsByExplicitGender<
   // Validate explicit target colors only when typed color coverage is high.
   // Missing product color remains unknown rather than becoming a contradiction.
   const requestedExact = rewrite.analysis.sourceOwnedExactConstraints ?? [];
-  const catalogRows = requestedExact.length > 0
+  const indexedColors = (rewrite as ContextualQueryResult).context?.typedColorVocabulary;
+  // Normal storefront queries already loaded the shop-context index. Reuse its
+  // typed palette instead of materializing every product's semantic rows again.
+  // Standalone/fixture callers retain the previous safe catalog fallback.
+  const catalogRows = requestedExact.length > 0 && !indexedColors
     ? await loadShopSemanticRows(shop)
     : rows;
-  const colorVocabulary = new Set(
-    catalogRows.flatMap((row) => {
-      const match = row.value.match(/^\s*colou?r\s*[=:]\s*(.+?)\s*$/i);
-      return match ? [normalizeContextTerm(match[1])] : [];
-    }),
-  );
+  const colorVocabulary = indexedColors
+    ? new Set(indexedColors)
+    : new Set(
+        catalogRows.flatMap((row) => {
+          const match = row.value.match(/^\s*colou?r\s*[=:]\s*(.+?)\s*$/i);
+          return match ? [normalizeContextTerm(match[1])] : [];
+        }),
+      );
   const requestedColors = currentTargetColors(
     originalQuery,
     rewrite,

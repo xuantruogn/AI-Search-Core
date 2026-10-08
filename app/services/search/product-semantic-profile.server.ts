@@ -791,20 +791,20 @@ export async function countSemanticProductsForKind(
   kind: string,
 ) {
   const normalizedShop = shop.trim().toLowerCase();
-  await loadShopSemanticRows(normalizedShop);
+  // This loader already streams every searchable profile when the per-shop
+  // semantic cache is cold or too large to retain. Reuse those loaded rows
+  // instead of starting a second full-catalog scan in the uncached branch.
+  const rows = await loadShopSemanticRows(normalizedShop);
   const loaded = cache.get(normalizedShop);
   if (loaded && loaded.expiresAt > Date.now()) {
     touchCacheEntry(normalizedShop, loaded);
     return loaded.productIdsByKind.get(kind)?.size ?? 0;
   }
 
-  // Very large shops may intentionally exceed the in-memory cache budget.
-  // Fall back to a bounded profile scan rather than expanding one-row-per-term
-  // data back into SQL.
   const ids = new Set<string>();
-  await scanShopSemanticProfiles(shop, ({ productId, terms }) => {
-    if (terms.some((term) => term.kind === kind)) ids.add(productId);
-  });
+  for (const row of rows) {
+    if (row.kind === kind) ids.add(row.productId);
+  }
   return ids.size;
 }
 

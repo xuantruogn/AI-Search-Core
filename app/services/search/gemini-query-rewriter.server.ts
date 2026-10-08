@@ -67,12 +67,19 @@ export function getGeminiQueryRewriteModel() {
 
 let geminiWarmupPromise: Promise<void> | null = null;
 let geminiWarmupCompletedAt = 0;
+let geminiWarmupAttemptedAt = 0;
 
 export function warmGeminiConnection() {
   const apiKey = process.env.GEMINI_API_KEY?.trim();
   if (!apiKey) return Promise.resolve();
 
   const now = Date.now();
+  // Rate-limit failed bootstrap warmups too: an unavailable provider must not
+  // trigger a new network request on every storefront runtime-config load.
+  if (now - geminiWarmupAttemptedAt < 5 * 60 * 1000) {
+    return Promise.resolve();
+  }
+  geminiWarmupAttemptedAt = now;
   if (now - geminiWarmupCompletedAt < 5 * 60 * 1000) {
     return Promise.resolve();
   }

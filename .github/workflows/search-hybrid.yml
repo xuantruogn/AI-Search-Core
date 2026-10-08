@@ -24,6 +24,10 @@ jobs:
       - run: npx prisma generate
       - run: npm run typecheck
       - run: npm run test:search-hybrid
+      - name: Storefront native/result count regression
+        run: node scripts/storefront-selftest.cjs
+        env:
+          PLAYWRIGHT_CHROME_PATH: /usr/bin/google-chrome
       - name: Qdrant dense + BM25 smoke
         run: npx tsx scripts/qdrant-bm25-smoke.ts
         env:
