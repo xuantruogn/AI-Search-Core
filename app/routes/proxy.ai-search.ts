@@ -2555,6 +2555,28 @@ let resultCacheStatus: "HIT" | "MISS" = "MISS";
           );
       }
 
+      const preparedRewrite =
+        await applyShopContextToQuery(
+          {
+            shop:
+              session.shop,
+
+            originalQuery:
+              query,
+
+            rewrite:
+              interpretedQuery,
+          },
+        );
+
+      const rewriteMs =
+        Date.now() -
+        rewriteStartedAt;
+
+      sortIntent =
+        preparedRewrite.analysis
+          .sortIntent;
+
       // Family-only queries use the complete verified taxonomy lane. Do not
       // assemble a Top-K hybrid shortlist and then claim its length is total.
       const completeFamilyLookup = await retrieveCompleteFamilyCandidates({
@@ -2631,28 +2653,6 @@ let resultCacheStatus: "HIT" | "MISS" = "MISS";
           versions: queryPlan.versions,
         });
       }
-
-      const preparedRewrite =
-        await applyShopContextToQuery(
-          {
-            shop:
-              session.shop,
-
-            originalQuery:
-              query,
-
-            rewrite:
-              interpretedQuery,
-          },
-        );
-
-      const rewriteMs =
-        Date.now() -
-        rewriteStartedAt;
-
-      sortIntent =
-        preparedRewrite.analysis
-          .sortIntent;
 
       const embeddingCacheStartedAt =
         Date.now();
