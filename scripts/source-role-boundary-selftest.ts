@@ -65,15 +65,16 @@ const winterEmbedding = composeFacetEmbeddingInput(
 assert.match(winterEmbedding, /winter weather/i);
 assert.doesNotMatch(winterEmbedding, /quần áo|mùa đông/i);
 const complementEmbedding = composeFacetEmbeddingInput(
-  "Looking for a shirt to wear with a black skirt",
+  "Looking for a shirt",
   { rawQuery: "áo mặc với váy đen", retrievalMode: "COMPLEMENT" } as any,
   {} as any,
   { fallbackReason: null, analysis: {
     sourceOwnedTargetIdentities: [],
     semanticMandatoryConcepts: [],
     semanticDemand: { ...emptyDemand, identity: ["shirt"] },
-    intent: "Looking for a shirt to wear with a black skirt",
+    intent: "Looking for a shirt",
   }} as any,
+  ["black skirt"],
 );
 assert.match(complementEmbedding, /black skirt/i);
 assert.doesNotMatch(complementEmbedding, /áo mặc với|váy đen/i);
