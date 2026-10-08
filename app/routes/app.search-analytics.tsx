@@ -132,7 +132,7 @@ async function getShopAnalyticsData(shop: string, requestedDays: number = 30) {
     clicks: number;
     clickedSearches: number;
     semanticFacetNoResultCount: number;
-    resultCount: number;
+    totalResultCount: number;
     productsClicked: Map<string, number>;
     logs: typeof queryLogs;
   }>();
@@ -146,13 +146,14 @@ async function getShopAnalyticsData(shop: string, requestedDays: number = 30) {
       clicks: 0,
       clickedSearches: 0,
       semanticFacetNoResultCount: 0,
-      resultCount: log.resultCount,
+      totalResultCount: 0,
       productsClicked: new Map<string, number>(),
       logs: [],
     };
 
     existing.variants.add(log.query);
     existing.searches += 1;
+    existing.totalResultCount += Math.max(0, log.resultCount);
     existing.clicks += log.clicks.length;
     existing.clickedSearches += log.clicks.length > 0 ? 1 : 0;
     existing.semanticFacetNoResultCount +=
@@ -232,6 +233,9 @@ async function getShopAnalyticsData(shop: string, requestedDays: number = 30) {
       cluster: cluster.normalizedQuery,
       variants: Array.from(cluster.variants).join(", "),
       searches: cluster.searches,
+      avgResults: cluster.searches > 0
+        ? cluster.totalResultCount / cluster.searches
+        : 0,
       clicks: cluster.clicks,
       ctr: ctrValue.toFixed(1) + "%",
       isAbnormal,
@@ -732,14 +736,15 @@ export default function SearchAnalyticsPage() {
         <table style={{ width: "100%", tableLayout: "fixed", borderCollapse: "collapse", fontSize: 13, textAlign: "left" }}>
           <thead>
             <tr style={{ background: "#f6f6f7", borderBottom: "1px solid #e1e3e5", color: "#4a4a4a" }}>
-              <th style={{ padding: "14px 12px", width: "15%" }}>Keyword / Cluster</th>
-              <th style={{ padding: "14px 12px", width: "16%" }}>User Query Variants</th>
+              <th style={{ padding: "14px 12px", width: "14%" }}>Keyword / Cluster</th>
+              <th style={{ padding: "14px 12px", width: "15%" }}>User Query Variants</th>
               <th style={{ padding: "14px 8px", textAlign: "center", width: "6%" }}>Searches</th>
+              <th style={{ padding: "14px 8px", textAlign: "center", width: "7%" }}>Avg. Results</th>
               <th style={{ padding: "14px 8px", textAlign: "center", width: "5%" }}>Clicks</th>
               <th style={{ padding: "14px 8px", textAlign: "center", width: "6%" }}>CTR</th>
               <th style={{ padding: "14px 8px", textAlign: "center", width: "8%" }}>Status</th>
-              <th style={{ padding: "14px 12px", width: "19%" }}>Abnormal Reason</th>
-              <th style={{ padding: "14px 12px", width: "25%" }}>Top Clicked Products</th>
+              <th style={{ padding: "14px 12px", width: "18%" }}>Abnormal Reason</th>
+              <th style={{ padding: "14px 12px", width: "21%" }}>Top Clicked Products</th>
             </tr>
           </thead>
           <tbody>
@@ -751,6 +756,11 @@ export default function SearchAnalyticsPage() {
                   <td style={{ padding: "16px 18px", fontWeight: 700, color: "#1a1a1a", wordBreak: "break-word" }}>{row.cluster}</td>
                   <td style={{ padding: "16px 18px", color: "#616161", wordBreak: "break-word" }}>{row.variants}</td>
                   <td style={{ padding: "16px 18px", textAlign: "center", fontWeight: 600 }}>{row.searches}</td>
+                  <td style={{ padding: "16px 18px", textAlign: "center", fontWeight: 600 }}>
+                    {Number.isInteger(row.avgResults)
+                      ? row.avgResults.toLocaleString()
+                      : row.avgResults.toFixed(1)}
+                  </td>
                   <td style={{ padding: "16px 18px", textAlign: "center", fontWeight: 600 }}>{row.clicks}</td>
                   <td style={{ padding: "16px 18px", textAlign: "center", fontWeight: 700, color: row.isAbnormal ? "#d32f2f" : "#008060" }}>{row.ctr}</td>
                   <td style={{ padding: "16px 18px", textAlign: "center" }}>
@@ -804,7 +814,7 @@ export default function SearchAnalyticsPage() {
             })}
             {filteredRows.length === 0 && (
               <tr>
-                <td colSpan={8} style={{ padding: "36px 18px", textAlign: "center", color: "#616161", fontSize: 13, background: "#fafafa" }}>
+                <td colSpan={9} style={{ padding: "36px 18px", textAlign: "center", color: "#616161", fontSize: 13, background: "#fafafa" }}>
                   No search query log data found for this filter mode in CSDL.
                 </td>
               </tr>
