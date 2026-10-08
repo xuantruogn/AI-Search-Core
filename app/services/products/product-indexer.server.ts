@@ -21,6 +21,7 @@ import {
   getSemanticProfileForProduct,
   getSemanticProfileState,
   refreshProductVariantSelections,
+  refreshProductTaxonomyTerms,
   PRODUCT_SEMANTIC_PROFILE_SCHEMA_VERSION,
   PRODUCT_VECTOR_SEMANTIC_PAYLOAD_VERSION,
 } from "../search/product-semantic-profile.server";
@@ -385,14 +386,16 @@ export async function indexProduct({
     }
     if (!semanticProfileCurrent) {
       await ensureDeterministicProductProfile(shop, product);
-      await refreshProductVariantSelections({
-        shop, productId: product.id, variants: product.variants,
-      });
-      return true;
     }
-    return refreshProductVariantSelections({
-      shop, productId: product.id, variants: product.variants,
-    });
+    const [variantChanged, taxonomyChanged] = await Promise.all([
+      refreshProductVariantSelections({
+        shop, productId: product.id, variants: product.variants,
+      }),
+      refreshProductTaxonomyTerms({
+        shop, productId: product.id, category: product.shopifyCategory,
+      }),
+    ]);
+    return !semanticProfileCurrent || variantChanged || taxonomyChanged;
   };
 
   if (
