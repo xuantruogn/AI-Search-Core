@@ -34,10 +34,21 @@ function noDemandQualifiers(rewrite: QueryRewriteResult) {
 export function classifyPureFamilyLookup(
   plan: QueryPlan | null,
   rewrite: QueryRewriteResult,
+  rawPlan: QueryPlan | null = plan,
 ): PureFamilyTarget | null {
   if (!plan || plan.retrievalMode === "COMPLEMENT") return null;
   const source = normalizeQueryText(plan.rawQuery);
   if (!source || !noDemandQualifiers(rewrite)) return null;
+
+  // Re-check original-source facets before the LLM's second pass: translation
+  // can drop an unresolved color/context even if the merged plan looks simple.
+  if (rawPlan && (
+    rawPlan.attributes.length || rawPlan.contexts.length || rawPlan.audiences.length ||
+    rawPlan.measurements.length || rawPlan.compatibility.length ||
+    rawPlan.entities.brands.length || rawPlan.entities.models.length ||
+    rawPlan.entities.identifiers.length ||
+    (rawPlan.identities.length > 0 && rawPlan.unresolvedSegments.length > 0)
+  )) return null;
 
   const parsed = parseDeterministicQuery(plan.rawQuery);
   if (parsed.price || parsed.measurements.length || parsed.compatibility.length ||
@@ -129,11 +140,12 @@ export async function retrieveCompleteFamilyCandidates(args: {
   shop: string;
   plan: QueryPlan | null;
   rewrite: QueryRewriteResult;
+  rawPlan?: QueryPlan | null;
 }, dependencies: {
   scanProfiles?: typeof scanShopSemanticProfiles;
   findRegistry?: typeof listSearchableIndexedProducts;
 } = {}): Promise<FamilyCoverage | null> {
-  const target = classifyPureFamilyLookup(args.plan, args.rewrite);
+  const target = classifyPureFamilyLookup(args.plan, args.rewrite, args.rawPlan ?? args.plan);
   if (!target) return null;
   const matched: Array<{ productId: string; grade: "EXACT" | "SUBTYPE" | "CATEGORY" }> = [];
   let scannedProfiles = 0;
