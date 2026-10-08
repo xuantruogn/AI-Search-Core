@@ -1095,6 +1095,10 @@ export default function BillingPage() {
               currency: plan.currencyCode,
               maximumFractionDigits: 2,
             }).format(plan.price);
+            const isSubmitting = subscribeFetcher.state !== "idle";
+            const isSubmittingThisPlan =
+              isSubmitting &&
+              subscribeFetcher.formData?.get("planHandle") === plan.handle;
 
             return (
               <article
@@ -1201,7 +1205,7 @@ export default function BillingPage() {
                   <input type="hidden" name="planHandle" value={plan.handle} />
                   <button
                     type="submit"
-                    disabled={isCurrentPlan || subscribeFetcher.state !== "idle"}
+                    disabled={isCurrentPlan || isSubmitting}
                     style={{
                       width: "100%",
                       padding: "11px 16px",
@@ -1214,12 +1218,12 @@ export default function BillingPage() {
                         : "#fff",
                       color: isCurrentPlan ? "#737b88" : isFeatured ? "#fff" : "#5b3df5",
                       fontWeight: 800,
-                      cursor: isCurrentPlan ? "not-allowed" : "pointer",
+                      cursor: isCurrentPlan || isSubmitting ? "not-allowed" : "pointer",
                     }}
                   >
                     {isCurrentPlan
                       ? "Current plan"
-                      : subscribeFetcher.state !== "idle"
+                      : isSubmittingThisPlan
                         ? "Redirecting..."
                         : `Start with ${plan.name}`}
                   </button>
