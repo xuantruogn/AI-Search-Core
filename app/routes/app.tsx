@@ -99,7 +99,6 @@ export default function App() {
     { label: "Search Analytics", to: "/app/search-analytics" },
     { label: "Plans & Billing", to: "/app/billing" },
     { label: "Settings", to: "/app/settings" },
-    { label: "Product Demo", to: "/demo" },
   ];
 
   return (
