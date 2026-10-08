@@ -34,7 +34,9 @@ export async function retrieveLexicalCandidates(args: {
   // index on (title, handle). BM25/dense cover non-lexical recall.
   if (!/^[\p{L}\p{N}]+$/u.test(anchor)) return [];
   const booleanQuery = `${anchor}*`;
-  const rows = await db.$queryRaw<
+  let rows: Array<{ productId: string; handle: string; title: string }>;
+  try {
+    rows = await db.$queryRaw<
     Array<{ productId: string; handle: string; title: string }>
   >(Prisma.sql`
     SELECT \`productId\`, \`handle\`, \`title\`
@@ -46,7 +48,16 @@ export async function retrieveLexicalCandidates(args: {
     ORDER BY MATCH(\`title\`, \`handle\`) AGAINST (${booleanQuery} IN BOOLEAN MODE) DESC,
              \`productId\` ASC
     LIMIT 500
-  `);
+    `);
+  } catch (error) {
+    // An index migration or MySQL fulltext subsystem issue must not fail the
+    // entire hybrid pipeline. Dense, sparse and structured lanes still run.
+    console.error("[AI Search][LEXICAL] fulltext lane unavailable", {
+      shop: args.shop,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return [];
+  }
 
   const normalizedQuery = normalizeQueryText(args.query);
   return rows
