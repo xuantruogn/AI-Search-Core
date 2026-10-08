@@ -98,11 +98,13 @@ const complete = await retrieveCompleteFamilyCandidates({
 }, {
   scanProfiles: async (_shop, visit) => {
     for (const entry of fixtures) {
-      await visit({ ...entry, updatedAt: new Date() });
+      await visit({ ...entry, terms: entry.terms.map((term) => ({
+        ...term, normalizedValue: term.value.toLowerCase(),
+      })), updatedAt: new Date() });
     }
     await visit({
       productId: "helmet", updatedAt: new Date(),
-      terms: [{ kind: "CANONICAL_PRODUCT_TYPE", value: "Bicycle Helmet" }],
+      terms: [{ kind: "CANONICAL_PRODUCT_TYPE", value: "Bicycle Helmet", normalizedValue: "bicycle helmet" }],
     });
     return fixtures.length + 1;
   },
