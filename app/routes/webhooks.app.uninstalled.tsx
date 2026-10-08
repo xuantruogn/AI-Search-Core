@@ -77,6 +77,52 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       },
     });
 
+    const currentSubscription = shopRecord.currentSubscriptionGid
+      ? await tx.billingSubscription.findUnique({
+          where: {
+            shopifySubscriptionGid: shopRecord.currentSubscriptionGid,
+          },
+          select: {
+            id: true,
+            status: true,
+            trialStatus: true,
+            trialStartsAt: true,
+            trialEndsAt: true,
+            currentPeriodStartsAt: true,
+            currentPeriodEndsAt: true,
+            paymentStatus: true,
+            chargeStatus: true,
+            refundStatus: true,
+          },
+        })
+      : null;
+
+    // Uninstall during trial is terminal for the trial window. We never
+    // restore the remaining trial days on reinstall. Paid subscriptions are
+    // different: if the subscription had already entered its paid period,
+    // the remaining paid entitlement can be recovered on reinstall.
+    if (
+      currentSubscription &&
+      currentSubscription.status !== "CANCELLED" &&
+      currentSubscription.trialEndsAt &&
+      now < currentSubscription.trialEndsAt
+    ) {
+      await tx.billingSubscription.update({
+        where: { id: currentSubscription.id },
+        data: {
+          status: "CANCELLED",
+          trialStatus: "CANCELLED",
+          cancellationStatus: "EFFECTIVE",
+          accessStatus: "NONE",
+          cancelledAt: now,
+          reconciliationStatus: "SYNCED",
+          reconciliationCheckedAt: now,
+          reconciliationReason: "TRIAL_FORFEITED_ON_UNINSTALL",
+          repairRequiredAt: null,
+        },
+      });
+    }
+
     await tx.billingSubscription.updateMany({
       where: {
         shop,
