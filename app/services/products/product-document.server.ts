@@ -1,4 +1,5 @@
 export type ProductVariantForIndex = {
+  id?: string;
   title: string;
   sku?: string | null;
   barcode?: string | null;
