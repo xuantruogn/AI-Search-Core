@@ -69,7 +69,7 @@ const contextFixture = [
 const contextIndex = buildShopContextLookupIndex(contextFixture as any);
 const shortlisted = selectContextScoreCandidates(
   contextIndex,
-  ["something for wet weather commuting", "hiking"],
+  ["something for wet weather commuting", "hiking", "navy"],
   ["navy"],
   ["headlamps"],
 );
