@@ -2451,6 +2451,7 @@ let resultCacheStatus: "HIT" | "MISS" = "MISS";
       const queryPlanStartedAt = Date.now();
 
       let queryPlan: QueryPlan | null = null;
+      let rawQueryPlan: QueryPlan | null = null;
       let finalAbsenceProofPromise: Promise<AbsenceProof> | null = null;
       let interpretedQuery;
 
@@ -2465,6 +2466,7 @@ let resultCacheStatus: "HIT" | "MISS" = "MISS";
         });
 
         queryPlan = pipeline.profile?.finalPlan ?? pipeline.rawPlan;
+        rawQueryPlan = pipeline.rawPlan;
         finalAbsenceProofPromise = pipeline.finalProof;
 
         console.log("[AI Search][PARALLEL QUERY PIPELINE]", {
@@ -2558,6 +2560,7 @@ let resultCacheStatus: "HIT" | "MISS" = "MISS";
       const completeFamilyLookup = await retrieveCompleteFamilyCandidates({
         shop: session.shop,
         plan: queryPlan,
+        rawPlan: rawQueryPlan,
         rewrite: preparedRewrite,
       });
       if (completeFamilyLookup) {
