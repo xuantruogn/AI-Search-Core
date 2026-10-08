@@ -15,6 +15,76 @@ import { retryFailedProductSyncJobs } from "../services/products/product-sync-jo
 import { kickProductSyncQueue } from "../services/products/product-sync-queue.server";
 import prisma from "../db.server";
 
+
+type CatalogProductIssueKind = "error" | "warning" | "muted";
+
+function getCatalogProductIssue(product: {
+  status: string;
+  hasVector: boolean;
+  vectorStatus: string;
+  searchable: boolean;
+  blockedReason: string | null;
+  enrichmentStatus: string;
+}) {
+  if (
+    product.blockedReason === "PRODUCT_LIMIT" ||
+    product.status === "PRODUCT_LIMIT_BLOCKED"
+  ) {
+    return { label: "Blocked by quota", kind: "error" as CatalogProductIssueKind };
+  }
+
+  if (
+    product.blockedReason === "SUBSCRIPTION" ||
+    product.status === "SUBSCRIPTION_BLOCKED"
+  ) {
+    return { label: "Blocked by subscription", kind: "error" as CatalogProductIssueKind };
+  }
+
+  if (
+    product.blockedReason === "VECTOR_UPDATE_LIMIT" ||
+    product.status === "VECTOR_QUOTA_BLOCKED"
+  ) {
+    return { label: "Blocked by vector quota", kind: "error" as CatalogProductIssueKind };
+  }
+
+  if (
+    product.blockedReason === "UNPUBLISHED" ||
+    product.status === "UNPUBLISHED"
+  ) {
+    return { label: "Unavailable on storefront", kind: "warning" as CatalogProductIssueKind };
+  }
+
+  if (product.status === "PRODUCT_LIMIT_RECOVERY_PENDING") {
+    return { label: "Pending quota recovery", kind: "warning" as CatalogProductIssueKind };
+  }
+
+  if (product.status === "SUBSCRIPTION_RECOVERY_PENDING") {
+    return { label: "Pending subscription recovery", kind: "warning" as CatalogProductIssueKind };
+  }
+
+  if (product.status === "PRODUCT_SLOT_RESERVED") {
+    return { label: "Indexing", kind: "muted" as CatalogProductIssueKind };
+  }
+
+  if (product.vectorStatus === "STALE") {
+    return { label: "Needs reindex", kind: "warning" as CatalogProductIssueKind };
+  }
+
+  if (product.enrichmentStatus === "FAILED") {
+    return { label: "Product analysis failed", kind: "warning" as CatalogProductIssueKind };
+  }
+
+  if (!product.hasVector || product.vectorStatus === "MISSING") {
+    return { label: "Pending index", kind: "muted" as CatalogProductIssueKind };
+  }
+
+  if (!product.searchable) {
+    return { label: "Not searchable", kind: "warning" as CatalogProductIssueKind };
+  }
+
+  return null;
+}
+
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
   const url = new URL(request.url);
@@ -61,17 +131,32 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       status: true,
       documentHash: true,
       hasVector: true,
+      vectorStatus: true,
+      searchable: true,
+      blockedReason: true,
+      enrichmentStatus: true,
     },
   });
 
-  const products = rawProducts.map((p) => ({
-    id: p.id,
-    productId: p.productId,
-    handle: p.handle,
-    title: p.title,
-    status: p.status,
-    hasVector: Boolean(p.hasVector && p.documentHash),
-  }));
+  const products = rawProducts.map((p) => {
+    const hasVector = Boolean(p.hasVector && p.documentHash);
+    const issue = getCatalogProductIssue({
+      status: p.status,
+      hasVector,
+      vectorStatus: p.vectorStatus,
+      searchable: p.searchable,
+      blockedReason: p.blockedReason,
+      enrichmentStatus: p.enrichmentStatus,
+    });
+
+    return {
+      id: p.id,
+      productId: p.productId,
+      handle: p.handle,
+      title: p.title,
+      issue,
+    };
+  });
 
   const totalPages = Math.ceil(targetTotal / pageSize) || 1;
 
@@ -589,64 +674,54 @@ export default function CatalogSyncPage() {
           <table className="cat-table">
             <thead>
               <tr>
-                <th style={{ width: "35%" }}>Product Title</th>
-                <th style={{ width: "25%" }}>Handle / Path</th>
-                <th style={{ width: "20%" }}>Store Status</th>
-                <th style={{ width: "20%" }}>Status</th>
+                <th style={{ width: "42%" }}>Product Title</th>
+                <th style={{ width: "33%" }}>Handle / Path</th>
+                <th style={{ width: "25%" }}>{activeTab === "indexed" ? "Issue" : "Reason"}</th>
               </tr>
             </thead>
             <tbody>
               {currentTableData.products.length > 0 ? (
                 currentTableData.products.map((product) => {
-                  const isIndexed = activeTab === "indexed" ? true : false;
+                  const issue = product.issue;
+                  const issueStyle =
+                    issue?.kind === "error"
+                      ? {
+                          background: "#ffebe9",
+                          color: "#d32f2f",
+                          border: "1px solid #f3b8b8",
+                        }
+                      : issue?.kind === "warning"
+                        ? {
+                            background: "#fff6df",
+                            color: "#8a5b00",
+                            border: "1px solid #f3d489",
+                          }
+                        : {
+                            background: "#f1f2f3",
+                            color: "#5c6270",
+                            border: "1px solid #e2e4ed",
+                          };
 
                   return (
                     <tr key={product.id}>
                       <td style={{ fontWeight: 700, color: "#1a1c23" }}>{product.title}</td>
                       <td style={{ color: "#5c6270" }}>{product.handle}</td>
                       <td>
-                        <span
-                          style={{
-                            padding: "4px 10px",
-                            borderRadius: 12,
-                            fontSize: 11,
-                            fontWeight: 700,
-                            background: product.status === "ACTIVE" ? "#e4f8f0" : "#f1f2f3",
-                            color: product.status === "ACTIVE" ? "#008060" : "#5c6270",
-                          }}
-                        >
-                          {product.status === "ACTIVE" ? "ACTIVE" : product.status}
-                        </span>
-                      </td>
-                      <td>
-                        {isIndexed ? (
+                        {issue ? (
                           <span
                             style={{
                               padding: "4px 10px",
                               borderRadius: 12,
                               fontSize: 11,
                               fontWeight: 700,
-                              background: "#e4f8f0",
-                              color: "#008060",
-                              border: "1px solid #b7ebc6",
+                              display: "inline-block",
+                              ...issueStyle,
                             }}
                           >
-                            ✓ Indexed
+                            {issue.label}
                           </span>
                         ) : (
-                          <span
-                            style={{
-                              padding: "4px 10px",
-                              borderRadius: 12,
-                              fontSize: 11,
-                              fontWeight: 700,
-                              background: "#ffebe9",
-                              color: "#d32f2f",
-                              border: "1px solid #f3b8b8",
-                            }}
-                          >
-                            ❌ Unindexed
-                          </span>
+                          <span style={{ color: "#8c9196" }}>—</span>
                         )}
                       </td>
                     </tr>
@@ -654,7 +729,7 @@ export default function CatalogSyncPage() {
                 })
               ) : (
                 <tr>
-                  <td colSpan={4} style={{ textAlign: "center", padding: 24, color: "#8c9196" }}>
+                  <td colSpan={3} style={{ textAlign: "center", padding: 24, color: "#8c9196" }}>
                     {isTableLoading
                       ? "Loading product list..."
                       : activeTab === "indexed"
