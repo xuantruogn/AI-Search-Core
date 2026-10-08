@@ -2245,7 +2245,15 @@ export async function semanticSearch({
   // a closed-world absence proof. Do not let it independently zero the result
   // set. Certain absence is owned by absence-proof.server; semantic quality
   // still has to pass the normal vector evidence guard below.
-  const weakNoEvidenceVector =
+  // Lack of PSF lexical/context overlap is not proof of semantic failure.
+  // A candidate passing the normal full-primary Demand threshold keeps dense
+  // authority even when translation fell back; branch cosine cannot rescue it.
+  const hasPrimaryDemandEvidence = registryValidatedResults.some((result) =>
+    typeof result.primaryVectorSimilarity === "number" &&
+    Number.isFinite(result.primaryVectorSimilarity) &&
+    result.primaryVectorSimilarity >= effectiveMinimumScore,
+  );
+  const weakNoEvidenceVector = !hasPrimaryDemandEvidence &&
     shouldRejectNoEvidenceVector({
       hasStrongCatalogEvidence,
       topVectorScore,

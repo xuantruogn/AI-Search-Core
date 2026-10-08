@@ -16,7 +16,9 @@ if (sourceSnapshot && (sourceSnapshot.status !== "SOURCE_READ_SUCCESS" ||
     sourceSnapshot.shop !== "dev-app-6fvh2isn.myshopify.com")) {
   throw new Error("Source fixture must be a successful read of the development shop");
 }
-const sourceProducts: any[] = sourceSnapshot?.products ?? [];
+const eligibleRows = await db.aiSearchIndexedProduct.findMany({ where: { shop: "dev-app-6fvh2isn.myshopify.com", searchable: true, hasVector: true }, select: { productId: true } });
+const eligibleIds = new Set(eligibleRows.map(row => row.productId));
+const sourceProducts: any[] = (sourceSnapshot?.products ?? []).filter((product: any) => eligibleIds.has(product.id));
 const endpoint = process.env.AI_SEARCH_LIVE_TEST_URL ?? "";
 if (!endpoint) {
   throw new Error(

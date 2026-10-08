@@ -56,6 +56,8 @@ export function applyFinalRelevanceCutoff<T extends { score: number }>(args: {
   results: T[];
   retrievalMode: "DIRECT" | "DISCOVERY" | "COMPLEMENT";
   semanticThreshold: number;
+  /** A partial exact fact cannot establish a multi-axis semantic request. */
+  requiresFullDemand?: boolean;
 }) {
   if (args.results.length === 0) return args.results;
 
@@ -64,7 +66,7 @@ export function applyFinalRelevanceCutoff<T extends { score: number }>(args: {
     // Exact lookup authority has already been target/fact validated upstream.
     // In open-world modes it proves only a component or reference, not the
     // full need/relation, so it cannot replace primary Demand evidence.
-    if (args.retrievalMode === "DIRECT" && hasExactAuthority(result)) return true;
+    if (args.retrievalMode === "DIRECT" && !args.requiresFullDemand && hasExactAuthority(result)) return true;
 
     const sources = uniqueSources(result);
     const primaryDemandCosine = result.primaryVectorSimilarity;

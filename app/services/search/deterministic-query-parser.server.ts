@@ -52,7 +52,7 @@ export type DeterministicQueryParse = {
   version: string;
 };
 
-export function parseDeterministicQuery(query: string): DeterministicQueryParse {
+export function parseDeterministicQuery(query: string, options: { allowBareAlphaSize?: boolean } = {}): DeterministicQueryParse {
   const normalizedQuery = normalizeQueryText(query);
   const numericPrice = parsePriceConstraint(query);
   const price = numericPrice
@@ -88,6 +88,16 @@ export function parseDeterministicQuery(query: string): DeterministicQueryParse 
       ...constraint(raw, "MUST"),
       name: /size/i.test(raw) || /xl/i.test(raw) ? "size" : "measurement",
     });
+  }
+
+  // A bare alpha size needs independently verified typed size vocabulary
+  // in the requested family; parser syntax alone cannot classify a product.
+  if (options.allowBareAlphaSize) {
+    for (const match of normalizedQuery.matchAll(/\b(?:small|medium|large)\b/g)) {
+      if (!measurements.some((item) => item.normalizedValue?.includes(match[0]))) {
+        measurements.push({ ...constraint(`size ${match[0]}`, "MUST"), name: "size" });
+      }
+    }
   }
 
   // Versioned device/model references can become closed-world compatibility

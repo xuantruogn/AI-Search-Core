@@ -174,7 +174,7 @@ type FastQueryAnalysis = {
 };
 
 const QUERY_REWRITE_CACHE_VERSION =
-  "semantic-normalize-v42-source-owned-target-and-exact-provenance";
+  "semantic-normalize-v43-demand-operating-context";
 const rewrittenQueryCache = new Map<string, CacheEntry<QueryRewriteResult>>();
 const pendingRewrites = new Map<string, Promise<QueryRewriteResult>>();
 
@@ -780,6 +780,7 @@ async function performRewrite({ shop, cleanQuery, searchLanguage, model, backupM
       "For DISCOVERY requests that name an activity, occasion, environment or recipient need but do NOT explicitly name wearing/clothing/fashion or a product class, keep the primary semanticQuery cross-category and need-first. Do not invent apparel/outfit as the primary family. Individual expansions may include apparel alongside equipment, accessories or other natural product classes when relevant.",
       "Preserve exact brands, models, SKUs, numbers, measurements and negation. Do not invent features.",
       "Also return semanticDemand with string arrays identity, desiredOutcomes, useCases, contexts, qualities, audience, styles, negativeConstraints, exactConstraints. These axes align with product Supply identity, purposes, useCases, contexts, qualities, audience, styles. Use only shopper-owned meaning, in target language. Leave identity empty when the source names no target class; never copy expansions or reference products into it. Audience only if explicit. Put only closed-world exact brand/model/SKU/identifier/compatibility/price/measurements/color/size in exactConstraints, excluded properties in negativeConstraints; do not duplicate those exact-only values in positive axes. Seasons, weather, use cases, desired outcomes and semantic qualities belong on their semantic axes even when explicitly stated; do not move them into exactConstraints merely because they are explicit. Demand constraints are advisory extraction, code owns hard validation. semanticQuery is a natural sentence of the same demand, never a semicolon facet dump.",
+      "Explain the practical goal and operating context of the requested activity in semanticQuery and semanticDemand, including directly implied semantic needs when useful. Keep those interpretations advisory: never add inferred capabilities or context to exactConstraints, mandatoryConcepts, required target identity or negatives. Preserve the requested object, alternatives and all explicit context even if they are broad. Do not claim a product capability or invent facts about the catalog.",
       "Return JSON only.",
     ].join(" ");
 
@@ -886,7 +887,9 @@ async function performRewrite({ shop, cleanQuery, searchLanguage, model, backupM
         input: rewriteRequest.input,
         schema,
         maxOutputTokens: rewriteRequest.maxOutputTokens,
-        timeoutMs,
+        // Backup must have its own usable deadline. Reusing the primary
+        // deadline caused translation loss when the healthy backup was slow.
+        timeoutMs: readPositiveInteger("AI_SEARCH_LLM_BACKUP_TIMEOUT_MS", Math.max(timeoutMs, 10_000)),
       });
       response = openAiResponse;
       recordOpenAiUsageSafe({

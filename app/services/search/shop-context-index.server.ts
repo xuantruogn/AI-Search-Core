@@ -1,4 +1,6 @@
 import db from "../../db.server";
+import { typedProductFamilyMatches, resolveTypedAliasFamilyHeads } from "./structured-candidate-retrieval.server";
+import { sourceProductTypeOwnsTarget } from "./query-planner.server";
 import type { ProductForIndex } from "../products/product-document.server";
 import type { ProductSemanticAnalysis } from "../products/product-embedding-input.server";
 import type { QueryRewriteResult } from "./query-rewriter.server";
@@ -2849,6 +2851,24 @@ function versionedEntityFamilyMatch(values: string[], signal: string) {
   }) ? 1 : 0;
 }
 
+export function alphaSizeFactMatch(values: string[], signal: string) {
+  const aliases: Record<string, string> = {
+    s: "small", small: "small", m: "medium", medium: "medium", l: "large", large: "large",
+    xs: "xsmall", "x small": "xsmall", xsmall: "xsmall", "extra small": "xsmall",
+    xl: "xlarge", "x large": "xlarge", xlarge: "xlarge", "extra large": "xlarge",
+    xxl: "xxlarge", "xx large": "xxlarge", xxlarge: "xxlarge", "extra extra large": "xxlarge",
+  };
+  const requested = aliases[normalizeContextTerm(signal).replace(/^size\s+/, "")];
+  const known = values.flatMap((value) => {
+    const normalized = normalizeContextTerm(value);
+    if (!normalized.startsWith("size ")) return [];
+    const size = aliases[normalized.slice(5)];
+    return size ? [size] : [];
+  });
+  if (!requested || known.length === 0) return 0.5;
+  return known.includes(requested) ? 1 : 0;
+}
+
 function exactMeasurementMatch(values: string[], signal: string) {
   const normalizeMeasurement = (value: string) =>
     normalizeContextTerm(value).replace(/(\d)[x×](?=\d)/g, "$1 ");
@@ -2927,7 +2947,7 @@ export async function filterResultsByExplicitGender<
 
   // Validate explicit target colors only when typed color coverage is high.
   // Missing product color remains unknown rather than becoming a contradiction.
-  const requestedExact = rewrite.analysis.sourceOwnedExactConstraints ?? [];
+  const requestedExact = readStrictTargetAttributes(originalQuery, rewrite);
   const indexedColors = (rewrite as ContextualQueryResult).context?.typedColorVocabulary;
   // Normal storefront queries already loaded the shop-context index. Reuse its
   // typed palette instead of materializing every product's semantic rows again.
@@ -3151,8 +3171,18 @@ export async function filterResultsByExplicitGender<
       : [];
   const exactIdentifierSignals = sourceGroundedSignals(identifierSignals);
   const exactCompatibilitySignals = sourceGroundedSignals(compatibilitySignals);
-  const numericRequiredSignals = parseDeterministicQuery(originalQuery)
-    .measurements.map((item) => item.value);
+  const requestedSizeFamilyIds = new Set([
+    ...(rewrite.context?.targetFamilyProductIds ?? []),
+    ...(rewrite.context?.identityCandidateProductIds ?? []),
+  ]);
+  const hasTypedAlphaSizeInTargetFamily = requestedSizeFamilyIds.size > 0 && rows.some((row) =>
+    requestedSizeFamilyIds.has(row.productId) && row.kind === "MEASUREMENT" &&
+    /^size\s*[=:]\s*(?:xs|s|m|l|xl|xxl|small|medium|large)\b/i.test(row.value),
+  );
+  const parsedMeasurements = parseDeterministicQuery(originalQuery, {
+    allowBareAlphaSize: hasTypedAlphaSizeInTargetFamily,
+  }).measurements;
+  const numericRequiredSignals = parsedMeasurements.map((item) => item.value);
   const familyCategorySignals =
     currentRetrievalMode === "DIRECT"
       ? [
@@ -3255,6 +3285,17 @@ export async function filterResultsByExplicitGender<
         })
       : [];
 
+  const identityFamilyHeadSignals = [...new Set([
+    ...identitySignals.map((signal) => signal.value),
+    ...resolveTypedAliasFamilyHeads(rows, identitySignals.map((signal) => signal.value)),
+  ])];
+  const pureFamilyLookup = currentRetrievalMode === "DIRECT" &&
+    rewrite.planning?.route === "STRUCTURED_ONLY" && identitySignals.length > 0 &&
+    (rewrite.planning.attributes?.length ?? 0) === 0 &&
+    (rewrite.planning.contexts?.length ?? 0) === 0 &&
+    (rewrite.planning.audiences?.length ?? 0) === 0 &&
+    (rewrite.planning.measurements?.length ?? 0) === 0 &&
+    (rewrite.planning.compatibility?.length ?? 0) === 0;
   const scored = results.map((result) => {
     const values = valuesByProduct.get(result.productId) ?? [];
     const tokens = tokensByProduct.get(result.productId) ?? new Set<string>();
@@ -3282,6 +3323,15 @@ export async function filterResultsByExplicitGender<
           ),
         ),
       ),
+    );
+    const typedFamilyValues = valuesForKinds(["CANONICAL_PRODUCT_TYPE", "PRODUCT_TYPE"]);
+    const identityFamilyHeadMatch = identityFamilyHeadSignals.some((signal) =>
+      [...typedFamilyValues, ...valuesForKinds(["ALIAS"])].some((actual) => {
+        if (!typedProductFamilyMatches(actual, signal)) return false;
+        const tokens = normalizeContextTerm(actual).split(" ");
+        const targetLength = normalizeContextTerm(signal).split(" ").length;
+        return sourceProductTypeOwnsTarget({query: actual, start: tokens.length - targetLength, end: tokens.length});
+      }),
     );
     const complementaryIdentityValues = valuesForKinds([
       "CANONICAL_PRODUCT_TYPE",
@@ -3476,7 +3526,9 @@ export async function filterResultsByExplicitGender<
     const numericRequiredMatch = numericRequiredSignals.length === 0
       ? 0
       : Math.min(...numericRequiredSignals.map((signal) =>
-          exactMeasurementMatch(exactNumericValues, signal),
+          /^size (?:small|medium|large)$/.test(normalizeContextTerm(signal))
+            ? alphaSizeFactMatch(valuesForKinds(["MEASUREMENT", "VARIANT_OPTION"]), signal)
+            : exactMeasurementMatch(exactNumericValues, signal),
         ));
     const categoryValues = valuesForKinds(["CATEGORY"]);
     const categoryMatch = bestSignalMatch(
@@ -3619,6 +3671,8 @@ export async function filterResultsByExplicitGender<
         sourceGroundedDiscoveryProductIds.has(result.productId),
       expansionDiscoveryGrounding:
         expansionGroundedDiscoveryProductIds.has(result.productId),
+      identityFamilyHeadMatch,
+      hasTypedFamilyIdentity: typedFamilyValues.length > 0,
       attributeMatch,
       semanticMustFacetMatch,
       directContextNeedMatch,
@@ -3659,6 +3713,7 @@ export async function filterResultsByExplicitGender<
     hasIdentityMatch,
     hasSourceOwnedTargetIdentity,
   });
+  const hasTypedFamilyHeadEvidence = scored.some((item) => item.identityFamilyHeadMatch);
   const hasFamilyCategoryMatch =
     familyCategorySignals.length > 0 &&
     scored.some((item) => item.categoryMatch >= 0.75);
@@ -3700,6 +3755,13 @@ export async function filterResultsByExplicitGender<
     );
     if (genderMismatch) {
       genderFilteredCount += 1;
+      return [];
+    }
+    if ((hasSourceOwnedTargetIdentity || directIdentityGrounded) && hasTypedFamilyHeadEvidence &&
+        item.hasTypedFamilyIdentity && !item.identityFamilyHeadMatch) {
+      // A known accessory/component noun cannot inherit target identity merely
+      // because its use context contains the requested family or dense agrees.
+      identityFilteredCount += 1;
       return [];
     }
     const knownColors = colorsByProduct.get(result.productId) ?? [];
@@ -3839,6 +3901,10 @@ export async function filterResultsByExplicitGender<
     return [{
       ...result,
       score: typedRerankScore,
+      // BM25 supplies recall only. Facts just read and role-validated above
+      // may prove the entire request only when that request is family-only.
+      structuredGuardRescue: (result as T & {structuredGuardRescue?: boolean}).structuredGuardRescue ||
+        (pureFamilyLookup && item.hasTypedFamilyIdentity && item.identityFamilyHeadMatch),
       // Named target identity owns the first tier, including COMPLEMENT.
       // Primary full Demand then precedes soft source facets and lane boosts;
       // reference ownership and exact exclusions were validated above.
@@ -3865,7 +3931,7 @@ export async function filterResultsByExplicitGender<
       // Keep it distinct from branch recall and PSF lexical overlap.
       _jointDemandEvidence:
         Number.isFinite(item.primaryDemandVectorSimilarity)
-          ? item.primaryDemandVectorSimilarity
+          ? item.primaryDemandVectorSimilarity + Math.min(0.06, item.preferredFacetMatches * 0.06)
           : -1,
       _preferredFacetMatches: item.preferredFacetMatches,
       _sourceDiscoveryTier:
@@ -3937,6 +4003,7 @@ export async function filterResultsByExplicitGender<
     results: filtered,
     retrievalMode: currentRetrievalMode,
     semanticThreshold,
+    requiresFullDemand: rewrite.planning?.route !== "STRUCTURED_ONLY",
   });
   filtered.splice(0, filtered.length, ...relevanceFiltered);
 

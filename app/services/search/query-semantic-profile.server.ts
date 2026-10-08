@@ -10,12 +10,13 @@ import {
   queryPlanToLegacyRewrite,
 } from "./legacy-query-rewrite-adapter.server";
 import { normalizeQueryText } from "./deterministic-query-parser.server";
+
 import { sourceProductTypeOwnsTarget } from "./query-planner.server";
 
 export const QUERY_SEMANTIC_PROFILE_VERSION =
   "query-semantic-profile-v6-parser-target-authority";
 export const QUERY_EMBEDDING_PIPELINE_VERSION =
-  "semantic-expansion-v17-source-authority-full-demand";
+  "semantic-expansion-v21-pure-target-equivalence";
 
 export type QuerySemanticProfile = {
   rawPlan: QueryPlan;
@@ -223,11 +224,11 @@ export function sourceOwnedSemanticDemandIdentities(args: {
             ),
           );
           const identityMatchesTarget =
-            concept.target === normalizedIdentity ||
+            concept.target === normalizedIdentity || concept.source === normalizedIdentity ||
             (
               normalizedIdentity.endsWith(` ${concept.target}`) &&
               identityModifiers.length > 0 &&
-              identityModifiers.every((token) => exactTokens.has(token))
+              identityModifiers.every((token) => exactTokens.has(token) || (args.modifiers ?? []).some((modifier) => normalizeQueryText(modifier).split(" ").includes(token)))
             );
           if (!identityMatchesTarget || !sourceContains(concept.source)) {
             return false;
@@ -610,6 +611,26 @@ export function stripReferenceScopedFacetsFromEmbedding(args: {
     .trim();
 }
 
+export function pureTargetDemandEmbedding(args: {
+  originalQuery: string;
+  retrievalMode: string;
+  identities: string[];
+  concepts: Array<{target: string; source: string}>;
+  demand?: import("./semantic-contract.server").SemanticDemandProfile;
+}) {
+  const demand = args.demand;
+  if (args.retrievalMode !== "DIRECT" || args.identities.length !== 1 || !demand) return null;
+  if (isGenericDiscoveryFamily(args.identities[0])) return null;
+  if ([demand.desiredOutcomes, demand.useCases, demand.contexts, demand.qualities,
+       demand.audience, demand.styles, demand.negativeConstraints, demand.exactConstraints]
+       .some((axis) => axis.length > 0)) return null;
+  const target = normalizeQueryText(args.identities[0]);
+  return args.concepts.some((concept) =>
+    normalizeQueryText(concept.source) === normalizeQueryText(args.originalQuery) &&
+    normalizeQueryText(concept.target) === target
+  ) ? args.identities[0] : null;
+}
+
 function composeFacetEmbeddingInput(
   semanticQuery: string,
   finalPlan: QueryPlan,
@@ -621,6 +642,16 @@ function composeFacetEmbeddingInput(
   // identity, brand/model/SKU, compatibility, price and negatives already
   // have dedicated structured/lexical/filter lanes and separate semantic
   // branches. Injecting them again here distorts cosine geometry.
+  // A source-aligned translation of the entire identity-only query is the
+  // complete Demand. Duplicating languages and request boilerplate here changes
+  // cosine geometry; no semantic axis is being discarded.
+  const pureTarget = !llm.fallbackReason ? pureTargetDemandEmbedding({
+    originalQuery: finalPlan.rawQuery, retrievalMode: finalPlan.retrievalMode,
+    identities: llm.analysis.sourceOwnedTargetIdentities ?? [],
+    concepts: llm.analysis.semanticMandatoryConcepts ?? [],
+    demand: llm.analysis.semanticDemand,
+  }) : null;
+  if (pureTarget) return pureTarget;
   const demandText = llm.analysis.semanticDemand && !llm.fallbackReason
     ? renderSemanticDemand(llm.analysis.semanticDemand) : "";
   if (finalPlan.retrievalMode === "COMPLEMENT") {
@@ -629,10 +660,13 @@ function composeFacetEmbeddingInput(
     // exact facets from target authority.
     return `${finalPlan.rawQuery}. ${demandText}`.trim();
   }
-  const naturalIntent = demandText || (!llm.fallbackReason && llm.analysis.intent !== "unknown"
+  const naturalIntent = [semanticQuery, demandText].filter(Boolean).filter((value, index, values) => values.findIndex((candidate) => normalizeQueryText(candidate) === normalizeQueryText(value)) === index).join(". ") || (!llm.fallbackReason && llm.analysis.intent !== "unknown"
     ? llm.analysis.intent : semanticQuery);
   const cleanSemanticQuery = naturalIntent.split(/\s*;\s*/)[0].replace(/\s+/g, " ").trim();
-  if (cleanSemanticQuery) return cleanSemanticQuery;
+  // Source text preserves generic requested objects, seasons, colors and
+  // relations even when semantic interpretation omits an axis. It supplies
+  // dense meaning only; source-owned identity/fact validation remains separate.
+  if (cleanSemanticQuery) return `${finalPlan.rawQuery}. ${cleanSemanticQuery}`.trim();
 
   // Deterministic/LLM fallback only: if no semantic sentence survived,
   // preserve the smallest natural phrase that still represents the need.
@@ -728,6 +762,7 @@ export function buildQuerySemanticProfile(args: {
       ...(safeLlm.analysis.semanticDemand?.contexts ?? []),
       ...(safeLlm.analysis.semanticDemand?.qualities ?? []),
       ...(safeLlm.analysis.semanticDemand?.styles ?? []),
+      ...(safeLlm.analysis.semanticDemand?.audience ?? []),
     ],
     }),
   ])].filter((value, index, values) => values.findIndex((candidate) =>
@@ -935,7 +970,17 @@ export function buildQuerySemanticProfile(args: {
             ...mergedRewriteBaseWithDemand.analysis.semanticDemand,
             // Parser-owned source target cannot be revoked by LLM omission or
             // replaced by an expanded product class. Preserve semantic axes.
-            identity: sourceOwnedDemandIdentities,
+            identity: [...new Set([
+              ...sourceOwnedDemandIdentities,
+              ...normalizeQueryText(args.originalQuery).split(" ").filter((token, index) =>
+                isGenericDiscoveryFamily(token) && sourceProductTypeOwnsTarget({
+                  query: args.originalQuery, start: index, end: index + 1,
+                })
+              ),
+              ...args.rawPlan.identities.filter((item) =>
+                isGenericDiscoveryFamily(item.value) && item.mode !== "MUST_NOT"
+              ).map((item) => item.value),
+            ])],
           }
         : undefined,
       referenceTerms:
