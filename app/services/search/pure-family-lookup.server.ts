@@ -6,6 +6,7 @@ import {
   classifyFamilyProduct,
   classifyGenericFamilyProduct,
   queryFamilyFromSource,
+  sourceCanonicalFamilyFromSource,
   type FamilyGroup,
 } from "./product-family-taxonomy.server";
 import type { QueryPlan } from "./query-plan.server";
@@ -48,6 +49,7 @@ export function classifyPureFamilyLookup(
   const source = normalizeQueryText(plan.rawQuery);
   if (!source) return null;
   const sourceTaxonomyGroup = queryFamilyFromSource(plan.rawQuery);
+  const sourceCanonicalFamily = sourceCanonicalFamilyFromSource(plan.rawQuery);
 
   const parsed = parseDeterministicQuery(plan.rawQuery);
   if (parsed.price || parsed.measurements.length || parsed.compatibility.length ||
@@ -64,6 +66,12 @@ export function classifyPureFamilyLookup(
       canonical: sourceTaxonomyGroup,
       broadCategory: false,
       taxonomyGroup: sourceTaxonomyGroup,
+    };
+  }
+  if (sourceCanonicalFamily) {
+    return {
+      canonical: sourceCanonicalFamily,
+      broadCategory: false,
     };
   }
   // The remaining families are not exact source-owned bridge phrases, so
