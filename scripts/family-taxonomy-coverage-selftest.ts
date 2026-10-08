@@ -69,10 +69,11 @@ const sourceFamilies: Array<[string, FamilyGroup]> = [
   ["loa", "speakers"], ["máy ảnh", "cameras"], ["tivi", "televisions"],
   ["nội thất", "furniture"], ["ghế", "seating"], ["ghế sofa", "sofas"], ["bàn", "tables"],
   ["bàn làm việc", "desks"], ["giường", "beds"], ["tủ", "cabinets"], ["kệ", "shelves"],
-  ["đèn", "lighting"], ["thảm", "floor_coverings"], ["mỹ phẩm", "beauty"],
+  ["đèn", "lighting"], ["thảm", "floor_coverings"], ["mỹ phẩm", "cosmetics"],
   ["trang điểm", "makeup"], ["chăm sóc da", "skincare"], ["sữa rửa mặt", "cleansers"],
   ["chăm sóc tóc", "haircare"], ["dầu gội", "shampoos"], ["dầu xả", "conditioners"],
   ["nước hoa", "fragrance"], ["đồ uống", "beverages"], ["trà", "tea"], ["cà phê", "coffee"],
+  ["nước ép", "juices"], ["nước khoáng", "waters"], ["nước ngọt", "soft_drinks"],
   ["đồ ăn vặt", "snacks"], ["ván trượt tuyết", "snowboards"],
   ["ván trượt", "skateboards"], ["bóng thể thao", "sports_balls"],
 ];
@@ -96,7 +97,8 @@ const canonicalTargets: Array<[string, FamilyGroup]> = [
   ["phone case", "phone_cases"], ["notebook computer", "laptops"],
   ["computer monitor", "monitors"], ["wireless headphones", "headphones"],
   ["dining table", "tables"], ["face wash", "cleansers"],
-  ["perfume", "fragrance"], ["loose leaf tea", "tea"], ["snowboard", "snowboards"],
+  ["perfume", "fragrance"], ["loose leaf tea", "tea"], ["fruit juice", "juices"],
+  ["mineral water", "waters"], ["soft drink", "soft_drinks"], ["snowboard", "snowboards"],
 ];
 for (const [target, group] of canonicalTargets) {
   assert.equal(familyGroupForCanonicalTarget(target), group, target);
@@ -142,7 +144,9 @@ const categoryCases: Array<[string, FamilyGroup, boolean]> = [
   ["Home & Garden > Furniture > Chairs", "sofas", false],
   ["Home & Garden > Furniture > Tables", "tables", true],
   ["Health & Beauty > Personal Care > Cosmetics > Skin Care", "skincare", true],
+  ["Health & Beauty > Personal Care > Cosmetics > Nail Care", "cosmetics", true],
   ["Food, Beverages & Tobacco > Beverages > Tea", "tea", true],
+  ["Food, Beverages & Tobacco > Beverages > Fruit Juice", "beverages", true],
   ["Sporting Goods > Outdoor Recreation > Winter Sports > Snowboards", "snowboards", true],
 ];
 for (const [pathValue, group, expected] of categoryCases) {
