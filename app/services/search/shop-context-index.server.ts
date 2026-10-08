@@ -1788,7 +1788,10 @@ export async function applyShopContextToQuery({
     allowDirectExpansionEvidence
       ? [
           ...new Set(
-            terms
+            directEvidenceExpansionValues
+              .flatMap((value) =>
+                contextIndex.byNormalized.get(normalizeContextTerm(value)) ?? [],
+              )
               .filter((term) => {
                 if (term.kind !== "CANONICAL_PRODUCT_TYPE") return false;
                 // DIRECT expansion evidence must name a concrete catalog leaf,
@@ -1824,7 +1827,7 @@ export async function applyShopContextToQuery({
     familyProductIds.size > 0 &&
     semanticExpansionValues.length > 0
   ) {
-    for (const term of terms) {
+    for (const term of candidateContextTerms(contextIndex, semanticExpansionValues)) {
       if (
         ![
           "CANONICAL_PRODUCT_TYPE",
@@ -1877,7 +1880,7 @@ export async function applyShopContextToQuery({
     directSourceFacetSignals.filter((signal) => !isCommerceOnlyValue(signal));
   const collectDirectFacetProducts = (facet: string) => {
     const productIds = new Set<string>();
-    for (const term of terms) {
+    for (const term of candidateContextTerms(contextIndex, [facet])) {
       if (
         ![
           "ATTRIBUTE",
@@ -1950,7 +1953,7 @@ export async function applyShopContextToQuery({
     sourceOwnedDiscoveryIdentityTargets.length > 0
       ? [
           ...new Set(
-            terms
+            candidateIdentityContextTerms(contextIndex, sourceOwnedDiscoveryIdentityTargets)
               .filter((term) =>
                 sourceOwnedDiscoveryIdentityTargets.some((target) =>
                   discoverySourceIdentityCatalogMatch({
@@ -1970,7 +1973,7 @@ export async function applyShopContextToQuery({
   const ungroundedSourceProductClass = canonicalTypeCoverageComplete &&
     sourceOwnedDiscoveryIdentityTargets.some((target) =>
       discoveryIdentityTargetLooksLikeProductClass(target, semanticExpansionValues) &&
-      !terms.some((term) =>
+      !candidateIdentityContextTerms(contextIndex, [target]).some((term) =>
         (term.kind === "CATEGORY" && term.normalizedValue === normalizeContextTerm(target)) ||
         (["USE_CASE", "SOFT_CONTEXT"].includes(term.kind) &&
           sourceContextCatalogValueMatch(term.kind, term.value, target)) ||
@@ -1989,7 +1992,7 @@ export async function applyShopContextToQuery({
       normalizeContextTerm(segment.canonicalValue).includes(normalizeContextTerm(explicitFeature)),
     );
   const ungroundedExplicitFeature = Boolean(unresolvedFeature &&
-    !terms.some((term) =>
+    !candidateContextTerms(contextIndex, [explicitFeature!]).some((term) =>
       ["ATTRIBUTE", "VARIANT_OPTION", "USE_CASE", "COMPATIBILITY"].includes(term.kind) &&
       sourceContextCatalogValueMatch(term.kind, term.value, explicitFeature!),
     ));
@@ -2070,7 +2073,7 @@ export async function applyShopContextToQuery({
     discoverySourceFacetSignals.length > 0
       ? [
           ...new Set(
-            terms
+            candidateContextTerms(contextIndex, discoverySourceFacetSignals)
               .filter(
                 (term) =>
                   [
@@ -2117,7 +2120,7 @@ export async function applyShopContextToQuery({
   );
   const sourceNeedSupport = new Map<string, Set<number>>();
   if (discriminativeDiscoveryNeeds.length >= 3) {
-    for (const term of terms) {
+    for (const term of candidateContextTerms(contextIndex, discriminativeDiscoveryNeeds)) {
       if (!["USE_CASE", "SOFT_CONTEXT", "COMPATIBILITY"].includes(term.kind)) continue;
       discriminativeDiscoveryNeeds.forEach((need, index) => {
         if (!sourceContextCatalogValueMatch(term.kind, term.value, need)) return;
