@@ -8,7 +8,15 @@ import { getProductSyncQueueStats } from "../services/products/product-sync-job.
 import { getLatestCatalogSyncJob } from "../services/catalog/catalog-sync-job.server";
 import { getThemeAppEmbedDeepLink } from "../services/theme/app-embed.server";
 import { getThemeIntegrationStatus } from "../services/theme/theme-integration.server";
-import { getShopSettings } from "../services/commerce/shop-registry.server";
+import {
+  ensureShopFromAdmin,
+  getShopSettings,
+  getSubscriptionSnapshot,
+} from "../services/commerce/shop-registry.server";
+import {
+  refreshShopifyAppPricingSubscription,
+  reconcileShopifySubscriptionFromAdmin,
+} from "../services/billing/shopify-app-pricing.server";
 import { getSearchImpactSnapshot } from "../services/search/search-impact.server";
 
 type UiState = "success" | "warning" | "critical" | "neutral";
@@ -130,6 +138,42 @@ function normalizeSettings(value: unknown) {
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { admin, session } = await authenticate.admin(request);
+
+  // Reinstall/authenticated entry is a Shopify -> DB synchronization boundary.
+  // Reactivate the tenant only after authenticated Admin access, then refresh
+  // Shopify's current state before entitlement is calculated. This prevents a
+  // stale local snapshot from restoring a forfeited trial or an expired/
+  // missing subscription after reinstall.
+  await ensureShopFromAdmin({
+    shop: session.shop,
+    admin,
+  });
+
+  try {
+    const refreshed = await refreshShopifyAppPricingSubscription({
+      shop: session.shop,
+      admin,
+      source: "RECONCILIATION",
+    });
+
+    if (
+      refreshed.subscription.status === "CANCELLED" &&
+      refreshed.subscription.shopifySubscriptionId
+    ) {
+      await reconcileShopifySubscriptionFromAdmin({
+        shop: session.shop,
+        admin,
+        expectedSubscriptionGid:
+          refreshed.subscription.shopifySubscriptionId,
+        source: "RECONCILIATION",
+      });
+    }
+  } catch (error) {
+    console.error("[BILLING REINSTALL] authenticated Shopify reconciliation failed", {
+      shop: session.shop,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
 
   const [entitlement, queue, catalogJob, themeIntegration, settings, searchImpact] =
     await Promise.all([
