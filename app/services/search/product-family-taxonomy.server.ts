@@ -98,10 +98,18 @@ export function classifySoldItemLeaf(raw: string): FamilyNode | null {
 function shopifyCategoryParts(path: string) {
   return path.split(/\s*(?:>|»)\s*/).map(normalizeQueryText).filter(Boolean);
 }
+function forbiddenCategoryBranch(parts: string[]) {
+  return parts.some((part, index) =>
+    // Shopify's standard roots "Apparel & Accessories" and "Vehicles & Parts"
+    // are neutral roots, NOT evidence that a Dress/Car is an accessory/part.
+    !(index === 0 && ["apparel accessories", "vehicles parts"].includes(part)) &&
+    CATEGORY_SUBGROUP_DENIAL.test(part)
+  );
+}
 
 export function shopifyCategoryLeaf(path: string): FamilyNode | null {
   const segments = shopifyCategoryParts(path);
-  if (!segments.length || segments.some((segment) => CATEGORY_SUBGROUP_DENIAL.test(segment))) {
+  if (!segments.length || forbiddenCategoryBranch(segments)) {
     return null;
   }
   return classifySoldItemLeaf(segments.at(-1) ?? "");
@@ -109,7 +117,7 @@ export function shopifyCategoryLeaf(path: string): FamilyNode | null {
 
 export function shopifyCategoryIsClothing(path: string) {
   const segments = shopifyCategoryParts(path);
-  if (segments.some((segment) => CATEGORY_SUBGROUP_DENIAL.test(segment))) return false;
+  if (forbiddenCategoryBranch(segments)) return false;
   // Require a typed Clothing/Apparel ancestor (or actual clothing leaf).
   return segments.some((segment) => APPAREL_CATEGORY_SEGMENTS.has(segment)) &&
     segments.length >= 2;
@@ -145,7 +153,7 @@ export function classifyFamilyProduct(
     // Explicit accessory/toy taxonomy contradicts broad family labels, even
     // if a model wrote canonicalProductType="bicycle" by mistake.
     const deny = evidence.shopifyCategoryPaths.some((path) =>
-      shopifyCategoryParts(path).some((part) => CATEGORY_SUBGROUP_DENIAL.test(part)));
+      forbiddenCategoryBranch(shopifyCategoryParts(path)));
     if (deny) return { match: false, reason: "CONTRADICTION" };
   }
 
