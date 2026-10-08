@@ -34,11 +34,11 @@ const rewrite = {
 
 assert.equal(queryFamilyFromSource("váy"), "dress_or_skirt");
 assert.equal(queryFamilyFromSource("vay"), "dress_or_skirt");
-assert.equal(queryFamilyFromSource("chân váy"), "skirt");
-assert.equal(queryFamilyFromSource("đầm"), "dress");
+assert.equal(queryFamilyFromSource("chân váy"), "skirts");
+assert.equal(queryFamilyFromSource("đầm"), "dresses");
 assert.equal(queryFamilyFromSource("Áo"), "tops");
 assert.equal(queryFamilyFromSource("Xe"), "vehicles");
-assert.equal(queryFamilyFromSource("xe đạp"), "bicycle");
+assert.equal(queryFamilyFromSource("xe đạp"), "bicycles");
 assert.equal(queryFamilyFromSource("váy đỏ"), null);
 assert.equal(queryFamilyFromSource("áo cho bé"), null);
 assert.equal(classifyPureFamilyLookup(plan("váy"), rewrite)?.taxonomyGroup, "dress_or_skirt");
@@ -51,7 +51,7 @@ assert.equal(
 );
 assert.equal(classifyPureFamilyLookup(plan("áo", "shirt"), rewrite)?.taxonomyGroup, "tops");
 assert.equal(classifyPureFamilyLookup(plan("xe", "car", "DISCOVERY"), rewrite)?.taxonomyGroup, "vehicles");
-assert.equal(classifyPureFamilyLookup(plan("xe đạp", "bicycle"), rewrite)?.taxonomyGroup, "bicycle");
+assert.equal(classifyPureFamilyLookup(plan("xe đạp", "bicycles"), rewrite)?.taxonomyGroup, "bicycles");
 const size = plan("váy size M");
 size.measurements.push({ value: "M", name: "size", mode: "MUST" });
 assert.equal(classifyPureFamilyLookup(size, rewrite), null);
@@ -71,7 +71,7 @@ assert.equal(classifySoldItemLeaf("Blue Dress"), "dress");
 assert.equal(classifySoldItemLeaf("Pleated Skirt"), "skirt");
 assert.equal(classifySoldItemLeaf("Women's Bicycle Helmet"), null);
 assert.equal(classifySoldItemLeaf("Toy Car"), null);
-assert.equal(classifySoldItemLeaf("Vintage Shirt"), "top");
+assert.equal(classifySoldItemLeaf("Vintage Shirt"), "shirt");
 assert.equal(classifySoldItemLeaf("Road Bicycle"), "bicycle");
 
 function category(path: string) {
@@ -90,20 +90,20 @@ assert.equal(classifyFamilyProduct({
   shopifyCategoryPaths: ["Apparel & Accessories > Clothing > Dresses"],
 }, "dress_or_skirt").match, true, "Both Dress and Skirt belong to the source-owned váy union");
 assert.equal(classifyFamilyProduct(category(
-  "Vehicles & Parts > Vehicle Parts & Accessories > Bicycle Helmets"), "bicycle").match, false);
+  "Vehicles & Parts > Vehicle Parts & Accessories > Bicycle Helmets"), "bicycles").match, false);
 assert.equal(classifyFamilyProduct(category(
   "Toys & Games > Toys > Toy Vehicles > Cars"), "vehicles").match, false);
 assert.equal(classifyFamilyProduct({
   canonicalTypes: ["Bicycle Helmet"], merchantTypes: ["Bicycle"],
   shopifyCategoryPaths: ["Vehicles & Parts > Vehicles > Bicycles"],
-}, "bicycle").match, false, "Wrong Shopify classification cannot turn a helmet into a bicycle");
+}, "bicycles").match, false, "Wrong Shopify classification cannot turn a helmet into a bicycle");
 assert.equal(classifyFamilyProduct({
   canonicalTypes: ["Dress Shirt"], merchantTypes: [],
   shopifyCategoryPaths: ["Apparel & Accessories > Clothing > Dresses"],
 }, "dress_or_skirt").match, false, "Dress shirt does not inherit Dress from mistaken standard category");
 assert.equal(classifyFamilyProduct({
   canonicalTypes: ["Helmet"], merchantTypes: ["Bicycle"], shopifyCategoryPaths: [],
-}, "bicycle").match, false, "Merchant type must not override a helmet identity");
+}, "bicycles").match, false, "Merchant type must not override a helmet identity");
 
 const target = classifyPureFamilyLookup(plan("váy"), rewrite)!;
 const members = [
