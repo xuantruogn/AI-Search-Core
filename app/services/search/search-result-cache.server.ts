@@ -57,7 +57,7 @@ const MIN_TTL_MS = 60 * 1000;
 const DEFAULT_QUERY_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const MAX_RECEIPT_TTL_MS = 24 * 60 * 60 * 1000;
 const FULL_SEARCH_CACHE_PIPELINE_VERSION =
-  "full-search-cache-v92-source-owned-family-taxonomy-2026-10-08";
+  "full-search-cache-v93-general-retail-family-taxonomy-2026-10-08";
 
 export type CachedSearchSortIntent =
   | "RELEVANCE"
