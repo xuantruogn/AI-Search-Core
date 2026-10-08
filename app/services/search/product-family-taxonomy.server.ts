@@ -350,10 +350,13 @@ export function familyGroupForCanonicalTarget(value: string): FamilyGroup | null
   if (direct) return direct;
   const leaf = classifySoldItemLeaf(normalized);
   if (!leaf) return null;
-  for (const [group, members] of Object.entries(GROUP_MEMBERS) as Array<[FamilyGroup, readonly FamilyNode[]]>) {
-    if (members.length === 1 && members[0] === leaf) return group;
-  }
-  return null;
+  const containing = (Object.entries(GROUP_MEMBERS) as Array<
+    [FamilyGroup, readonly FamilyNode[]]
+  >)
+    .filter(([, members]) => members.includes(leaf))
+    .sort((left, right) => left[1].length - right[1].length ||
+      left[0].localeCompare(right[0]));
+  return containing[0]?.[0] ?? null;
 }
 
 function suffixMatches(actual: string, suffix: string) {
