@@ -12,13 +12,18 @@ const bridge = fs.readFileSync(
   "utf8",
 );
 
-function pageHtml() {
-  return `<!doctype html><html><head><script>
+function pageHtml(options = {}) {
+  const extraCounters = options.multipleCounters
+    ? '<div class="product-count light" role="status"><h2 class="product-count__text"><span id="ProductCountDesktop">245 kết quả</span></h2></div>' +
+      '<div class="product-count" role="status"><span id="ProductCount">245 kết quả</span></div>' +
+      '<div class="facets__filters"><span data-facet-filter-count>Màu (245)</span></div>'
+    : "";
+  return `<!doctype html><html lang="${options.multipleCounters ? "vi" : "en"}"><head><script>
     window.AI_SEARCH_ENGINE="v4";
     window.AI_SEARCH_CONFIG={version:4,theme_map_version:4,theme_id:"1",search_url:"/search",search_endpoint:"/apps/ai-search"};
   </script><script src="/runtime.js" defer></script></head><body>
     <form action="/search"><input name="q"></form>
-    <main><p role="status">No results found for "green".</p><ul id="VerifiedMount"><li data-handle="native">native</li></ul><nav class="native-pagination"><a href="?page=2">2</a></nav></main>
+    <main><p role="status">No results found for "green".</p>${extraCounters}<ul id="VerifiedMount"><li data-handle="native">native</li></ul><nav class="native-pagination"><a href="?page=2">2</a></nav></main>
   </body></html>`;
 }
 
@@ -119,7 +124,7 @@ async function scenario(browser, options = {}) {
     const query = url.searchParams.get("q") || "";
     if (query.includes("id:")) calls.nativeRender += 1;
     if (url.searchParams.has("_ai_search_bypass")) calls.fallback += 1;
-    return route.fulfill({ contentType: "text/html", body: pageHtml() });
+    return route.fulfill({ contentType: "text/html", body: pageHtml(options) });
   });
 
   if (options.fromHomepage) {
@@ -142,8 +147,16 @@ async function scenario(browser, options = {}) {
       await page.locator("#VerifiedMount > li").evaluateAll((nodes) => nodes.map((node) => node.dataset.handle)),
       ["beta", "alpha"],
     );
-    assert.equal(await page.getByRole("status").textContent(), "3 results");
-    assert.match(await page.title(), /^Search: 3 results found for/);
+    if (options.multipleCounters) {
+      assert.equal(await page.locator("#ProductCountDesktop").textContent(), "3 kết quả");
+      assert.equal(await page.locator("#ProductCount").textContent(), "3 kết quả");
+      assert.equal(await page.locator("[data-facet-filter-count]").textContent(), "Màu (245)",
+        "facet option counters must not be changed by the AI search result count");
+      assert.match(await page.title(), /^Tìm kiếm: đã tìm thấy 3 kết quả cho/);
+    } else {
+      assert.equal(await page.getByRole("status").textContent(), "3 results");
+      assert.match(await page.title(), /^Search: 3 results found for/);
+    }
     assert.equal(
       await page.locator("nav.native-pagination").evaluate((element) => element.hidden),
       true,
@@ -179,7 +192,8 @@ async function scenario(browser, options = {}) {
     assert.equal(new URL(page.url()).searchParams.get("receipt"), null);
     assert.equal(new URL(page.url()).searchParams.get("page"), "2");
     assert.equal(await page.evaluate(() => history.state.receipt), "srch_fixture");
-    assert.match(await page.title(), /^Search: 3 results found for/);
+    assert.match(await page.title(),
+      options.multipleCounters ? /^Tìm kiếm: đã tìm thấy 3 kết quả cho/ : /^Search: 3 results found for/);
     assert.equal(calls.search, options.inPlaceOverlay ? 2 : 1);
     assert.equal(
       calls.render,
@@ -210,6 +224,7 @@ async function main() {
     await scenario(browser, { changedTheme: true });
     await scenario(browser, { missingMount: true });
     await scenario(browser, { emptyFirstCandidate: true });
+    await scenario(browser, { multipleCounters: true });
     console.log("Theme Map V4 storefront self-test: PASS");
   } finally {
     await browser.close();
