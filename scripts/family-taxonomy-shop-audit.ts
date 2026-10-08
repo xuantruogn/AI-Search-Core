@@ -22,6 +22,7 @@ const counters = {
   standardCategory: 0,
   canonicalType: 0,
   missingAllTypedIdentity: 0,
+  unmappedTypedIdentity: 0,
   taxonomyTypeConflict: 0,
   dressOrSkirt: { dress: 0, skirt: 0, total: 0 },
   tops: 0,
@@ -29,6 +30,7 @@ const counters = {
   bicycles: 0,
 };
 const sampleMissing: string[] = [];
+const sampleUnmapped: Array<{ productId: string; canonical: string; merchantType: string; shopifyCategory: string }> = [];
 const sampleConflict: Array<{ productId: string; canonical: string; category: string }> = [];
 
 await scanShopSemanticProfiles(shop, ({ productId, terms }) => {
@@ -48,6 +50,16 @@ await scanShopSemanticProfiles(shop, ({ productId, terms }) => {
   }
   const categoryLeaf = evidence.shopifyCategoryPaths.map(shopifyCategoryLeaf).find(Boolean);
   const canonicalLeaf = evidence.canonicalTypes.map(classifySoldItemLeaf).find(Boolean);
+  const merchantLeaf = evidence.merchantTypes.map(classifySoldItemLeaf).find(Boolean);
+  if (!categoryLeaf && !canonicalLeaf && !merchantLeaf) {
+    counters.unmappedTypedIdentity++;
+    if (sampleUnmapped.length < 15) sampleUnmapped.push({
+      productId,
+      canonical: evidence.canonicalTypes[0] ?? "",
+      merchantType: evidence.merchantTypes[0] ?? "",
+      shopifyCategory: evidence.shopifyCategoryPaths[0] ?? "",
+    });
+  }
   if (categoryLeaf && canonicalLeaf && categoryLeaf !== canonicalLeaf) {
     counters.taxonomyTypeConflict++;
     if (sampleConflict.length < 15) sampleConflict.push({
@@ -71,7 +83,7 @@ console.log(JSON.stringify({
   searchableWithVectorCount: totals[1],
   indexedButNotEligible: totals[0] - totals[1],
   ...counters,
-  sampleMissing, sampleConflict,
+  sampleMissing, sampleUnmapped, sampleConflict,
   reminder: "Compare family counts to Shopify active/published products; missing category/PSF coverage cannot be proven from embeddings.",
 }, null, 2));
 await db.$disconnect();
