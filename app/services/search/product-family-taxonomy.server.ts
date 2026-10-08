@@ -75,6 +75,65 @@ export function queryFamilyFromSource(query: string): FamilyGroup | null {
   return QUERY_FAMILIES[normalizeQueryText(query)] ?? null;
 }
 
+/**
+ * Canonical bridges only for common exact standalone Vietnamese family nouns.
+ * These do not establish membership; they only name the target family.
+ * Product membership still requires Shopify taxonomy/canonical product type.
+ */
+const SOURCE_CANONICAL_FAMILIES: Record<string, string> = {
+  "ao khoac": "jacket",
+  "ao so mi": "shirt",
+  "ao thun": "t shirt",
+  "ao len": "sweater",
+  "ao ni": "sweatshirt",
+  "quan": "pants",
+  "quan dai": "pants",
+  "quan short": "shorts",
+  "quan dui": "shorts",
+  "giay": "shoes",
+  "dep": "sandals",
+  "tui": "bags",
+  "tui xach": "handbags",
+  "ba lo": "backpacks",
+  "vi": "wallets",
+  "trang suc": "jewelry",
+  "day chuyen": "necklaces",
+  "nhan": "rings",
+  "vong tay": "bracelets",
+  "khuyen tai": "earrings",
+  "dong ho": "watches",
+  "kinh": "eyewear",
+  "kinh mat": "eyewear",
+  "mu": "hats",
+  "dien thoai": "phones",
+  "dien thoai di dong": "mobile phones",
+  "may tinh": "computers",
+  "laptop": "laptops",
+  "may tinh bang": "tablets",
+  "tai nghe": "headphones",
+  "loa": "speakers",
+  "may anh": "cameras",
+  "tivi": "televisions",
+  "tv": "televisions",
+  "noi that": "furniture",
+  "ghe": "chairs",
+  "ban": "tables",
+  "giuong": "beds",
+  "nem": "mattresses",
+  "den": "lighting",
+  "my pham": "cosmetics",
+  "cham soc da": "skin care",
+  "nuoc hoa": "fragrances",
+  "dau goi": "shampoo",
+  "do choi": "toys",
+  "sach": "books",
+  "balo": "backpacks",
+};
+
+export function sourceCanonicalFamilyFromSource(query: string): string | null {
+  return SOURCE_CANONICAL_FAMILIES[normalizeQueryText(query)] ?? null;
+}
+
 function suffixMatches(actual: string, suffix: string) {
   return actual === suffix || actual.endsWith(" " + suffix);
 }
