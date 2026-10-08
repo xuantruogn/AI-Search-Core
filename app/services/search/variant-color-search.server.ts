@@ -44,11 +44,15 @@ export function requestedVariantFacets(
 ): VariantRequest | null {
   // Source-target role is evaluated by currentTargetColors: a referenced
   // black skirt must never color-filter the requested shirt.
-  const vocabulary = new Set(
-    (rewrite as QueryRewriteResult & {
-      context?: { typedColorVocabulary?: string[] };
-    }).context?.typedColorVocabulary ?? [],
-  );
+  const typedColors = (rewrite as QueryRewriteResult & {
+    context?: { typedColorVocabulary?: string[] };
+  }).context?.typedColorVocabulary ?? [];
+  // Index and shopper language may differ. Canonicalize the typed palette
+  // without letting a Vendor or plain untyped term become a color.
+  const vocabulary = new Set([
+    ...typedColors.map(normalizeSemanticValue),
+    ...typedColors.map(canonicalColor),
+  ]);
   if (!vocabulary.size) return null;
   // Trust only source-owned catalog color signals. The palette is built
   // from typed Color options, so store-specific shades (olive, cherry, teal)
