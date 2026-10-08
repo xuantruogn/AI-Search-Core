@@ -45,6 +45,7 @@ type ShopifyProductNode = {
 
   variants: {
     nodes: Array<{
+      id: string;
       title: string;
       sku: string | null;
       barcode: string | null;
@@ -123,6 +124,7 @@ async function hydrateAllProductVariants(
             id
             variants(first: 250, after: $after) {
               nodes {
+                id
                 title
                 sku
                 barcode
@@ -219,6 +221,7 @@ function mapShopifyProduct(
     }
   > = product.variants.nodes.map(
     (variant) => ({
+      id: variant.id,
       title: variant.title,
       sku: variant.sku,
       barcode: variant.barcode,
@@ -359,6 +362,7 @@ export async function fetchProductsForIndex(
 
               variants(first: 250) {
                 nodes {
+                  id
                   title
                   sku
                   barcode
@@ -670,6 +674,7 @@ export async function fetchProductForIndexById(
 
             variants(first: 250) {
               nodes {
+                id
                 title
                 sku
                 barcode
