@@ -1186,6 +1186,26 @@
       const metadata =
         decodeMetadata(response, template);
 
+      // APP_PROXY_LIQUID fallback also preserves proven variant selection.
+      for (const product of Array.isArray(metadata.products)
+        ? metadata.products : []) {
+        if (!product?.handle || !product?.matchedVariantId) continue;
+        for (const anchor of template.content.querySelectorAll(
+          'a[href*="/products/"]',
+        )) {
+          try {
+            const url = new URL(anchor.href, location.origin);
+            const handle = url.pathname.match(/\/products\/([^/?#]+)/)?.[1];
+            if (handle !== product.handle) continue;
+            const card = anchor.closest("li, article, .card-wrapper") ||
+              anchor.parentElement;
+            if (card) applyMatchingVariantToCard(card, product.matchedVariantId);
+          } catch {
+            // Preserve theme-native markup on an unexpected link.
+          }
+        }
+      }
+
       try {
         assertMeaningfulProductCards(
           template.content,
@@ -1921,6 +1941,28 @@
     }
   }
 
+  // A matching Shopify variant is proven by the indexed selectedOptions tuple.
+  // Change product links only; images require a separately verified variant image.
+  function applyMatchingVariantToCard(card, variantId) {
+    const match = String(variantId || "").match(
+      /^gid:\/\/shopify\/ProductVariant\/(\d+)$/,
+    );
+    if (!match || !(card instanceof Element)) return;
+    const anchors = Array.from(card.querySelectorAll('a[href*="/products/"]'));
+    if (card.matches('a[href*="/products/"]')) anchors.unshift(card);
+    for (const anchor of anchors) {
+      try {
+        const url = new URL(anchor.href, location.origin);
+        if (url.origin !== location.origin ||
+            !/\/products\/[^/]+/.test(url.pathname)) continue;
+        url.searchParams.set("variant", match[1]);
+        anchor.href = url.pathname + url.search + url.hash;
+      } catch {
+        // Preserve theme-native navigation.
+      }
+    }
+  }
+
   function buildThemeContextMetadata(
     receipt,
     page,
@@ -2130,6 +2172,7 @@
             );
           }
 
+          applyMatchingVariantToCard(card, plan.matched_variants?.[productId]);
           return card;
         },
       );
@@ -2150,6 +2193,9 @@
               productHandleFromCard(
                 card,
               ),
+            ...(plan.matched_variants?.[targetProductIds[index]]
+              ? { matchedVariantId: plan.matched_variants[targetProductIds[index]] }
+              : {}),
           };
         },
       );

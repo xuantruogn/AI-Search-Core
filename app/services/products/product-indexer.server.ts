@@ -20,6 +20,7 @@ import {
   buildProductVectorSemanticPayload,
   getSemanticProfileForProduct,
   getSemanticProfileState,
+  refreshProductVariantSelections,
   PRODUCT_SEMANTIC_PROFILE_SCHEMA_VERSION,
   PRODUCT_VECTOR_SEMANTIC_PAYLOAD_VERSION,
 } from "../search/product-semantic-profile.server";
@@ -384,9 +385,14 @@ export async function indexProduct({
     }
     if (!semanticProfileCurrent) {
       await ensureDeterministicProductProfile(shop, product);
+      await refreshProductVariantSelections({
+        shop, productId: product.id, variants: product.variants,
+      });
       return true;
     }
-    return false;
+    return refreshProductVariantSelections({
+      shop, productId: product.id, variants: product.variants,
+    });
   };
 
   if (
@@ -1181,6 +1187,7 @@ export async function indexProduct({
       productId: product.id,
       analysis: embeddingInput.analysis,
       terms: preparedSemanticTerms,
+      variants: product.variants,
     });
 
     await updateIndexedProductEnrichmentState({

@@ -77,6 +77,7 @@ import { ensureProductCollection } from "../services/search/qdrant.server";
 import { warmGeminiConnection } from "../services/search/gemini-query-rewriter.server";
 import { getShopSearchDictionary } from "../services/search/shop-search-dictionary.server";
 import { buildSearchCacheRequestVariant } from "../services/search/search-cache-request-variant.server";
+import { rankByVerifiedVariantColor } from "../services/search/variant-color-search.server";
 import {
   fetchProductsByGids as fetchAppSelfRenderProductsByGids,
   renderAppSelfSearchPage,
@@ -509,6 +510,7 @@ type CandidateProduct = {
   vectorSimilarity?: number;
   /** Raw cosine against the primary query embedding, excluding expansion branches. */
   primaryVectorSimilarity?: number;
+  matchedVariantId?: string;
 };
 
 async function filterCandidatesAgainstRegistry(
@@ -1325,6 +1327,13 @@ let resultCacheStatus: "HIT" | "MISS" = "MISS";
 
           safeToRender:
             true,
+
+          matched_variants: Object.fromEntries(
+            cachedPage.result.rankedProducts
+              .filter((product) => product.matchedVariantId &&
+                transportPlan.targetProductIds.includes(product.productId))
+              .map((product) => [product.productId, product.matchedVariantId]),
+          ),
 
           targetProductIds:
             transportPlan
@@ -2365,6 +2374,7 @@ let resultCacheStatus: "HIT" | "MISS" = "MISS";
               score: product.score,
               vectorSimilarity: product.vectorSimilarity,
               primaryVectorSimilarity: product.primaryVectorSimilarity,
+              matchedVariantId: product.matchedVariantId,
             }),
           );
           allProducts = await filterCandidatesAgainstRegistry(
@@ -2919,6 +2929,24 @@ let resultCacheStatus: "HIT" | "MISS" = "MISS";
           },
         );
 
+      // Color and size are evaluated against the SAME variant ID. This
+      // preserves the existing semantic/identity filters while ensuring a
+      // Blue-only item cannot be counted as a verified Red match.
+      const variantColorResults = await rankByVerifiedVariantColor({
+        shop: session.shop,
+        query,
+        rewrite: preparedRewrite,
+        results: genderFilteredResults,
+        onDiagnostics: (diagnostics) => {
+          if (diagnostics.request) {
+            console.log("[AI Search][VARIANT COLOR]", {
+              shop: session.shop,
+              ...diagnostics,
+            });
+          }
+        },
+      });
+
       const priceConstraintStartedAt =
         Date.now();
 
@@ -2932,7 +2960,7 @@ let resultCacheStatus: "HIT" | "MISS" = "MISS";
         priceConstraintStartedAt;
 
       let searchResults =
-        genderFilteredResults;
+        variantColorResults;
 
       const preferenceStartedAt =
         Date.now();
@@ -2960,7 +2988,7 @@ let resultCacheStatus: "HIT" | "MISS" = "MISS";
                   session.shop,
 
                 results:
-                  genderFilteredResults,
+                  variantColorResults,
 
                 constraint:
                   priceConstraint,
@@ -2980,7 +3008,7 @@ let resultCacheStatus: "HIT" | "MISS" = "MISS";
           searchResults =
             priceConstraint
               ? []
-              : genderFilteredResults;
+              : variantColorResults;
 
           console.error(
             "[AI Search] Hard price filter failed closed",
@@ -3051,6 +3079,8 @@ let resultCacheStatus: "HIT" | "MISS" = "MISS";
 
                 primaryVectorSimilarity:
                   result.primaryVectorSimilarity,
+                matchedVariantId:
+                  result.matchedVariantId,
               },
             ];
           },
@@ -3271,6 +3301,7 @@ let resultCacheStatus: "HIT" | "MISS" = "MISS";
               score: product.score,
               vectorSimilarity: product.vectorSimilarity,
               primaryVectorSimilarity: product.primaryVectorSimilarity,
+              matchedVariantId: product.matchedVariantId,
             })),
             proofBasedEmpty: proofBasedNoResult,
             analyzedQuery: preparedRewrite.query,
@@ -3947,6 +3978,9 @@ let resultCacheStatus: "HIT" | "MISS" = "MISS";
 
                 score:
                   product.score,
+
+                matchedVariantId:
+                  product.matchedVariantId,
               }),
             ),
         });
@@ -4095,6 +4129,17 @@ let resultCacheStatus: "HIT" | "MISS" = "MISS";
 
               safeToRender:
                 true,
+
+              matched_variants: Object.fromEntries(
+                allProducts
+                  .filter((product) => product.matchedVariantId &&
+                    transportPlan.targetProductIds.includes(
+                      `gid://shopify/Product/${product.id}`))
+                  .map((product) => [
+                    `gid://shopify/Product/${product.id}`,
+                    product.matchedVariantId,
+                  ]),
+              ),
 
               targetProductIds:
                 transportPlan
