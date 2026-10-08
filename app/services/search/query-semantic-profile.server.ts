@@ -631,7 +631,7 @@ export function pureTargetDemandEmbedding(args: {
   ) ? args.identities[0] : null;
 }
 
-function composeFacetEmbeddingInput(
+export function composeFacetEmbeddingInput(
   semanticQuery: string,
   finalPlan: QueryPlan,
   _expandedPlan: QueryPlan,
@@ -654,19 +654,23 @@ function composeFacetEmbeddingInput(
   if (pureTarget) return pureTarget;
   const demandText = llm.analysis.semanticDemand && !llm.fallbackReason
     ? renderSemanticDemand(llm.analysis.semanticDemand) : "";
-  if (finalPlan.retrievalMode === "COMPLEMENT") {
-    // The source relation owns target/reference roles. Keep the natural
-    // relation in dense recall while downstream code strips reference-only
-    // exact facets from target authority.
-    return `${finalPlan.rawQuery}. ${demandText}`.trim();
-  }
-  const naturalIntent = [semanticQuery, demandText].filter(Boolean).filter((value, index, values) => values.findIndex((candidate) => normalizeQueryText(candidate) === normalizeQueryText(value)) === index).join(". ") || (!llm.fallbackReason && llm.analysis.intent !== "unknown"
-    ? llm.analysis.intent : semanticQuery);
+  // The shopper's raw text is kept in QueryPlan for provenance/exact validation.
+  // When translation succeeded, the dense input must contain only shop-language
+  // meaning aligned with product Semantic Supply. In COMPLEMENT, preserve the
+  // target/reference relation in the LLM's canonical semanticQuery, not by
+  // prepending untranslated shopper text.
+  const naturalIntent = [semanticQuery, demandText]
+    .map((value) => value.replace(/\s+/g, " ").trim())
+    .filter(Boolean)
+    .filter((value, index, values) =>
+      values.findIndex((candidate) =>
+        normalizeQueryText(candidate) === normalizeQueryText(value)
+      ) === index
+    )
+    .join(". ") || (!llm.fallbackReason && llm.analysis.intent !== "unknown"
+      ? llm.analysis.intent : semanticQuery);
   const cleanSemanticQuery = naturalIntent.split(/\s*;\s*/)[0].replace(/\s+/g, " ").trim();
-  // Source text preserves generic requested objects, seasons, colors and
-  // relations even when semantic interpretation omits an axis. It supplies
-  // dense meaning only; source-owned identity/fact validation remains separate.
-  if (cleanSemanticQuery) return `${finalPlan.rawQuery}. ${cleanSemanticQuery}`.trim();
+  if (cleanSemanticQuery) return cleanSemanticQuery;
 
   // Deterministic/LLM fallback only: if no semantic sentence survived,
   // preserve the smallest natural phrase that still represents the need.
