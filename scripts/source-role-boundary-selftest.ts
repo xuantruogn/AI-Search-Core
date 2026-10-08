@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { sourceProductTypeOwnsTarget } from "../app/services/search/query-planner.server";
-import { sourceOwnedSemanticDemandIdentities, sourceOwnedSemanticExactConstraints, isGenericDiscoveryFamily } from "../app/services/search/query-semantic-profile.server";
+import { composeFacetEmbeddingInput, pureTargetDemandEmbedding, sourceOwnedSemanticDemandIdentities, sourceOwnedSemanticExactConstraints, isGenericDiscoveryFamily } from "../app/services/search/query-semantic-profile.server";
 import { currentTargetColors, detectExplicitGender } from "../app/services/search/shop-context-index.server";
 import { parseDeterministicQuery } from "../app/services/search/deterministic-query-parser.server";
 import { applyFinalRelevanceCutoff } from "../app/services/search/final-relevance-cutoff.server";
@@ -26,3 +26,55 @@ assert.deepEqual(currentTargetColors("pantalon marron", colorRewrite, new Set(["
 assert.deepEqual(currentTargetColors("pantalon marron", colorRewrite, new Set(["black"])), []);
 assert.equal(detectExplicitGender("gift for a friend", { ...colorRewrite, analysis: { ...colorRewrite.analysis, productType: "women's scarf", audience: ["women"], shopLanguageTerms: ["women's perfume"] } }), null);
 assert.equal(detectExplicitGender("chaussures pour femme", colorRewrite), "FEMALE");
+
+const emptyDemand = {
+  identity: [] as string[],
+  desiredOutcomes: [] as string[],
+  useCases: [] as string[],
+  contexts: [] as string[],
+  qualities: [] as string[],
+  audience: [] as string[],
+  styles: [] as string[],
+  negativeConstraints: [] as string[],
+  exactConstraints: [] as string[],
+};
+const translatedBikeDemand = { ...emptyDemand, identity: ["bicycle"] };
+assert.equal(pureTargetDemandEmbedding({
+  originalQuery: "Xe đạp",
+  retrievalMode: "DIRECT",
+  identities: ["bicycle"],
+  concepts: [{ target: "bicycle", source: "Xe đạp" }],
+  demand: translatedBikeDemand,
+}), "bicycle");
+const winterDemand = {
+  ...emptyDemand,
+  identity: ["clothing"],
+  contexts: ["winter weather"],
+};
+const winterEmbedding = composeFacetEmbeddingInput(
+  "Looking for clothing suitable for winter weather",
+  { rawQuery: "quần áo mùa đông", retrievalMode: "DIRECT" } as any,
+  {} as any,
+  { fallbackReason: null, analysis: {
+    sourceOwnedTargetIdentities: ["clothing"],
+    semanticMandatoryConcepts: [],
+    semanticDemand: winterDemand,
+    intent: "Looking for clothing suitable for winter weather",
+  }} as any,
+);
+assert.match(winterEmbedding, /winter weather/i);
+assert.doesNotMatch(winterEmbedding, /quần áo|mùa đông/i);
+const complementEmbedding = composeFacetEmbeddingInput(
+  "Looking for a shirt to wear with a black skirt",
+  { rawQuery: "áo mặc với váy đen", retrievalMode: "COMPLEMENT" } as any,
+  {} as any,
+  { fallbackReason: null, analysis: {
+    sourceOwnedTargetIdentities: [],
+    semanticMandatoryConcepts: [],
+    semanticDemand: { ...emptyDemand, identity: ["shirt"] },
+    intent: "Looking for a shirt to wear with a black skirt",
+  }} as any,
+);
+assert.match(complementEmbedding, /black skirt/i);
+assert.doesNotMatch(complementEmbedding, /áo mặc với|váy đen/i);
+console.log("PASS: canonical shop-language dense input, pure translated family, complement relation");
