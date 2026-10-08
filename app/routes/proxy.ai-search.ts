@@ -13,6 +13,7 @@ import { parsePriceConstraint } from "../services/search/query-constraints.serve
 import { prepareParallelQueryPipeline } from "../services/search/parallel-query-pipeline.server";
 import type { AbsenceProof } from "../services/search/absence-proof.server";
 import { retrieveStructuredCandidates, retrieveGroundedFacetCandidates } from "../services/search/structured-candidate-retrieval.server";
+import { retrieveCompleteFamilyCandidates } from "../services/search/pure-family-lookup.server";
 import { retrieveLexicalCandidates } from "../services/search/lexical-candidate-retrieval.server";
 import { retrieveSparseCandidates } from "../services/search/sparse-candidate-retrieval.server";
 import { fuseHybridRetrieval, type HybridFusionDiagnostics } from "../services/search/hybrid-retrieval-fusion.server";
@@ -2450,6 +2451,7 @@ let resultCacheStatus: "HIT" | "MISS" = "MISS";
       const queryPlanStartedAt = Date.now();
 
       let queryPlan: QueryPlan | null = null;
+      let rawQueryPlan: QueryPlan | null = null;
       let finalAbsenceProofPromise: Promise<AbsenceProof> | null = null;
       let interpretedQuery;
 
@@ -2464,6 +2466,7 @@ let resultCacheStatus: "HIT" | "MISS" = "MISS";
         });
 
         queryPlan = pipeline.profile?.finalPlan ?? pipeline.rawPlan;
+        rawQueryPlan = pipeline.rawPlan;
         finalAbsenceProofPromise = pipeline.finalProof;
 
         console.log("[AI Search][PARALLEL QUERY PIPELINE]", {
@@ -2552,13 +2555,53 @@ let resultCacheStatus: "HIT" | "MISS" = "MISS";
           );
       }
 
+      const preparedRewrite =
+        await applyShopContextToQuery(
+          {
+            shop:
+              session.shop,
+
+            originalQuery:
+              query,
+
+            rewrite:
+              interpretedQuery,
+          },
+        );
+
+      const rewriteMs =
+        Date.now() -
+        rewriteStartedAt;
+
+      sortIntent =
+        preparedRewrite.analysis
+          .sortIntent;
+
+      // Family-only queries use the complete verified taxonomy lane. Do not
+      // assemble a Top-K hybrid shortlist and then claim its length is total.
+      const completeFamilyLookup = await retrieveCompleteFamilyCandidates({
+        shop: session.shop,
+        plan: queryPlan,
+        rawPlan: rawQueryPlan,
+        rewrite: preparedRewrite,
+      });
+      if (completeFamilyLookup) {
+        console.log("[AI Search][PURE FAMILY COVERAGE]", {
+          shop: session.shop,
+          canonicalFamily: completeFamilyLookup.target.canonical,
+          scannedProfiles: completeFamilyLookup.scannedProfiles,
+          verifiedProfiles: completeFamilyLookup.matchedProfiles,
+          searchableResults: completeFamilyLookup.searchableProducts,
+        });
+      }
+
       // Measure the actual lifetimes of the independent retrieval promises.
       // The previous structuredMs used the timestamp at the end of the whole
       // pipeline, including LLM/context/proof and semantic work, so it could
       // make an inexpensive structured lookup appear to be the bottleneck.
       const structuredStartedAt = Date.now();
       let structuredRetrievalMs = 0;
-      const structuredPromise = (queryPlan
+      const structuredPromise = (!completeFamilyLookup && queryPlan
         ? retrieveStructuredCandidates({
             shop: session.shop,
             plan: queryPlan,
@@ -2569,17 +2612,19 @@ let resultCacheStatus: "HIT" | "MISS" = "MISS";
       });
       const lexicalStartedAt = Date.now();
       let lexicalRetrievalMs = 0;
-      const lexicalPromise = retrieveLexicalCandidates({
-        shop: session.shop,
-        query,
-        limit: Math.min(100, SEARCH_LIMIT),
-      }).finally(() => {
+      const lexicalPromise = (completeFamilyLookup
+        ? Promise.resolve([])
+        : retrieveLexicalCandidates({
+            shop: session.shop,
+            query,
+            limit: Math.min(100, SEARCH_LIMIT),
+          })).finally(() => {
         lexicalRetrievalMs = Date.now() - lexicalStartedAt;
       });
       const sparseStartedAt = Date.now();
       let sparseRetrievalMs = 0;
       const sparsePromise = (
-        queryPlan?.route === "STRUCTURED_ONLY" && queryPlan.identities.length === 0
+        completeFamilyLookup || (queryPlan?.route === "STRUCTURED_ONLY" && queryPlan.identities.length === 0)
           ? Promise.resolve([])
           : retrieveSparseCandidates({
               shop: session.shop,
@@ -2608,28 +2653,6 @@ let resultCacheStatus: "HIT" | "MISS" = "MISS";
           versions: queryPlan.versions,
         });
       }
-
-      const preparedRewrite =
-        await applyShopContextToQuery(
-          {
-            shop:
-              session.shop,
-
-            originalQuery:
-              query,
-
-            rewrite:
-              interpretedQuery,
-          },
-        );
-
-      const rewriteMs =
-        Date.now() -
-        rewriteStartedAt;
-
-      sortIntent =
-        preparedRewrite.analysis
-          .sortIntent;
 
       const embeddingCacheStartedAt =
         Date.now();
@@ -2720,7 +2743,7 @@ let resultCacheStatus: "HIT" | "MISS" = "MISS";
         });
 
       const semanticPromise =
-        queryPlan?.route === "STRUCTURED_ONLY"
+        completeFamilyLookup || queryPlan?.route === "STRUCTURED_ONLY"
           ? null
           : runSemanticSearch();
 
@@ -2728,11 +2751,15 @@ let resultCacheStatus: "HIT" | "MISS" = "MISS";
         ? await finalAbsenceProofPromise
         : null;
       const proofBasedNoResult =
-        finalProof?.status === "CERTAIN_NO_RESULT";
+        finalProof?.status === "CERTAIN_NO_RESULT" && !completeFamilyLookup;
 
       let rawSearchResults: Awaited<ReturnType<typeof semanticSearch>>;
 
-      if (proofBasedNoResult) {
+      if (completeFamilyLookup) {
+        // Grounded family membership takes precedence over an incomplete/stale
+        // no-result proof. Only pure-family intent may bypass cosine cutoff.
+        rawSearchResults = completeFamilyLookup.results;
+      } else if (proofBasedNoResult) {
         void structuredPromise.catch(() => undefined);
         void lexicalPromise.catch(() => undefined);
         void sparsePromise.catch(() => undefined);
@@ -2870,7 +2897,7 @@ let resultCacheStatus: "HIT" | "MISS" = "MISS";
         "genderFilter";
 
       const genderFilteredResults =
-        await filterResultsByExplicitGender(
+        completeFamilyLookup ? rawSearchResults : await filterResultsByExplicitGender(
           {
             shop:
               session.shop,
