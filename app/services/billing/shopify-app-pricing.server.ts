@@ -1733,6 +1733,39 @@ export async function reconcileShopifySubscriptionFromAdmin({
       } else if (local && (localTerminal || supersededGid)) {
         classification = "SUPERSEDED_TERMINAL";
 
+        // On an authenticated app entry/reinstall, Shopify must be the final
+        // authority. If the exact local current GID is no longer returned by
+        // Shopify, never resurrect access from a stale paid/cancelled DB row.
+        if (
+          (source === "API" || source === "RECONCILIATION") &&
+          pointer?.currentSubscriptionGid === expectedSubscriptionGid
+        ) {
+          await db.$transaction(async (tx) => {
+            await tx.aiSearchShop.updateMany({
+              where: {
+                shop,
+                currentSubscriptionGid: expectedSubscriptionGid,
+              },
+              data: {
+                currentPlanHandle: null,
+                currentSubscriptionGid: null,
+              },
+            });
+
+            await tx.billingSubscription.update({
+              where: { id: local.id },
+              data: {
+                accessStatus: "NONE",
+                reconciliationStatus: "SYNCED",
+                reconciliationCheckedAt: new Date(),
+                reconciliationReason:
+                  "SHOPIFY_SUBSCRIPTION_NOT_FOUND_DURING_AUTHENTICATED_SYNC",
+                repairRequiredAt: null,
+              },
+            });
+          });
+        }
+
         await recordBillingEvent({
           shop,
           subscriptionGid: expectedSubscriptionGid,
@@ -1749,6 +1782,9 @@ export async function reconcileShopifySubscriptionFromAdmin({
               pointer?.currentSubscriptionGid ?? null,
             pendingSubscriptionGid:
               pointer?.pendingSubscriptionGid ?? null,
+            authenticatedSyncClearedCurrent:
+              (source === "API" || source === "RECONCILIATION") &&
+              pointer?.currentSubscriptionGid === expectedSubscriptionGid,
           },
         });
       } else if (local) {
