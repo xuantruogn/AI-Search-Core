@@ -796,6 +796,62 @@ async function loadShopSemanticRowsUncached(
   return rows;
 }
 
+/**
+ * Update Shopify-standard taxonomy facts without re-embedding unchanged products.
+ * This does not change the semantic vector or charge a vector-update quota.
+ */
+export async function refreshProductTaxonomyTerms(args: {
+  shop: string;
+  productId: string;
+  category: { id: string; fullName: string } | null | undefined;
+}): Promise<boolean> {
+  // Undefined means caller had no category field; null means Shopify has none.
+  if (args.category === undefined) return false;
+  const row = await db.aiSearchProductSemanticProfile.findUnique({
+    where: { shop_productId: { shop: args.shop, productId: args.productId } },
+    select: {
+      profile: true,
+      productRecord: { select: { searchable: true, hasVector: true } },
+    },
+  });
+  if (!row) return false;
+  const parsed = parseStoredSemanticProfile(row.profile);
+  const reserved = new Set(["SHOPIFY_CATEGORY_PATH", "SHOPIFY_CATEGORY_ID"]);
+  const preserved = parsed.terms.filter((term) => !reserved.has(term.kind));
+  const fresh = [
+    ...preserved,
+    ...([
+      ["SHOPIFY_CATEGORY_PATH", args.category?.fullName ?? ""],
+      ["SHOPIFY_CATEGORY_ID", args.category?.id ?? ""],
+    ] as const).flatMap(([kind, value]) => {
+      const normalizedValue = normalizeSemanticValue(value);
+      return normalizedValue
+        ? [{ kind, value, normalizedValue }]
+        : [];
+    }),
+  ];
+  const before = parsed.terms.filter((term) => reserved.has(term.kind))
+    .map((term) => term.kind + ":" + term.normalizedValue).sort().join("|");
+  const after = fresh.filter((term) => reserved.has(term.kind))
+    .map((term) => term.kind + ":" + term.normalizedValue).sort().join("|");
+  if (before === after) return false;
+  const updated = await db.aiSearchProductSemanticProfile.update({
+    where: { shop_productId: { shop: args.shop, productId: args.productId } },
+    data: {
+      profile: profileJson(parsed.analysisMeta, fresh, parsed.variantSelections),
+    },
+    select: { updatedAt: true },
+  });
+  replaceCachedProductRows({
+    shop: args.shop,
+    productId: args.productId,
+    terms: fresh,
+    updatedAt: updated.updatedAt,
+    active: row.productRecord.searchable && row.productRecord.hasVector,
+  });
+  return true;
+}
+
 /** Update variant tuples on an unchanged product without regenerating an embedding.
  * This supports re-syncing old catalog rows without consuming vector quota.
  */
