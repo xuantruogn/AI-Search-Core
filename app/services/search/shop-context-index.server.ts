@@ -2437,6 +2437,14 @@ export function sourceContextCatalogValueMatch(
 
   const signalTokens = meaningfulTokens(normalizedSignal);
   const valueTokens = meaningfulTokens(normalizedValue);
+  // Empty token arrays must not satisfy [].every() and fabricate evidence.
+  // Single-letter variant codes (e.g. S) only match an explicit exact value.
+  if (signalTokens.length === 0) {
+    const assigned = kind === "ATTRIBUTE"
+      ? objectiveFacetAssignmentValue(catalogValue)
+      : null;
+    return normalizedValue === normalizedSignal || assigned === normalizedSignal;
+  }
 
   if (kind === "ATTRIBUTE") {
     const assigned = objectiveFacetAssignmentValue(catalogValue);
