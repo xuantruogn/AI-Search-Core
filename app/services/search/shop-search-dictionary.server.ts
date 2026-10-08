@@ -206,8 +206,8 @@ async function loadShopSearchDictionaryUncached(
   // second full catalog scan. Dynamic import avoids the invalidation cycle
   // between the dictionary and Shop Context modules.
   const { getShopContextCatalogTerms } = await import("./shop-context-index.server");
-  const catalogTerms = await getShopContextCatalogTerms(shop);
-  for (const row of catalogTerms) {
+  const catalogSnapshot = await getShopContextCatalogTerms(shop);
+  for (const row of catalogSnapshot.terms) {
     const field = mapKind(row.kind);
     if (!field) continue;
     const normalized = normalizeQueryText(row.normalizedValue || row.value);
@@ -256,13 +256,13 @@ async function loadShopSearchDictionaryUncached(
   const value: ShopSearchDictionary = {
     shop,
     entries,
-    version: `context-v4-shared-revision:${catalogRevision}:${entries.length}`,
+    version: `context-v4-shared-revision:${catalogSnapshot.catalogRevision}:${entries.length}`,
     loadedAt: Date.now(),
     matchIndex: buildMatchIndex(entries),
   };
   const cacheEntry: DictionaryCacheEntry = {
     expiresAt: Date.now() + CACHE_SAFETY_TTL_MS,
-    catalogRevision,
+    catalogRevision: catalogSnapshot.catalogRevision,
     value,
   };
   // An indexing webhook can invalidate the dictionary while its full
