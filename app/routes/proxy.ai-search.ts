@@ -75,6 +75,7 @@ import {
 import { ensureProductCollection } from "../services/search/qdrant.server";
 import { warmGeminiConnection } from "../services/search/gemini-query-rewriter.server";
 import { getShopSearchDictionary } from "../services/search/shop-search-dictionary.server";
+import { buildSearchCacheRequestVariant } from "../services/search/search-cache-request-variant.server";
 import {
   fetchProductsByGids as fetchAppSelfRenderProductsByGids,
   renderAppSelfSearchPage,
@@ -98,49 +99,6 @@ const EMBEDDING_CACHE_MAX_BYTES = (() => {
   return (Number.isSafeInteger(mb) && mb >= 4 ? Math.min(mb, 128) : 24) * 1024 * 1024;
 })();
 let embeddingCacheBytes = 0;
-
-const SEARCH_CACHE_IGNORED_PARAMS = new Set([
-  "q",
-  "page",
-  "receipt",
-  "format",
-  "mode",
-  "theme_id",
-  "map_fingerprint",
-  "native_search_url",
-  "native_search_path",
-  "section_id",
-  "ids",
-  // Shopify App Proxy adds signed transport metadata on each request.
-  // These values are already authenticated by the proxy/session layer and
-  // must not split the same shop+query result into a new cache key every time.
-  "shop",
-  "timestamp",
-  "signature",
-  "hmac",
-  "path_prefix",
-  "logged_in_customer_id",
-  "host",
-  // Client transport/cache-busting values do not change search semantics.
-  "_",
-  "_t",
-  "cache_bust",
-  "cacheBust",
-  "request_id",
-  NATIVE_BYPASS_PARAM,
-]);
-
-function buildSearchCacheRequestVariant(url: URL) {
-  return [...url.searchParams.entries()]
-    .filter(([key]) => !SEARCH_CACHE_IGNORED_PARAMS.has(key))
-    .sort(([leftKey, leftValue], [rightKey, rightValue]) =>
-      leftKey === rightKey
-        ? leftValue.localeCompare(rightValue)
-        : leftKey.localeCompare(rightKey),
-    )
-    .map(([key, value]) => encodeURIComponent(key) + "=" + encodeURIComponent(value))
-    .join("&");
-}
 
 function buildEmbeddingCacheKey(shop: string, query: string) {
   return [
