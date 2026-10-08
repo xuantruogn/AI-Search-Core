@@ -6,6 +6,7 @@ import {
   classifyFamilyProduct,
   familyGroupForCanonicalTarget,
   queryFamilyFromSource,
+  shopifyCategorySafeLeafText,
   type FamilyGroup,
 } from "./product-family-taxonomy.server";
 import type { QueryPlan } from "./query-plan.server";
@@ -160,6 +161,18 @@ export function classifyVerifiedFamilyMember(
     if (verdict.match && verdict.reason === "SHOPIFY_CATEGORY") return "CATEGORY";
     if (!verdict.match && verdict.reason === "CONTRADICTION") return null;
   }
+
+  // Generic exact-family fallback for product classes not predeclared in the
+  // retail bridge. The Shopify category path must be safe (not Toys/Costumes)
+  // and its LEAF must match the requested family. Parent/description words do
+  // not count, so Bicycle Accessories cannot prove Bicycle.
+  if (taxonomyPaths.some((path) => {
+    const leaf = shopifyCategorySafeLeafText(path);
+    return leaf ? typedProductFamilyMatches(leaf, target.canonical) : false;
+  })) {
+    return "CATEGORY";
+  }
+
   if (!typed.length) return null;
   const exact = typed.some((term) =>
     normalizeQueryText(term.value) === normalizeQueryText(target.canonical)
