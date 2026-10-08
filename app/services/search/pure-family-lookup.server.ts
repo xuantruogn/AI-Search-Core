@@ -2,7 +2,12 @@ import { listSearchableIndexedProducts } from "../commerce/indexed-products.serv
 import { normalizeQueryText, parseDeterministicQuery } from "./deterministic-query-parser.server";
 import { scanShopSemanticProfiles } from "./product-semantic-profile.server";
 import { typedProductFamilyMatches } from "./structured-candidate-retrieval.server";
-import { classifyFamilyProduct, queryFamilyFromSource, type FamilyGroup } from "./product-family-taxonomy.server";
+import {
+  classifyFamilyProduct,
+  classifyGenericFamilyProduct,
+  queryFamilyFromSource,
+  type FamilyGroup,
+} from "./product-family-taxonomy.server";
 import type { QueryPlan } from "./query-plan.server";
 import type { QueryRewriteResult } from "./query-rewriter.server";
 import type { SearchResult } from "./semantic-search.server";
@@ -147,16 +152,12 @@ export function classifyVerifiedFamilyMember(
     return verdict.reason === "SHOPIFY_CATEGORY" ? "CATEGORY" : "SUBTYPE";
   }
 
-  // For exact bicycle/dress/skirt terms, a standardized Shopify category
-  // can prove membership even when the LLM did not create a canonical type.
-  const standardLeafGroup: FamilyGroup | null =
-    ["bicycle", "dress", "skirt"].includes(normalizeQueryText(target.canonical))
-      ? normalizeQueryText(target.canonical) as FamilyGroup
-      : null;
-  if (standardLeafGroup && taxonomyPaths.length > 0) {
-    const verdict = classifyFamilyProduct(evidence, standardLeafGroup);
-    if (verdict.match && verdict.reason === "SHOPIFY_CATEGORY") return "CATEGORY";
-    if (!verdict.match && verdict.reason === "CONTRADICTION") return null;
+  // Any canonical family may be proven by a Shopify standard-category
+  // ancestor/leaf. This is catalog-wide: shoes, bags, jewelry, phones,
+  // laptops, furniture, beauty, toys... do not need a bespoke code branch.
+  const genericVerdict = classifyGenericFamilyProduct(evidence, target.canonical);
+  if (genericVerdict.match) {
+    return genericVerdict.reason === "SHOPIFY_CATEGORY" ? "CATEGORY" : "SUBTYPE";
   }
   if (!typed.length) return null;
   const exact = typed.some((term) =>
