@@ -57,6 +57,7 @@ type DictionaryCacheEntry = {
 };
 const cache = new Map<string, DictionaryCacheEntry>();
 const pendingLoads = new Map<string, Promise<ShopSearchDictionary>>();
+const dictionaryGeneration = new Map<string, number>();
 
 function identityTokenVariants(token: string) {
   const variants = new Set([token]);
@@ -196,6 +197,7 @@ async function loadShopSearchDictionaryUncached(
     return cached.value;
   }
 
+  const generation = dictionaryGeneration.get(shop) ?? 0;
   const grouped = new Map<string, DictionaryEntry & { productIds: Set<string> }>();
 
   // Shop Context already aggregates the same searchable semantic profiles by
@@ -263,8 +265,12 @@ async function loadShopSearchDictionaryUncached(
     catalogRevision,
     value,
   };
-  touchCache(shop, cacheEntry);
-  enforceCacheBudget();
+  // An indexing webhook can invalidate the dictionary while its full
+  // catalog aggregation is still running. Do not resurrect that stale result.
+  if (generation === (dictionaryGeneration.get(shop) ?? 0)) {
+    touchCache(shop, cacheEntry);
+    enforceCacheBudget();
+  }
   return value;
 }
 
@@ -305,5 +311,12 @@ export async function getShopSearchDictionary(
 }
 
 export function invalidateShopSearchDictionary(shop: string) {
-  cache.delete(shop.trim().toLowerCase());
+  const normalizedShop = shop.trim().toLowerCase();
+  cache.delete(normalizedShop);
+  dictionaryGeneration.set(
+    normalizedShop, (dictionaryGeneration.get(normalizedShop) ?? 0) + 1,
+  );
+  for (const key of pendingLoads.keys()) {
+    if (key.startsWith(normalizedShop + "\u0000")) pendingLoads.delete(key);
+  }
 }
