@@ -759,6 +759,8 @@ async function reconcileManualShopifySubscription({
     status === "CANCELLED" &&
     effectivePeriodEnd !== null &&
     now < effectivePeriodEnd &&
+    current?.trialStatus !== "ACTIVE" &&
+    current?.trialStatus !== "CANCELLED" &&
     (current?.status === "ACTIVE" ||
       current?.cancellationStatus === "NON_RENEWING");
 
