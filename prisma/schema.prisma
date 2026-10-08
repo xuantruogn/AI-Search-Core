@@ -688,6 +688,7 @@ model AiSearchIndexedProduct {
   @@index([shop, hasVector, updatedAt, id], map: "idx_indexed_product_catalog_page")
   @@index([shop, vectorStatus])
   @@index([shop, handle])
+  @@fulltext([title, handle], map: "idx_indexed_product_lexical_ft")
   @@index([shop, lastCatalogSeenAt])
   @@index([shop, enrichmentStatus, enrichmentRetryAt], map: "idx_enrich_retry")
   @@index([enrichmentStatus, enrichmentRetryAt, id], map: "idx_enrich_due_global")
