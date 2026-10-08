@@ -256,7 +256,7 @@ const FAMILY_HEADS: Record<FamilyNode, readonly string[]> = {
   cookware: ["cookware", "pan", "pans", "pot", "pots", "skillet", "skillets", "noi", "chao"],
   dinnerware: ["dinnerware", "plate", "plates", "bowl", "bowls", "cup", "cups", "mug", "mugs", "chen", "dia"],
 
-  skincare: ["skincare", "moisturizer", "moisturizers", "serum", "serums", "cleanser", "cleansers", "toner", "toners", "kem duong", "sua rua mat"],
+  skincare: ["skincare", "skin care", "moisturizer", "moisturizers", "serum", "serums", "cleanser", "cleansers", "toner", "toners", "kem duong", "sua rua mat"],
   makeup: ["makeup", "lipstick", "lipsticks", "foundation", "mascara", "eyeshadow", "phan trang diem", "son moi"],
   haircare: ["haircare", "shampoo", "shampoos", "conditioner", "conditioners", "hair mask", "hair masks", "dau goi"],
   fragrance: ["fragrance", "fragrances", "perfume", "perfumes", "eau de parfum", "eau de toilette", "nuoc hoa"],
