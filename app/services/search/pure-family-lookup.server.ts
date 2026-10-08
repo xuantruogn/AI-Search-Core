@@ -20,6 +20,8 @@ export type PureFamilyTarget = {
   broadCategory: boolean;
   /** Explicit source-language broad family, independent of LLM paraphrase. */
   taxonomyGroup?: FamilyGroup;
+  /** Raw source resolved to a typed Shopify taxonomy node. */
+  categoryTarget?: boolean;
 };
 
 const BROAD_CATEGORY_IDENTITIES = new Set(["clothing", "clothes", "apparel"]);
@@ -83,10 +85,10 @@ export function classifyPureFamilyLookup(
   const sourceAligned = (rewrite.analysis.semanticMandatoryConcepts ?? [])
     .filter((concept) => normalizeQueryText(concept.source) === source)
     .map((concept) => concept.target);
-  const matchedSourceTerms = plan.resolvedSegments
+  const matchedSourceSegments = plan.resolvedSegments
     .filter((span) => ["PRODUCT_TYPE", "ALIAS", "CATEGORY"].includes(span.field) &&
-      normalizeQueryText(span.text) === source)
-    .map((span) => span.canonicalValue);
+      normalizeQueryText(span.text) === source);
+  const matchedSourceTerms = matchedSourceSegments.map((span) => span.canonicalValue);
   const directIdentity = plan.identities
     .filter((item) => item.mode !== "MUST_NOT" &&
       normalizeQueryText(item.value) === source)
@@ -96,7 +98,9 @@ export function classifyPureFamilyLookup(
   if (targets.length !== 1) return null;
 
   const target = targets[0];
-  if (plan.retrievalMode === "DISCOVERY" && !BROAD_CATEGORY_IDENTITIES.has(target)) return null;
+  const categoryTarget = matchedSourceSegments.some((span) => span.field === "CATEGORY");
+  if (plan.retrievalMode === "DISCOVERY" &&
+      !BROAD_CATEGORY_IDENTITIES.has(target) && !categoryTarget) return null;
   // The merged two-pass plan may contain a canonical translated identity
   // span as well as the source span. Permit that ONE source-aligned translation,
   // but never permit an extra attribute/context or sibling class.
@@ -113,7 +117,11 @@ export function classifyPureFamilyLookup(
   // Clothes/clothing share a canonical taxonomy parent; this is a trusted
   // identity synonym, not an inferred set of product subtypes.
   const canonical = target === "clothes" ? "clothing" : target;
-  return { canonical, broadCategory: BROAD_CATEGORY_IDENTITIES.has(target) };
+  return {
+    canonical,
+    broadCategory: BROAD_CATEGORY_IDENTITIES.has(target),
+    ...(categoryTarget ? { categoryTarget: true } : {}),
+  };
 }
 
 type FamilyTerm = { kind: string; value: string };
@@ -146,6 +154,13 @@ export function classifyVerifiedFamilyMember(
     if (!verdict.match) return null;
     return verdict.reason === "SHOPIFY_CATEGORY" ? "CATEGORY" : "SUBTYPE";
   }
+
+  // Any exact taxonomy node discovered from the shop's own Shopify category
+  // dictionary gets complete descendant coverage. This handles Snowboards,
+  // Rings, Chairs, etc. without hardcoding each leaf into application code.
+  if (target.categoryTarget && taxonomyPaths.some((path) =>
+    categoryPathMatches(path, target.canonical)
+  )) return "CATEGORY";
 
   // For exact bicycle/dress/skirt terms, a standardized Shopify category
   // can prove membership even when the LLM did not create a canonical type.
