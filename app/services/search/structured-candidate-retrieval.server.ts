@@ -14,9 +14,17 @@ import {
 } from "./vector-store.server";
 
 export function typedProductFamilyMatches(actual: string, requested: string) {
-  const fold = (value: string) => normalizeQueryText(value).split(" ").map((token) =>
-    token.length > 3 && token.endsWith("s") && !token.endsWith("ss") ? token.slice(0, -1) : token
-  ).join(" ");
+  const fold = (value: string) => normalizeQueryText(value).split(" ").map((token) => {
+    // Normalize common family plurals without treating an accessory's
+    // modifier ("bicycle helmet") as its sold-item head ("bicycle").
+    if (token.length > 4 && token.endsWith("ies")) return token.slice(0, -3) + "y";
+    if (token.length > 5 && token.endsWith("sses")) return token.slice(0, -2);
+    if (token.length > 3 && token.endsWith("s") &&
+        !token.endsWith("ss") && !token.endsWith("us") && !token.endsWith("is")) {
+      return token.slice(0, -1);
+    }
+    return token;
+  }).join(" ");
   const source = fold(actual), target = fold(requested);
   // A subtype may add modifiers before the family noun. Accessory/component
   // families have their own final noun and do not inherit authority from a
