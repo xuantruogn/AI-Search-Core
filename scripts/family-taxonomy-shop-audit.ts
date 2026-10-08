@@ -25,9 +25,13 @@ const counters = {
   unmappedTypedIdentity: 0,
   taxonomyTypeConflict: 0,
   dressOrSkirt: { dress: 0, skirt: 0, total: 0 },
-  tops: 0,
-  vehicles: 0,
-  bicycles: 0,
+  groups: {
+    tops: 0, bottoms: 0, clothing: 0, footwear: 0, bags: 0, jewelry: 0,
+    watches: 0, eyewear: 0, vehicles: 0, bicycle: 0, electronics: 0,
+    phones: 0, computers: 0, cameras: 0, audio: 0, furniture: 0,
+    home_goods: 0, beauty: 0, skincare: 0, makeup: 0, haircare: 0,
+    fragrance: 0, toys: 0, sports: 0, books: 0, pet_supplies: 0, grocery: 0,
+  },
 };
 const sampleMissing: string[] = [];
 const sampleUnmapped: Array<{ productId: string; canonical: string; merchantType: string; shopifyCategory: string }> = [];
@@ -72,9 +76,9 @@ await scanShopSemanticProfiles(shop, ({ productId, terms }) => {
     counters.dressOrSkirt.total++;
     counters.dressOrSkirt[apparel.node === "skirt" ? "skirt" : "dress"]++;
   }
-  if (classifyFamilyProduct(evidence, "tops").match) counters.tops++;
-  if (classifyFamilyProduct(evidence, "vehicles").match) counters.vehicles++;
-  if (classifyFamilyProduct(evidence, "bicycle").match) counters.bicycles++;
+  for (const group of Object.keys(counters.groups) as Array<keyof typeof counters.groups>) {
+    if (classifyFamilyProduct(evidence, group).match) counters.groups[group]++;
+  }
 });
 
 console.log(JSON.stringify({
