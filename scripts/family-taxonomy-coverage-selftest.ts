@@ -124,12 +124,13 @@ const category = (pathValue: string) => ({
 const categoryCases: Array<[string, FamilyGroup, boolean]> = [
   ["Apparel & Accessories > Clothing > Dresses", "dress_or_skirt", true],
   ["Apparel & Accessories > Clothing > Skirts", "dress_or_skirt", true],
-  ["Apparel & Accessories > Clothing > Shirts & Tops", "shirts", true],
+  ["Apparel & Accessories > Clothing > Shirts & Tops", "tops", true],
+  ["Apparel & Accessories > Clothing > Shirts & Tops", "shirts", false],
   ["Apparel & Accessories > Clothing > Shirts & Tops", "jackets", false],
   ["Apparel & Accessories > Clothing > Coats & Jackets", "jackets", true],
   ["Apparel & Accessories > Clothing > Pants", "bottoms", true],
   ["Apparel & Accessories > Shoes", "footwear", true],
-  ["Apparel & Accessories > Shoes", "sneakers", true],
+  ["Apparel & Accessories > Shoes", "sneakers", false],
   ["Apparel & Accessories > Jewelry > Rings", "rings", true],
   ["Vehicles & Parts > Vehicles > Bicycles", "bicycles", true],
   ["Vehicles & Parts > Vehicle Parts & Accessories > Bicycle Accessories", "bicycles", false],
@@ -152,6 +153,14 @@ assert.equal(shopifyCategoryIsClothing("Apparel & Accessories > Clothing Accesso
 assert.equal(shopifyCategoryLeaf("Vehicles & Parts > Vehicles > Bicycles"), "bicycle");
 assert.equal(shopifyCategoryLeaf("Toys & Games > Toys > Toy Vehicles > Cars"), null);
 
+assert.equal(classifyFamilyProduct({
+  canonicalTypes: ["Shirt"], merchantTypes: [],
+  shopifyCategoryPaths: ["Apparel & Accessories > Clothing > Shirts & Tops"],
+}, "shirts").match, true);
+assert.equal(classifyFamilyProduct({
+  canonicalTypes: ["Running Shoes"], merchantTypes: [],
+  shopifyCategoryPaths: ["Apparel & Accessories > Shoes"],
+}, "sneakers").match, true);
 assert.equal(classifyFamilyProduct({
   canonicalTypes: ["Bicycle Helmet"], merchantTypes: ["Bicycle"],
   shopifyCategoryPaths: ["Vehicles & Parts > Vehicles > Bicycles"],
