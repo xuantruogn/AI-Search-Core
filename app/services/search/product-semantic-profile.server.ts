@@ -4,6 +4,7 @@ import type { Prisma } from "@prisma/client";
 
 import db from "../../db.server";
 import type { ProductSemanticAnalysis } from "../products/product-embedding-input.server";
+import type { ProductVariantForIndex } from "../products/product-document.server";
 import { normalizeSemanticValue } from "./semantic-normalization.server";
 import { getSearchCatalogRevisionCached } from "./search-catalog-revision.server";
 
@@ -23,10 +24,16 @@ type SemanticAnalysisMeta = {
   factualSummary?: string;
 };
 
+export type IndexedVariantOption = { name: string; value: string };
+export type IndexedVariantSelection = {
+  id: string;
+  selectedOptions: IndexedVariantOption[];
+};
 export type StoredProductSemanticProfile = {
   schemaVersion: 1 | 2;
   analysisMeta: SemanticAnalysisMeta | null;
   terms: StoredSemanticTerm[];
+  variantSelections: IndexedVariantSelection[];
 };
 
 export type FlatSemanticRow = StoredSemanticTerm & {
@@ -450,6 +457,37 @@ function parseAnalysisMeta(value: unknown): SemanticAnalysisMeta | null {
   return Object.keys(meta).length > 0 ? meta : null;
 }
 
+/** Distinct per-variant option tuples are authoritative; never union sizes across colors. */
+export function normalizeIndexedVariantSelections(
+  variants: Array<Pick<ProductVariantForIndex, "id" | "selectedOptions">> | unknown,
+): IndexedVariantSelection[] {
+  if (!Array.isArray(variants)) return [];
+  const seen = new Set<string>();
+  const result: IndexedVariantSelection[] = [];
+  for (const item of variants.slice(0, 10_000)) {
+    if (!isRecord(item)) continue;
+    const id = cleanString(item.id);
+    // Without a Shopify Variant ID, we cannot prove that a tuple belongs to
+    // an independently selectable variant. Do not invent IDs.
+    if (!/^gid:\/\/shopify\/ProductVariant\/\d+$/.test(id) || seen.has(id)) continue;
+    if (!Array.isArray(item.selectedOptions)) continue;
+    const selectedOptions: IndexedVariantOption[] = [];
+    const names = new Set<string>();
+    for (const option of item.selectedOptions.slice(0, 16)) {
+      if (!isRecord(option)) continue;
+      const name = cleanString(option.name).slice(0, 80);
+      const value = cleanString(option.value).slice(0, 160);
+      if (!name || !value || names.has(normalizeSemanticValue(name))) continue;
+      names.add(normalizeSemanticValue(name));
+      selectedOptions.push({ name, value });
+    }
+    if (!selectedOptions.length) continue;
+    result.push({ id, selectedOptions });
+    seen.add(id);
+  }
+  return result;
+}
+
 function parseLegacyTerm(value: unknown): StoredSemanticTerm | null {
   if (!isRecord(value)) return null;
   const kind = cleanString(value.kind).slice(0, 64);
@@ -508,7 +546,7 @@ export function parseStoredSemanticProfile(
   value: Prisma.JsonValue | null | undefined,
 ): StoredProductSemanticProfile {
   if (!isRecord(value)) {
-    return { schemaVersion: 2, analysisMeta: null, terms: [] };
+    return { schemaVersion: 2, analysisMeta: null, terms: [], variantSelections: [] };
   }
 
   if (Number(value.schemaVersion) >= 2 && isRecord(value.values)) {
@@ -516,6 +554,7 @@ export function parseStoredSemanticProfile(
       schemaVersion: 2,
       analysisMeta: parseAnalysisMeta(value.meta),
       terms: valuesToTerms(value.values),
+      variantSelections: normalizeIndexedVariantSelections(value.variantSelections),
     };
   }
 
@@ -531,18 +570,21 @@ export function parseStoredSemanticProfile(
       parseAnalysisMeta(value.meta) ??
       parseAnalysisMeta(value.analysis),
     terms: dedupeTerms(terms),
+    variantSelections: normalizeIndexedVariantSelections(value.variantSelections),
   };
 }
 
 function profileJson(
   analysisMeta: SemanticAnalysisMeta | null,
   terms: StoredSemanticTerm[],
+  variantSelections: IndexedVariantSelection[] = [],
 ): Prisma.InputJsonValue {
   const payload: Record<string, unknown> = {
     schemaVersion: PROFILE_SCHEMA_VERSION,
     values: termsToValues(terms),
   };
   if (analysisMeta) payload.meta = analysisMeta;
+  if (variantSelections.length > 0) payload.variantSelections = variantSelections;
   return payload as Prisma.InputJsonObject;
 }
 
@@ -554,9 +596,11 @@ export async function replaceProductSemanticProfile(args: {
   productId: string;
   analysis: ProductSemanticAnalysis | null;
   terms: StoredSemanticTerm[];
+  variants?: ProductVariantForIndex[];
 }) {
   const terms = dedupeTerms(args.terms);
-  const profile = profileJson(analysisMetaFromAnalysis(args.analysis), terms);
+  const profile = profileJson(analysisMetaFromAnalysis(args.analysis), terms,
+    normalizeIndexedVariantSelections(args.variants));
   const record = await db.aiSearchProductSemanticProfile.upsert({
     where: {
       shop_productId: {
@@ -616,7 +660,7 @@ export async function ensureProductSemanticTerms(args: {
     merged.length !== parsed.terms.length;
 
   if (shouldRewrite) {
-    const profile = profileJson(parsed.analysisMeta, merged);
+    const profile = profileJson(parsed.analysisMeta, merged, parsed.variantSelections);
     const record = await db.aiSearchProductSemanticProfile.upsert({
       where: {
         shop_productId: {
@@ -673,7 +717,7 @@ export async function compactLegacySemanticProfiles(
       where: { id: row.id },
       data: {
         schemaVersion: PROFILE_SCHEMA_VERSION,
-        profile: profileJson(parsed.analysisMeta, parsed.terms),
+        profile: profileJson(parsed.analysisMeta, parsed.terms, parsed.variantSelections),
       },
     });
   });
@@ -750,6 +794,29 @@ async function loadShopSemanticRowsUncached(
   }
 
   return rows;
+}
+
+export async function loadProductVariantSelections(
+  shop: string,
+  productIds: string[],
+): Promise<Map<string, IndexedVariantSelection[]>> {
+  const output = new Map<string, IndexedVariantSelection[]>();
+  for (let offset = 0; offset < productIds.length; offset += 200) {
+    const ids = [...new Set(productIds.slice(offset, offset + 200))];
+    if (!ids.length) continue;
+    const rows = await db.aiSearchProductSemanticProfile.findMany({
+      where: {
+        shop,
+        productId: { in: ids },
+        productRecord: { is: { searchable: true, hasVector: true } },
+      },
+      select: { productId: true, profile: true },
+    });
+    for (const row of rows) {
+      output.set(row.productId, parseStoredSemanticProfile(row.profile).variantSelections);
+    }
+  }
+  return output;
 }
 
 export async function loadShopSemanticRows(shop: string) {
