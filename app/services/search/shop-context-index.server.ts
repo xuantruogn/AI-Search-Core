@@ -99,6 +99,8 @@ export type ContextualQueryResult = QueryRewriteResult & {
     ungroundedExplicitFeature: boolean;
     discoverySourceGroundedProductIds: string[];
     discoveryExpansionGroundedProductIds: string[];
+    /** Typed color vocabulary built once with the shop-context index. */
+    typedColorVocabulary: string[];
   };
 };
 
@@ -108,6 +110,7 @@ type ShopContextLookupIndex = {
   byNormalized: Map<string, ContextTerm[]>;
   contextProductIds: Set<string>;
   canonicalProductIds: Set<string>;
+  typedColorVocabulary: Set<string>;
 };
 
 type LoadedShopContext = {
@@ -199,8 +202,13 @@ function buildShopContextLookupIndex(terms: ContextTerm[]): ShopContextLookupInd
   const byNormalized = new Map<string, ContextTerm[]>();
   const contextProductIds = new Set<string>();
   const canonicalProductIds = new Set<string>();
+  const typedColorVocabulary = new Set<string>();
 
   for (const term of terms) {
+    if (term.kind === "ATTRIBUTE" || term.kind === "VARIANT_OPTION") {
+      const typedColor = term.value.match(/^\s*colou?r\s*[=:]\s*(.+?)\s*$/i);
+      if (typedColor) typedColorVocabulary.add(normalizeContextTerm(typedColor[1]));
+    }
     const kindList = byKind.get(term.kind) ?? [];
     kindList.push(term);
     byKind.set(term.kind, kindList);
@@ -227,6 +235,7 @@ function buildShopContextLookupIndex(terms: ContextTerm[]): ShopContextLookupInd
     byNormalized,
     contextProductIds,
     canonicalProductIds,
+    typedColorVocabulary,
   };
 }
 
@@ -1442,9 +1451,10 @@ export async function applyShopContextToQuery({
         normalizeContextTerm(rewrite.planning?.semanticQuery ?? rewrite.analysis.intent),
     )
     .map((segment) => segment.canonicalValue)
-    .filter((value) => terms.some((term) =>
-      term.kind === "CATEGORY" && term.normalizedValue === normalizeContextTerm(value),
-    ));
+    .filter((value) =>
+      (contextIndex.byNormalized.get(normalizeContextTerm(value)) ?? [])
+        .some((term) => term.kind === "CATEGORY"),
+    );
   const sourceOwnedDiscoveryIdentityTargets = currentContextRetrievalMode === "DISCOVERY"
     ? [...new Set([
         ...resolvedPrimaryCategories,
@@ -1474,10 +1484,9 @@ export async function applyShopContextToQuery({
   ]);
   const hasExplicitSemanticMustFacet =
     semanticMustFacetTokens.size > 0 &&
-    terms.some(
-      (term) =>
-        semanticMustFacetKinds.has(term.kind) &&
-        semanticMustFacetTokens.has(term.normalizedValue),
+    [...semanticMustFacetTokens].some((token) =>
+      (contextIndex.byNormalized.get(token) ?? [])
+        .some((term) => semanticMustFacetKinds.has(term.kind)),
     );
   const productTypeTokens = new Set(
     meaningfulTokens(rewrite.analysis.productType),
@@ -1496,9 +1505,23 @@ export async function applyShopContextToQuery({
   const skipContextEnrichment =
     rewrite.analysis.decisionReason.includes("LLM_DEFERRED_BACKGROUND");
   const scoreStartedAt = Date.now();
+  // The index already maps normalized values and tokens to relevant terms.
+  // Only these can score: ordinary signal overlap, an explicit semantic MUST,
+  // or an expansion-grounded discovery leaf (including plural morphology).
+  // Scanning every catalog term here was O(shop vocabulary × query signals)
+  // even on warm cache hits.
+  const contextTermCandidates = skipContextEnrichment ? [] : [...new Set([
+    ...candidateContextTerms(contextIndex, signals.map((signal) => signal.normalized)),
+    ...[...semanticMustFacetTokens].flatMap(
+      (token) => contextIndex.byNormalized.get(token) ?? [],
+    ),
+    ...(currentContextRetrievalMode === "DISCOVERY"
+      ? candidateIdentityContextTerms(contextIndex, discoveryExpansionValues)
+      : []),
+  ])];
   const scoredTerms = skipContextEnrichment
     ? []
-    : terms
+    : contextTermCandidates
     .filter(
       (term) =>
         // Establish product identity before considering attributes. A catalog
@@ -2244,6 +2267,7 @@ export async function applyShopContextToQuery({
       ungroundedExplicitFeature,
       discoverySourceGroundedProductIds,
       discoveryExpansionGroundedProductIds,
+      typedColorVocabulary: [...contextIndex.typedColorVocabulary],
     },
   };
 }
@@ -2819,15 +2843,21 @@ export async function filterResultsByExplicitGender<
   // Validate explicit target colors only when typed color coverage is high.
   // Missing product color remains unknown rather than becoming a contradiction.
   const requestedExact = rewrite.analysis.sourceOwnedExactConstraints ?? [];
-  const catalogRows = requestedExact.length > 0
+  const indexedColors = (rewrite as ContextualQueryResult).context?.typedColorVocabulary;
+  // Normal storefront queries already loaded the shop-context index. Reuse its
+  // typed palette instead of materializing every product's semantic rows again.
+  // Standalone/fixture callers retain the previous safe catalog fallback.
+  const catalogRows = requestedExact.length > 0 && !indexedColors
     ? await loadShopSemanticRows(shop)
     : rows;
-  const colorVocabulary = new Set(
-    catalogRows.flatMap((row) => {
-      const match = row.value.match(/^\s*colou?r\s*[=:]\s*(.+?)\s*$/i);
-      return match ? [normalizeContextTerm(match[1])] : [];
-    }),
-  );
+  const colorVocabulary = indexedColors
+    ? new Set(indexedColors)
+    : new Set(
+        catalogRows.flatMap((row) => {
+          const match = row.value.match(/^\s*colou?r\s*[=:]\s*(.+?)\s*$/i);
+          return match ? [normalizeContextTerm(match[1])] : [];
+        }),
+      );
   const requestedColors = currentTargetColors(
     originalQuery,
     rewrite,
