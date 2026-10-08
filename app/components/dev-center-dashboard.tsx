@@ -937,3 +937,42 @@ function json(value: string | null): Record<string, unknown> { if (!value) retur
 function prettyJson(value: string | null) { if (!value) return "No LLM analysis recorded."; try { return JSON.stringify(JSON.parse(value), null, 2); } catch { return value; } }
 function value(input: unknown) { return input === null || input === undefined || input === "" ? "default" : String(input); }
 function securityLabel(action: string) { const labels: Record<string, string> = { DEV_LOGIN_SUCCESS: "Login successful", DEV_PASSWORD_VERIFIED: "Password verified", DEV_MFA_SUCCESS: "MFA verified", DEV_LOGOUT: "Logged out", DEV_LOGIN_FAILED: "Login failed", DEV_MFA_FAILED: "MFA failed" }; return labels[action] ?? action.replaceAll("_", " ").toLowerCase(); }
+
+
+export function DevCenterSidebar({ active }: { active: "overview" | "uninstalled" | "search" | "plan" }) {
+  const items = [
+    { href: "/dev#overview", label: "Overview", icon: "01", key: "overview" },
+    { href: "/dev#shops", label: "Shops", icon: "02", key: "shops" },
+    { href: "/dev/uninstalled-shop", label: "Uninstalled Shops", icon: "03", key: "uninstalled" },
+    { href: "/dev/search-history", label: "Search History", icon: "04", key: "search" },
+    { href: "/dev/plan-configuration", label: "Plan Configuration", icon: "05", key: "plan" },
+    { href: "/dev#plans", label: "Revenue", icon: "06", key: "revenue" },
+    { href: "/dev#usage", label: "Usage & Cost", icon: "07", key: "usage" },
+    { href: "/dev#audit", label: "Audit", icon: "08", key: "audit" },
+  ];
+  return (
+    <aside className="dc-sidebar">
+      <div className="dc-brand">
+        <span className="dc-brand-mark">B</span>
+        <span><strong>AI-Buyense</strong><small>Internal Dev Center</small></span>
+      </div>
+      <nav className="dc-nav" aria-label="Dev Center navigation">
+        {items.map((item) => (
+          item.href.startsWith("/dev#") ? (
+            <a className={item.key === active ? "is-active" : undefined} href={item.href} key={item.key}>
+              <span>{item.icon}</span>{item.label}
+            </a>
+          ) : (
+            <Link className={item.key === active ? "is-active" : undefined} to={item.href} key={item.key}>
+              <span>{item.icon}</span>{item.label}
+            </Link>
+          )
+        ))}
+      </nav>
+      <div className="dc-sidebar-meta">
+        <span className="dc-system-dot" />
+        <div><strong>Internal access</strong><small>MFA protected session</small></div>
+      </div>
+    </aside>
+  );
+}
