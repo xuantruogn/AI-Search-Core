@@ -44,16 +44,6 @@ export function classifyPureFamilyLookup(
   if (!source) return null;
   const sourceTaxonomyGroup = queryFamilyFromSource(plan.rawQuery);
 
-  // Re-check original-source facets before the LLM's second pass: translation
-  // can drop an unresolved color/context even if the merged plan looks simple.
-  if (rawPlan && (
-    rawPlan.attributes.length || rawPlan.contexts.length || rawPlan.audiences.length ||
-    rawPlan.measurements.length || rawPlan.compatibility.length ||
-    rawPlan.entities.brands.length || rawPlan.entities.models.length ||
-    rawPlan.entities.identifiers.length ||
-    (rawPlan.identities.length > 0 && rawPlan.unresolvedSegments.length > 0)
-  )) return null;
-
   const parsed = parseDeterministicQuery(plan.rawQuery);
   if (parsed.price || parsed.measurements.length || parsed.compatibility.length ||
       parsed.negatives.length || parsed.marketPreference !== "ANY" ||
@@ -71,6 +61,17 @@ export function classifyPureFamilyLookup(
       taxonomyGroup: sourceTaxonomyGroup,
     };
   }
+  // The remaining families are not exact source-owned bridge phrases, so
+  // a dictionary/LLM modifier can still mean the shopper supplied constraints.
+  // For exact "váy"/"áo"/"xe" the original source contains only the family;
+  // a low-confidence TAG/ATTRIBUTE dictionary hit must not suppress lookup.
+  if (rawPlan && (
+    rawPlan.attributes.length || rawPlan.contexts.length || rawPlan.audiences.length ||
+    rawPlan.measurements.length || rawPlan.compatibility.length ||
+    rawPlan.entities.brands.length || rawPlan.entities.models.length ||
+    rawPlan.entities.identifiers.length ||
+    (rawPlan.identities.length > 0 && rawPlan.unresolvedSegments.length > 0)
+  )) return null;
   if (!noDemandQualifiers(rewrite)) return null;
   if (plan.attributes.length || plan.measurements.length || plan.audiences.length ||
       plan.contexts.length || plan.compatibility.length ||
