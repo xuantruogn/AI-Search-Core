@@ -200,6 +200,9 @@ export function shopifyCategoryIsClothing(path: string) {
 function singularFamilyToken(token: string) {
   if (token.length > 4 && token.endsWith("ies")) return token.slice(0, -3) + "y";
   if (token.length > 5 && token.endsWith("sses")) return token.slice(0, -2);
+  if (token.length > 4 && /(?:ches|shes|xes|zes|ses)$/.test(token)) {
+    return token.slice(0, -2);
+  }
   if (token.length > 3 && token.endsWith("s") &&
       !token.endsWith("ss") && !token.endsWith("us") && !token.endsWith("is")) {
     return token.slice(0, -1);
