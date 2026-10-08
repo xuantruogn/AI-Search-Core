@@ -180,6 +180,10 @@ export function classifyVerifiedFamilyMember(
   if (target.taxonomyGroup) {
     const verdict = classifyFamilyProduct(evidence, target.taxonomyGroup);
     if (!verdict.match) return null;
+    const exactTyped = typed.some((term) =>
+      normalizeQueryText(term.value) === normalizeQueryText(target.canonical),
+    );
+    if (exactTyped) return "EXACT";
     return verdict.reason === "SHOPIFY_CATEGORY" ? "CATEGORY" : "SUBTYPE";
   }
 
