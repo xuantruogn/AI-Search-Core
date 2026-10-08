@@ -385,12 +385,29 @@ function parseProducts(value: string): CachedRankedProduct[] | null {
       if (
         typeof row.productId !== "string" ||
         typeof row.handle !== "string" ||
-        typeof row.score !== "number"
+        typeof row.score !== "number" ||
+        !Number.isFinite(row.score)
       ) return null;
+      // Historical receipts may not have similarity fields. When present,
+      // preserve their provenance on round-trip through the persistent cache.
+      // Without these values analytics and subsequent relevance diagnostics
+      // silently diverge between cold results and cache hits.
+      const vectorSimilarity =
+        typeof row.vectorSimilarity === "number" &&
+        Number.isFinite(row.vectorSimilarity)
+          ? row.vectorSimilarity
+          : undefined;
+      const primaryVectorSimilarity =
+        typeof row.primaryVectorSimilarity === "number" &&
+        Number.isFinite(row.primaryVectorSimilarity)
+          ? row.primaryVectorSimilarity
+          : undefined;
       products.push({
         productId: row.productId,
         handle: row.handle,
         score: row.score,
+        ...(vectorSimilarity !== undefined ? { vectorSimilarity } : {}),
+        ...(primaryVectorSimilarity !== undefined ? { primaryVectorSimilarity } : {}),
       });
     }
     return products;
