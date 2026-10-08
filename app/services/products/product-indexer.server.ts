@@ -387,14 +387,14 @@ export async function indexProduct({
     if (!semanticProfileCurrent) {
       await ensureDeterministicProductProfile(shop, product);
     }
-    const [variantChanged, taxonomyChanged] = await Promise.all([
-      refreshProductVariantSelections({
-        shop, productId: product.id, variants: product.variants,
-      }),
-      refreshProductTaxonomyTerms({
-        shop, productId: product.id, category: product.shopifyCategory,
-      }),
-    ]);
+    // Both update the same profile JSON row; keep the writes sequential to
+    // prevent one snapshot from overwriting the other's new fields.
+    const variantChanged = await refreshProductVariantSelections({
+      shop, productId: product.id, variants: product.variants,
+    });
+    const taxonomyChanged = await refreshProductTaxonomyTerms({
+      shop, productId: product.id, category: product.shopifyCategory,
+    });
     return !semanticProfileCurrent || variantChanged || taxonomyChanged;
   };
 
