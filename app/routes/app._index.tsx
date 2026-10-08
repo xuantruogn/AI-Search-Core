@@ -156,10 +156,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       source: "RECONCILIATION",
     });
 
-    if (
-      refreshed.subscription.status === "CANCELLED" &&
-      refreshed.subscription.shopifySubscriptionId
-    ) {
+    if (refreshed.subscription.shopifySubscriptionId) {
       await reconcileShopifySubscriptionFromAdmin({
         shop: session.shop,
         admin,
