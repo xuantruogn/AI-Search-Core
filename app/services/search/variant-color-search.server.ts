@@ -18,8 +18,8 @@ const TRANSLATED_COLORS: Record<string, string> = {
   "gris": "gray", "rouge": "red", "rojo": "red",
   "azul": "blue", "bleu": "blue", "negro": "black",
 };
-const COLOR_OPTION_NAME = /^(?:color|colour|mau|màu|couleur|farbe)$/i;
-const SIZE_OPTION_NAME = /^(?:size|co|cỡ|taille|shoe size|sizes)$/i;
+const COLOR_OPTION_NAME = /^(?:color|colour|shade|colorway|mau|mau sac|couleur|farbe)$/i;
+const SIZE_OPTION_NAME = /^(?:size|co|kich co|taille|shoe size|sizes)$/i;
 
 function canonicalColor(raw: string): string {
   const key = normalizeSemanticValue(raw);
@@ -85,7 +85,7 @@ export function requestedVariantFacets(
 
 function valueOfOption(variant: IndexedVariantSelection, name: RegExp) {
   return variant.selectedOptions
-    .filter((item) => name.test(item.name))
+    .filter((item) => name.test(normalizeSemanticValue(item.name)))
     .map((item) => item.value);
 }
 
