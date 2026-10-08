@@ -432,6 +432,16 @@ const CATEGORY_ANCESTOR_RULES: Partial<Record<
   furniture: {
     ancestors: ["furniture"],
   },
+  fashion_accessories: {
+    ancestors: ["clothing accessories"],
+  },
+  computer_accessories: {
+    ancestors: ["computer accessories", "computer peripherals"],
+    deny: /\b(?:parts?|components?)\b/,
+  },
+  audio: {
+    ancestors: ["audio"],
+  },
   beverages: {
     ancestors: ["beverages"],
   },
@@ -458,7 +468,7 @@ function categoryProvesGroup(path: string, group: FamilyGroup) {
   const rule = CATEGORY_ANCESTOR_RULES[group];
   if (rule) {
     const descendants = segments.slice(1);
-    const hasAncestor = segments.slice(0, -1).some((segment) =>
+    const hasAncestor = segments.some((segment) =>
       rule.ancestors.includes(segment)
     );
     if (!hasAncestor) return false;
