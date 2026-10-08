@@ -17,6 +17,8 @@ export type ProductForIndex = {
   description?: string | null;
   vendor?: string | null;
   productType?: string | null;
+  /** Shopify Standard Product Taxonomy; do not equate to merchant productType. */
+  shopifyCategory?: { id: string; fullName: string } | null;
 
   tags?: string[];
 
