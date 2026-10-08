@@ -139,12 +139,28 @@ export function classifyFamilyProduct(
 ): FamilyEvidenceResult {
   const accepted = new Set(GROUP_MEMBERS[group]);
 
+  // A known sold-item contradiction outranks an incorrectly assigned category.
+  // This prevents a Bicycle Helmet / Toy Car from entering a family just
+  // because its merchant set Product.category to Bicycles / Cars.
+  const authoritativeNames = evidence.canonicalTypes.length
+    ? evidence.canonicalTypes : evidence.merchantTypes;
+  if (authoritativeNames.some((value) =>
+    ACCESSORY_OR_TOY.test(normalizeQueryText(value))
+  )) return { match: false, reason: "CONTRADICTION" };
+  const knownTypeNodes = authoritativeNames
+    .map(classifySoldItemLeaf).filter((node): node is FamilyNode => node !== null);
+
   // An assigned standard category whose leaf is classifiable owns the family.
   // Its full hierarchy protects us against toy/part/accessory false matches.
   if (evidence.shopifyCategoryPaths.length) {
     for (const path of evidence.shopifyCategoryPaths) {
       const leaf = shopifyCategoryLeaf(path);
       if (leaf) {
+        // Disagreeing canonical sold-item identity is a classification issue,
+        // not permission to declare the query family proven.
+        if (knownTypeNodes.length > 0 && knownTypeNodes.every((node) => node !== leaf)) {
+          return { match: false, reason: "CONTRADICTION" };
+        }
         return accepted.has(leaf)
           ? { match: true, node: leaf, reason: "SHOPIFY_CATEGORY" }
           : { match: false, reason: "CONTRADICTION" };
