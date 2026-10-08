@@ -24,6 +24,8 @@ type ContextKind =
   | "PRODUCT_TITLE"
   | "PRODUCT_TYPE"
   | "CANONICAL_PRODUCT_TYPE"
+  | "SHOPIFY_CATEGORY_PATH"
+  | "SHOPIFY_CATEGORY_ID"
   | "VENDOR"
   | "TAG"
   | "VARIANT"
@@ -616,6 +618,8 @@ export function collectProductContextTerms(
   // broad taxonomy such as "Womens", "Outdoor" or "Tools" and must not be
   // promoted to the exact canonical identity of the item.
   add("PRODUCT_TYPE", product.productType);
+  add("SHOPIFY_CATEGORY_PATH", product.shopifyCategory?.fullName);
+  add("SHOPIFY_CATEGORY_ID", product.shopifyCategory?.id);
   add("VENDOR", product.vendor);
 
   // LLM-derived semantic facets are inserted before high-cardinality tags and

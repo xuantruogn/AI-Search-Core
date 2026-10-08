@@ -147,6 +147,16 @@ async function scenario(browser, options = {}) {
       await page.locator("#VerifiedMount > li").evaluateAll((nodes) => nodes.map((node) => node.dataset.handle)),
       ["beta", "alpha"],
     );
+    // Mount hydration is async relative to the count/title update. Test the
+    // settled user-visible state rather than racing immediately after cards
+    // appear. The timeout still fails if counters never become correct.
+    await page.waitForFunction((multipleCounters) => {
+      if (multipleCounters) {
+        return document.querySelector("#ProductCountDesktop")?.textContent === "3 kết quả" &&
+          document.querySelector("#ProductCount")?.textContent === "3 kết quả";
+      }
+      return document.querySelector('[role="status"]')?.textContent === "3 results";
+    }, options.multipleCounters);
     if (options.multipleCounters) {
       assert.equal(await page.locator("#ProductCountDesktop").textContent(), "3 kết quả");
       assert.equal(await page.locator("#ProductCount").textContent(), "3 kết quả");

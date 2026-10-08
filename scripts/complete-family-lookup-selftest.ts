@@ -39,7 +39,7 @@ translatedPlan.resolvedSegments = [];
 translatedPlan.unresolvedSegments = ["xe dap"];
 translatedPlan.route = "FULL_LLM";
 assert.deepEqual(classifyPureFamilyLookup(translatedPlan, makeRewrite("bicycle", "Xe đạp")),
-  { canonical: "bicycle", broadCategory: false });
+  { canonical: "bicycle", broadCategory: false, taxonomyGroup: "bicycle" });
 
 const winter = makePlan("winter clothing", "clothing", "DISCOVERY");
 winter.resolvedSegments = [];

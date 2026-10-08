@@ -2,6 +2,7 @@ import { listSearchableIndexedProducts } from "../commerce/indexed-products.serv
 import { normalizeQueryText, parseDeterministicQuery } from "./deterministic-query-parser.server";
 import { scanShopSemanticProfiles } from "./product-semantic-profile.server";
 import { typedProductFamilyMatches } from "./structured-candidate-retrieval.server";
+import { classifyFamilyProduct, queryFamilyFromSource, type FamilyGroup } from "./product-family-taxonomy.server";
 import type { QueryPlan } from "./query-plan.server";
 import type { QueryRewriteResult } from "./query-rewriter.server";
 import type { SearchResult } from "./semantic-search.server";
@@ -17,6 +18,8 @@ import type { SearchResult } from "./semantic-search.server";
 export type PureFamilyTarget = {
   canonical: string;
   broadCategory: boolean;
+  /** Explicit source-language broad family, independent of LLM paraphrase. */
+  taxonomyGroup?: FamilyGroup;
 };
 
 const BROAD_CATEGORY_IDENTITIES = new Set(["clothing", "clothes", "apparel"]);
@@ -38,10 +41,30 @@ export function classifyPureFamilyLookup(
 ): PureFamilyTarget | null {
   if (!plan || plan.retrievalMode === "COMPLEMENT") return null;
   const source = normalizeQueryText(plan.rawQuery);
-  if (!source || !noDemandQualifiers(rewrite)) return null;
+  if (!source) return null;
+  const sourceTaxonomyGroup = queryFamilyFromSource(plan.rawQuery);
 
-  // Re-check original-source facets before the LLM's second pass: translation
-  // can drop an unresolved color/context even if the merged plan looks simple.
+  const parsed = parseDeterministicQuery(plan.rawQuery);
+  if (parsed.price || parsed.measurements.length || parsed.compatibility.length ||
+      parsed.negatives.length || parsed.marketPreference !== "ANY" ||
+      parsed.sort.field !== "RELEVANCE" || parsed.relation !== "SINGLE" ||
+      parsed.hasComplexRelation || parsed.hasConflictingConstraints) return null;
+  // Source is an exact, standalone family word (e.g. váy, áo, xe).
+  // A second LLM pass must not collapse váy into Dress alone or invent a
+  // clothing style that silently suppresses other genuine family members.
+  // Shopper-origin constraints were already checked against the raw plan and
+  // deterministic parser above; this path never applies to "váy đỏ".
+  if (sourceTaxonomyGroup) {
+    return {
+      canonical: sourceTaxonomyGroup,
+      broadCategory: false,
+      taxonomyGroup: sourceTaxonomyGroup,
+    };
+  }
+  // The remaining families are not exact source-owned bridge phrases, so
+  // a dictionary/LLM modifier can still mean the shopper supplied constraints.
+  // For exact "váy"/"áo"/"xe" the original source contains only the family;
+  // a low-confidence TAG/ATTRIBUTE dictionary hit must not suppress lookup.
   if (rawPlan && (
     rawPlan.attributes.length || rawPlan.contexts.length || rawPlan.audiences.length ||
     rawPlan.measurements.length || rawPlan.compatibility.length ||
@@ -49,12 +72,7 @@ export function classifyPureFamilyLookup(
     rawPlan.entities.identifiers.length ||
     (rawPlan.identities.length > 0 && rawPlan.unresolvedSegments.length > 0)
   )) return null;
-
-  const parsed = parseDeterministicQuery(plan.rawQuery);
-  if (parsed.price || parsed.measurements.length || parsed.compatibility.length ||
-      parsed.negatives.length || parsed.marketPreference !== "ANY" ||
-      parsed.sort.field !== "RELEVANCE" || parsed.relation !== "SINGLE" ||
-      parsed.hasComplexRelation || parsed.hasConflictingConstraints) return null;
+  if (!noDemandQualifiers(rewrite)) return null;
   if (plan.attributes.length || plan.measurements.length || plan.audiences.length ||
       plan.contexts.length || plan.compatibility.length ||
       plan.entities.brands.length || plan.entities.models.length ||
@@ -115,6 +133,31 @@ export function classifyVerifiedFamilyMember(
   const canonical = terms.filter((term) => term.kind === "CANONICAL_PRODUCT_TYPE");
   const typed = canonical.length > 0 ? canonical
     : terms.filter((term) => term.kind === "PRODUCT_TYPE");
+  const taxonomyPaths = terms
+    .filter((term) => term.kind === "SHOPIFY_CATEGORY_PATH")
+    .map((term) => term.value);
+  const evidence = {
+    canonicalTypes: canonical.map((term) => term.value),
+    merchantTypes: terms.filter((term) => term.kind === "PRODUCT_TYPE").map((term) => term.value),
+    shopifyCategoryPaths: taxonomyPaths,
+  };
+  if (target.taxonomyGroup) {
+    const verdict = classifyFamilyProduct(evidence, target.taxonomyGroup);
+    if (!verdict.match) return null;
+    return verdict.reason === "SHOPIFY_CATEGORY" ? "CATEGORY" : "SUBTYPE";
+  }
+
+  // For exact bicycle/dress/skirt terms, a standardized Shopify category
+  // can prove membership even when the LLM did not create a canonical type.
+  const standardLeafGroup: FamilyGroup | null =
+    ["bicycle", "dress", "skirt"].includes(normalizeQueryText(target.canonical))
+      ? normalizeQueryText(target.canonical) as FamilyGroup
+      : null;
+  if (standardLeafGroup && taxonomyPaths.length > 0) {
+    const verdict = classifyFamilyProduct(evidence, standardLeafGroup);
+    if (verdict.match && verdict.reason === "SHOPIFY_CATEGORY") return "CATEGORY";
+    if (!verdict.match && verdict.reason === "CONTRADICTION") return null;
+  }
   if (!typed.length) return null;
   const exact = typed.some((term) =>
     normalizeQueryText(term.value) === normalizeQueryText(target.canonical)
@@ -136,6 +179,10 @@ export type FamilyCoverage = {
   scannedProfiles: number;
   matchedProfiles: number;
   searchableProducts: number;
+  /** Matches backed by standard Shopify category vs product type. */
+  categoryMatches: number;
+  /** Index-eligible profiles lacking any typed source for family membership. */
+  missingFamilyEvidence: number;
   results: SearchResult[];
 };
 
@@ -152,10 +199,18 @@ export async function retrieveCompleteFamilyCandidates(args: {
   if (!target) return null;
   const matched: Array<{ productId: string; grade: "EXACT" | "SUBTYPE" | "CATEGORY" }> = [];
   let scannedProfiles = 0;
+  let categoryMatches = 0;
+  let missingFamilyEvidence = 0;
   await (dependencies.scanProfiles ?? scanShopSemanticProfiles)(args.shop, ({ productId, terms }) => {
     scannedProfiles += 1;
+    if (!terms.some((term) => [
+      "CANONICAL_PRODUCT_TYPE", "PRODUCT_TYPE", "SHOPIFY_CATEGORY_PATH",
+    ].includes(term.kind))) missingFamilyEvidence += 1;
     const grade = classifyVerifiedFamilyMember(terms, target);
-    if (grade) matched.push({ productId, grade });
+    if (grade) {
+      if (grade === "CATEGORY") categoryMatches += 1;
+      matched.push({ productId, grade });
+    }
   });
   // Do not use zero source-backed matches to prove absence: incomplete catalog
   // taxonomy should still get the ordinary hybrid search opportunity.
@@ -191,6 +246,8 @@ export async function retrieveCompleteFamilyCandidates(args: {
     scannedProfiles,
     matchedProfiles: matched.length,
     searchableProducts: results.length,
+    categoryMatches,
+    missingFamilyEvidence,
     results,
   };
 }

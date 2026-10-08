@@ -26,6 +26,7 @@ type ShopifyProductNode = {
   description: string;
   vendor: string;
   productType: string;
+  category?: { id: string; fullName: string } | null;
   tags: string[];
 
   status?: ShopifyProductStatus;
@@ -268,6 +269,8 @@ function mapShopifyProduct(
     productType:
       product.productType,
 
+    shopifyCategory: product.category ?? null,
+
     tags:
       product.tags,
 
@@ -344,6 +347,7 @@ export async function fetchProductsForIndex(
               description
               vendor
               productType
+              category { id fullName }
               tags
               status
               publishedAt
@@ -656,6 +660,7 @@ export async function fetchProductForIndexById(
             description
             vendor
             productType
+            category { id fullName }
             tags
             status
             publishedAt

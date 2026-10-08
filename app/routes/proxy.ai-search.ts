@@ -2602,6 +2602,8 @@ let resultCacheStatus: "HIT" | "MISS" = "MISS";
           scannedProfiles: completeFamilyLookup.scannedProfiles,
           verifiedProfiles: completeFamilyLookup.matchedProfiles,
           searchableResults: completeFamilyLookup.searchableProducts,
+          categoryMatches: completeFamilyLookup.categoryMatches,
+          missingFamilyEvidence: completeFamilyLookup.missingFamilyEvidence,
         });
       }
 
