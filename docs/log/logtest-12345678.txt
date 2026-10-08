@@ -1,0 +1,1918 @@
+12345678
+
+Quá trình test: như sau:
+
+Ở shop mới: cài app , bấm chọn gói basic nhưng ko approve, sau đó gỡ app và quay trở lại và chọn gói basic và approve thật: Kết quả gói basics có cả cả ngày trial . tôi chưa có log
+
+Test lần tiếp:
+
+
+
+Gặp bất thường mới: ko biết đúng hay sai
+Cài app mới vào : Current Subscription Status
+INACTIVE
+Store: billing-test-shop9.myshopify.com
+Current Plan: No active plan
+Billing Cycle: No active billing period
+Source: BILLING_V2
+Partner API: 🟢 Connected
+
+
+chưa bấm vào đâu: có thể đúng
+
+--------------------
+Chọn gói basic-> ko approve- > trở lại chọn gói Pro -> ko approve-> gỡ apps -> vafoc họn gói basic và Approve thật: kiemr tra: 
+Log như sau: 
+ webhookId: 'enrichment:1b5d77dab2e9aa7f35de0cfd8d8f35d5',
+14:58:58 │              React Router │   existingJobId: 6195
+14:58:58 │              React Router │ }
+14:58:58 │              React Router │ [AI Search] Duplicate webhook ignored: {
+14:58:58 │              React Router │   webhookId: 'enrichment:ab57087c41e79335eea1bfbd8ebadfa6',
+14:58:58 │              React Router │   existingJobId: 6196
+14:58:58 │              React Router │ }
+14:58:58 │              React Router │ [AI Search] Duplicate webhook ignored: {
+14:58:58 │              React Router │   webhookId: 'enrichment:b9e2c1dc37f83a038d1d5fa5f2b48bee',
+14:58:58 │              React Router │   existingJobId: 6197
+14:58:58 │              React Router │ }
+14:58:58 │              React Router │ [AI Search] Duplicate webhook ignored: {
+14:58:58 │              React Router │   webhookId: 'enrichment:bd4ce3c8fa322e9515ab246cee7256f8',
+14:58:58 │              React Router │   existingJobId: 6198
+14:58:58 │              React Router │ }
+14:58:58 │              React Router │ [AI Search] Duplicate webhook ignored: {
+14:58:58 │              React Router │   webhookId: 'enrichment:ac53509e6b0be24df2c45667049e5fe0',
+14:58:58 │              React Router │   existingJobId: 6199
+14:58:58 │              React Router │ }
+14:58:58 │              React Router │ [AI Search] Duplicate webhook ignored: {
+14:58:58 │              React Router │   webhookId: 'enrichment:fc215c42cd8bc0aaa4f3e1e1126caa9e',
+14:58:58 │              React Router │   existingJobId: 6200
+14:58:58 │              React Router │ }
+14:58:58 │              React Router │ [AI Search] Duplicate webhook ignored: {
+14:58:58 │              React Router │   webhookId: 'enrichment:07f0d651644198b39bdb1cb5952bdb93',
+14:58:58 │              React Router │   existingJobId: 6201
+14:58:58 │              React Router │ }
+14:58:58 │              React Router │ [AI Search] Duplicate webhook ignored: {
+14:58:58 │              React Router │   webhookId: 'enrichment:317c45d4961705fadd8d4479a335f9d6',
+14:58:58 │              React Router │   existingJobId: 6202
+14:58:58 │              React Router │ }
+14:58:58 │              React Router │ [AI Search] Duplicate webhook ignored: {
+14:58:58 │              React Router │   webhookId: 'enrichment:2a3b9675c4301b01bd4e97461757bbf9',
+14:58:58 │              React Router │   existingJobId: 6203
+14:58:58 │              React Router │ }
+14:58:58 │              React Router │ [AI Search] Duplicate webhook ignored: {
+14:58:58 │              React Router │   webhookId: 'enrichment:70d5c0324f3576f87e872cd06c7b8808',
+14:58:58 │              React Router │   existingJobId: 6204
+14:58:58 │              React Router │ }
+14:58:58 │              React Router │ [AI Search] Duplicate webhook ignored: {
+14:58:58 │              React Router │   webhookId: 'enrichment:ffc2f86b8bb9cbde2f3204d1cd526c55',
+14:58:58 │              React Router │   existingJobId: 6205
+14:58:58 │              React Router │ }
+14:58:58 │              React Router │ [AI Search] Duplicate webhook ignored: {
+14:58:58 │              React Router │   webhookId: 'enrichment:2c85e6f1dfea2037cb042d123ef8b8df',
+14:58:58 │              React Router │   existingJobId: 6206
+14:58:58 │              React Router │ }
+14:58:58 │              React Router │ [AI Search] Duplicate webhook ignored: {
+14:58:58 │              React Router │   webhookId: 'enrichment:1b77b8d37ab447024557528d5e1b3013',
+14:58:58 │              React Router │   existingJobId: 6207
+14:58:58 │              React Router │ }
+14:58:58 │              React Router │ [AI Search] Duplicate webhook ignored: {
+14:58:58 │              React Router │   webhookId: 'enrichment:bd5a6f0b52b6ea2fc799b5ba9fe6b26f',
+14:58:58 │              React Router │   existingJobId: 6208
+14:58:58 │              React Router │ }
+14:58:58 │              React Router │ [AI Search] Duplicate webhook ignored: {
+14:58:58 │              React Router │   webhookId: 'enrichment:9ad4ba71bbfcee6fd828c9cc53677992',
+14:58:58 │              React Router │   existingJobId: 6209
+14:58:58 │              React Router │ }
+14:58:58 │              React Router │ [AI Search] Duplicate webhook ignored: {
+14:58:58 │              React Router │   webhookId: 'enrichment:68c2a777be07f5e7daa9a548e68efc35',
+14:58:58 │              React Router │   existingJobId: 6210
+14:58:58 │              React Router │ }
+14:58:58 │              React Router │ [AI Search] Duplicate webhook ignored: {
+14:58:58 │              React Router │   webhookId: 'enrichment:6b2a493ae463ab726c7dba4e066b7e22',
+14:58:58 │              React Router │   existingJobId: 6211
+14:58:58 │              React Router │ }
+14:58:58 │              React Router │ [AI Search] Duplicate webhook ignored: {
+14:58:58 │              React Router │   webhookId: 'enrichment:333786b67baf02fb2f6d0d3d829f9bd8',
+14:58:58 │              React Router │   existingJobId: 6212
+14:58:58 │              React Router │ }
+14:58:58 │              React Router │ [AI Search] Duplicate webhook ignored: {
+14:58:58 │              React Router │   webhookId: 'enrichment:1a4b94e2d23089e382871b49bde4a555',
+14:58:58 │              React Router │   existingJobId: 6213
+14:58:58 │              React Router │ }
+14:58:58 │              React Router │ [AI Search] Duplicate webhook ignored: {
+14:58:58 │              React Router │   webhookId: 'enrichment:626d584b11ba45f9a132c7e8d2577bbc',
+14:58:58 │              React Router │   existingJobId: 6214
+14:58:58 │              React Router │ }
+14:58:58 │              React Router │ [AI Search] Duplicate webhook ignored: {
+14:58:58 │              React Router │   webhookId: 'enrichment:0cbef1b78f6c4edfec824086d4262f09',
+14:58:58 │              React Router │   existingJobId: 6215
+14:58:58 │              React Router │ }
+14:58:58 │              React Router │ [AI Search] Duplicate webhook ignored: {
+14:58:58 │              React Router │   webhookId: 'enrichment:3c46891242b3ceacdb9a3cc8af87fe95',
+14:58:58 │              React Router │   existingJobId: 6216
+14:58:58 │              React Router │ }
+14:58:58 │              React Router │ [AI Search] Duplicate webhook ignored: {
+14:58:58 │              React Router │   webhookId: 'enrichment:618a6317f10a3b18c59c2d33922364f9',
+14:58:58 │              React Router │   existingJobId: 6217
+14:58:58 │              React Router │ }
+14:58:58 │              React Router │ [AI Search] Duplicate webhook ignored: {
+14:58:58 │              React Router │   webhookId: 'enrichment:91b1c109d3a4397703e6110f5df3a333',
+14:58:58 │              React Router │   existingJobId: 6218
+14:58:58 │              React Router │ }
+14:58:58 │              React Router │ [AI Search] Duplicate webhook ignored: {
+14:58:58 │              React Router │   webhookId: 'enrichment:dfa6a5c8a414b29a0438d4932e7022c9',
+14:58:58 │              React Router │   existingJobId: 6219
+14:58:58 │              React Router │ }
+14:58:58 │              React Router │ [AI Search] Duplicate webhook ignored: {
+14:58:58 │              React Router │   webhookId: 'enrichment:3ddc85872fadd915589f763e2f23a325',
+14:58:58 │              React Router │   existingJobId: 6220
+14:58:58 │              React Router │ }
+14:58:58 │              React Router │ [AI Search] Duplicate webhook ignored: {
+14:58:58 │              React Router │   webhookId: 'enrichment:c05f81edbb4fe64c3b7b723cd9475061',
+14:58:58 │              React Router │   existingJobId: 6221
+14:58:58 │              React Router │ }
+14:58:58 │              React Router │ [AI Search] Duplicate webhook ignored: {
+14:58:58 │              React Router │   webhookId: 'enrichment:4c894b1293db8031774ae38476902b7a',
+14:58:58 │              React Router │   existingJobId: 6222
+14:58:58 │              React Router │ }
+14:58:58 │              React Router │ [AI Search] Duplicate webhook ignored: {
+14:58:58 │              React Router │   webhookId: 'enrichment:bbc493d050c0b413272da10b183dad18',
+14:58:58 │              React Router │   existingJobId: 6223
+14:58:58 │              React Router │ }
+14:58:58 │              React Router │ [AI Search] Duplicate webhook ignored: {
+14:58:58 │              React Router │   webhookId: 'enrichment:364a832aa23eee802114b25488cfc14e',
+14:58:58 │              React Router │   existingJobId: 6224
+14:58:58 │              React Router │ }
+14:58:58 │              React Router │ [AI Search] Duplicate webhook ignored: {
+14:58:58 │              React Router │   webhookId: 'enrichment:d268ce9ccd5a0bee461f961ff9646d9c',
+14:58:58 │              React Router │   existingJobId: 6225
+14:58:58 │              React Router │ }
+14:58:58 │              React Router │ [AI Search] Duplicate webhook ignored: {
+14:58:58 │              React Router │   webhookId: 'enrichment:eea69d2d5de71a3ce152c52ce368794e',
+14:58:58 │              React Router │   existingJobId: 6226
+14:58:58 │              React Router │ }
+14:58:58 │              React Router │ [AI Search] Duplicate webhook ignored: {
+14:58:58 │              React Router │   webhookId: 'enrichment:ba7c22dffc63955f4b1007343333b129',
+14:58:58 │              React Router │   existingJobId: 6227
+14:58:58 │              React Router │ }
+14:58:58 │              React Router │ [AI Search] Duplicate webhook ignored: {
+14:58:58 │              React Router │   webhookId: 'enrichment:cf23b2097416395cf16a1d2ecf8d426b',
+14:58:58 │              React Router │   existingJobId: 6228
+14:58:58 │              React Router │ }
+14:58:58 │              React Router │ [AI Search] Duplicate webhook ignored: {
+14:58:58 │              React Router │   webhookId: 'enrichment:3e01d436e54e5f2a3e6fab78516e9d94',
+14:58:58 │              React Router │   existingJobId: 6229
+14:58:58 │              React Router │ }
+14:58:58 │              React Router │ [AI Search] Duplicate webhook ignored: {
+14:58:58 │              React Router │   webhookId: 'enrichment:ed5b25ecfdca3e904e9b295269a1e74c',
+14:58:58 │              React Router │   existingJobId: 6230
+14:58:58 │              React Router │ }
+14:58:58 │              React Router │ [AI Search] Duplicate webhook ignored: {
+14:58:58 │              React Router │   webhookId: 'enrichment:1ee115b211268e574bcde805d52faf6f',
+14:58:58 │              React Router │   existingJobId: 6231
+14:58:58 │              React Router │ }
+14:58:58 │              React Router │ [AI Search] Duplicate webhook ignored: {
+14:58:58 │              React Router │   webhookId: 'enrichment:a1b012548024790590a61735e5d336a1',
+14:58:58 │              React Router │   existingJobId: 6232
+14:58:58 │              React Router │ }
+14:58:58 │              React Router │ [AI Search] Duplicate webhook ignored: {
+14:58:58 │              React Router │   webhookId: 'enrichment:ec992874947ad3d453fed875c2ee8ce8',
+14:58:58 │              React Router │   existingJobId: 6233
+14:58:58 │              React Router │ }
+14:58:58 │              React Router │ [AI Search] Duplicate webhook ignored: {
+14:58:58 │              React Router │   webhookId: 'enrichment:c1fd408ba64095f38b3f4d2d2e77ddce',
+14:58:58 │              React Router │   existingJobId: 6234
+14:58:58 │              React Router │ }
+14:58:58 │              React Router │ [AI Search] Duplicate webhook ignored: {
+14:58:58 │              React Router │   webhookId: 'enrichment:21b731d41b582c469edcb59f45c34c96',
+14:58:58 │              React Router │   existingJobId: 6235
+14:58:58 │              React Router │ }
+14:58:58 │              React Router │ [AI Search] Duplicate webhook ignored: {
+14:58:58 │              React Router │   webhookId: 'enrichment:0cdd7c010491b3620184edea46ac0352',
+14:58:58 │              React Router │   existingJobId: 6236
+14:58:58 │              React Router │ }
+14:58:58 │              React Router │ [AI Search] Duplicate webhook ignored: {
+14:58:58 │              React Router │   webhookId: 'enrichment:e5645745f5942cdb425c58aca07dc30c',
+14:58:58 │              React Router │   existingJobId: 6237
+14:58:58 │              React Router │ }
+14:58:58 │              React Router │ [AI Search] Duplicate webhook ignored: {
+14:58:58 │              React Router │   webhookId: 'enrichment:9ec2f4a3250936051735bc724865cacf',
+14:58:58 │              React Router │   existingJobId: 6238
+14:58:58 │              React Router │ }
+14:58:58 │              React Router │ [BILLING TRACE] appSubscriptionCreate:response {
+14:58:58 │              React Router │   debugId: 'd4f1aaa1',
+14:58:58 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+14:58:58 │              React Router │   httpStatus: 200,
+14:58:58 │              React Router │   httpOk: true,
+14:58:58 │              React Router │   responseContentType: 'text/plain;charset=UTF-8',
+14:58:58 │              React Router │   responseHasErrors: false,
+14:58:58 │              React Router │   userErrors: [],
+14:58:58 │              React Router │   subscriptionId: 'gid://shopify/AppSubscription/33325482180',
+14:58:58 │              React Router │   subscriptionStatus: 'PENDING',
+14:58:58 │              React Router │   confirmationUrl:
+'https://billing-test-shop9.myshopify.com/admin/charges/426912448513/33325482180/RecurringApplicationCharge/confirm_recurring_application_cha
+rge?signature=BAh7BzoHaWRsKwjEgFrCBwA6EmF1dG9fYWN0aXZhdGVU--aca0a71db49db33d4265b58e080969a47fe6022c',
+14:58:58 │              React Router │   returnUrl:
+'https://admin.shopify.com/store/billing-test-shop9/apps/dbe92d75b95bbae5496ef1794a6cb752/app/billing?billing_callback=1'
+14:58:58 │              React Router │ }
+14:58:58 │              React Router │ [AI Search] Duplicate webhook ignored: {
+14:58:58 │              React Router │   webhookId: 'enrichment:0b8393da640619f0ddc308870e4fd28f',
+14:58:58 │              React Router │   existingJobId: 6239
+14:58:58 │              React Router │ }
+14:58:58 │              React Router │ [BILLING TRACE] checkpoint:after-pending-update {
+14:58:58 │              React Router │   debugId: 'd4f1aaa1',
+14:58:58 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+14:58:58 │              React Router │   subscriptionId: 'gid://shopify/AppSubscription/33325482180'
+14:58:58 │              React Router │ }
+14:58:58 │              React Router │ [BILLING TRACE] checkpoint:before-reconcile {
+14:58:58 │              React Router │   debugId: 'd4f1aaa1',
+14:58:58 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+14:58:58 │              React Router │   subscriptionId: 'gid://shopify/AppSubscription/33325482180'
+14:58:58 │              React Router │ }
+14:58:58 │              React Router │ [AI Search] Duplicate webhook ignored: {
+14:58:58 │              React Router │   webhookId: 'enrichment:1b10febfec3f441d96aa19b8d7026e52',
+14:58:58 │              React Router │   existingJobId: 6240
+14:58:58 │              React Router │ }
+14:58:58 │              React Router │ [AI Search] Duplicate webhook ignored: {
+14:58:58 │              React Router │   webhookId: 'enrichment:b4e05b8b7d1512a08bb3322827d86399',
+14:58:58 │              React Router │   existingJobId: 6241
+14:58:58 │              React Router │ }
+14:58:58 │              React Router │ [AI Search] Duplicate webhook ignored: {
+14:58:58 │              React Router │   webhookId: 'enrichment:75f24e742f9de0cb246c3b5ad9cda045',
+14:58:58 │              React Router │   existingJobId: 6242
+14:58:58 │              React Router │ }
+14:58:58 │              React Router │ [AI Search] Duplicate webhook ignored: {
+14:58:58 │              React Router │   webhookId: 'enrichment:e1dd23bfb1162a0a18d8f52e5e89d69c',
+14:58:58 │              React Router │   existingJobId: 6243
+14:58:58 │              React Router │ }
+14:58:58 │              React Router │ [AI Search] Duplicate webhook ignored: {
+14:58:58 │              React Router │   webhookId: 'enrichment:6c12b033d96d5f5a63765337fe262dc1',
+14:58:58 │              React Router │   existingJobId: 6244
+14:58:58 │              React Router │ }
+14:58:58 │              React Router │ [AI Search] Duplicate webhook ignored: {
+14:58:58 │              React Router │   webhookId: 'enrichment:78315a3ca1466ea1e5a946cb54a917c2',
+14:58:58 │              React Router │   existingJobId: 6245
+14:58:58 │              React Router │ }
+14:58:58 │              React Router │ [AI Search] Duplicate webhook ignored: {
+14:58:58 │              React Router │   webhookId: 'enrichment:eb2e42b69f97aa60e0ad0337625d903c',
+14:58:58 │              React Router │   existingJobId: 6246
+14:58:58 │              React Router │ }
+14:58:58 │              React Router │ [AI Search] Duplicate webhook ignored: {
+14:58:58 │              React Router │   webhookId: 'enrichment:39857895f6d5434f0b06ccdbee5ae649',
+14:58:58 │              React Router │   existingJobId: 6247
+14:58:58 │              React Router │ }
+14:58:58 │              React Router │ [AI Search] Duplicate webhook ignored: {
+14:58:58 │              React Router │   webhookId: 'enrichment:f71d1867f0e706a76c652427c042398d',
+14:58:58 │              React Router │   existingJobId: 6248
+14:58:58 │              React Router │ }
+14:58:58 │              React Router │ [AI Search] Duplicate webhook ignored: {
+14:58:58 │              React Router │   webhookId: 'enrichment:80ff9f1a6a199e96c9a41e52d8fa36ea',
+14:58:58 │              React Router │   existingJobId: 6249
+14:58:58 │              React Router │ }
+14:58:58 │              React Router │ [AI Search] Duplicate webhook ignored: {
+14:58:58 │              React Router │   webhookId: 'enrichment:4c8e68dfb136fc5a4c2c053193afca7c',
+14:58:58 │              React Router │   existingJobId: 6250
+14:58:58 │              React Router │ }
+14:58:58 │              React Router │ [AI Search] Duplicate webhook ignored: {
+14:58:58 │              React Router │   webhookId: 'enrichment:e36108a79c7df5f942ef11635284ac9e',
+14:58:58 │              React Router │   existingJobId: 6251
+14:58:58 │              React Router │ }
+14:58:58 │              React Router │ [AI Search] Catalog sync job queued: {
+14:58:58 │              React Router │   shop: 'billing-test-shop1.myshopify.com',
+14:58:58 │              React Router │   jobId: 74,
+14:58:58 │              React Router │   force: true,
+14:58:58 │              React Router │   reason: 'STOREFRONT_RECONCILE',
+14:58:58 │              React Router │   planAtStart: 'BASIC'
+14:58:58 │              React Router │ }
+14:58:58 │              React Router │ [AI Search] Catalog sync job queued: {
+14:58:58 │              React Router │   shop: 'billing-test-shop2.myshopify.com',
+14:58:58 │              React Router │   jobId: 75,
+14:58:58 │              React Router │   force: true,
+14:58:58 │              React Router │   reason: 'STOREFRONT_RECONCILE',
+14:58:58 │              React Router │   planAtStart: 'BASIC'
+14:58:58 │              React Router │ }
+14:58:58 │              React Router │ [AI Search] Housekeeping completed: {
+14:58:58 │              React Router │   usageEventsDeleted: 0,
+14:58:58 │              React Router │   queryLogsDeleted: 0,
+14:58:58 │              React Router │   productJobsDeleted: 0,
+14:58:58 │              React Router │   catalogJobsDeleted: 0,
+14:58:58 │              React Router │   failedProductJobsDeleted: 0,
+14:58:58 │              React Router │   failedCatalogJobsDeleted: 0,
+14:58:58 │              React Router │   expiredDevSessionsDeleted: 0,
+14:58:58 │              React Router │   expiredDevChallengesDeleted: 0,
+14:58:58 │              React Router │   staleDevThrottleDeleted: 0,
+14:58:58 │              React Router │   adminAuditLogsDeleted: 0,
+14:58:58 │              React Router │   devAuditLogsDeleted: 0,
+14:58:58 │              React Router │   apiUsageCompaction: {
+14:58:58 │              React Router │     aggregated: 0,
+14:58:58 │              React Router │     aggregatedBatches: 0,
+14:58:58 │              React Router │     rawDeleted: 0,
+14:58:58 │              React Router │     dailyDeleted: 0
+14:58:58 │              React Router │   },
+14:58:58 │              React Router │   semanticProfileCompaction: { rewritten: 0, remaining: 0 },
+14:58:58 │              React Router │   semanticVectorPayloadBackfill: { scanned: 0, updated: 0, missingProfiles: 0 },
+14:58:58 │              React Router │   usageReservationsRecovered: { scanned: 0, committed: 0, rolledBack: 0 },
+14:58:58 │              React Router │   resolvedUsageReservationsDeleted: 0,
+14:58:58 │              React Router │   expiredLeasesDeleted: 0,
+14:58:58 │              React Router │   enrichmentRetries: { checked: 100, queued: 0 },
+14:58:58 │              React Router │   storefrontCatalogReconciliation: { checked: 2, queued: 2 },
+14:58:58 │              React Router │   expiredSearchReceiptsDeleted: 0
+14:58:58 │              React Router │ }
+14:58:58 │              React Router │ [AI Search] Catalog sync job claimed: {
+14:58:58 │              React Router │   jobId: 74,
+14:58:58 │              React Router │   shop: 'billing-test-shop1.myshopify.com',
+14:58:58 │              React Router │   attempt: 1,
+14:58:58 │              React Router │   reason: 'STOREFRONT_RECONCILE'
+14:58:58 │              React Router │ }
+14:58:58 │              React Router │ [AI Search] Catalog sync started: { shop: 'billing-test-shop1.myshopify.com', initialCursor: null }
+14:58:58 │              React Router │ [BILLING] Shopify subscription verified: {
+14:58:58 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+14:58:58 │              React Router │   expectedSubscriptionGid: 'gid://shopify/AppSubscription/33325482180',
+14:58:58 │              React Router │   actualSubscriptionGid: 'gid://shopify/AppSubscription/33325482180',
+14:58:58 │              React Router │   status: 'PENDING',
+14:58:58 │              React Router │   name: 'AI Search Basic Plan'
+14:58:58 │              React Router │ }
+14:58:59 │              React Router │ [AI Search] Catalog sync job failed: {
+14:58:59 │              React Router │   jobId: 74,
+14:58:59 │              React Router │   attempts: 1,
+14:58:59 │              React Router │   maxAttempts: 4,
+14:58:59 │              React Router │   willRetry: true,
+14:58:59 │              React Router │   retryInMs: 10000,
+14:58:59 │              React Router │   error: 'Received an error response (404 Not Found) from Shopify:\n' +
+14:58:59 │              React Router │     '{\n' +
+14:58:59 │              React Router │     '  "networkStatusCode": 404,\n' +
+14:58:59 │              React Router │     '  "message": "GraphQL Client: Not Found",\n' +
+14:58:59 │              React Router │     '  "response": {}\n' +
+14:58:59 │              React Router │     '}\n' +
+14:58:59 │              React Router │     'If you report this error, please include this id:
+9d8cdf52-f50e-4452-88fd-ff9d087abdf3-1791446338'
+14:58:59 │              React Router │ }
+14:58:59 │              React Router │ [AI Search] Catalog sync job claimed: {
+14:58:59 │              React Router │   jobId: 75,
+14:58:59 │              React Router │   shop: 'billing-test-shop2.myshopify.com',
+14:58:59 │              React Router │   attempt: 1,
+14:58:59 │              React Router │   reason: 'STOREFRONT_RECONCILE'
+14:58:59 │              React Router │ }
+14:58:59 │              React Router │ [BILLING DEBUG] Plan mapping inputs: {
+14:58:59 │              React Router │   gid: 'gid://shopify/AppSubscription/33325482180',
+14:58:59 │              React Router │   status: 'PENDING',
+14:58:59 │              React Router │   authoritativePlanHandle: 'basic',
+14:58:59 │              React Router │   preferredPlanHandle: 'basic',
+14:58:59 │              React Router │   persistedPlanHandle: null,
+14:58:59 │              React Router │   persistedPlan: 'NONE',
+14:58:59 │              React Router │   exactPointerPlanHandle: 'basic',
+14:58:59 │              React Router │   currentSubscriptionGid: null,
+14:58:59 │              React Router │   pendingSubscriptionGid: 'gid://shopify/AppSubscription/33325482180',
+14:58:59 │              React Router │   itemHandles: []
+14:58:59 │              React Router │ }
+14:58:59 │              React Router │ [BILLING DEBUG] Plan mapping result: {
+14:58:59 │              React Router │   gid: 'gid://shopify/AppSubscription/33325482180',
+14:58:59 │              React Router │   inferredPlan: 'BASIC',
+14:58:59 │              React Router │   inferredPlanHandle: 'basic'
+14:58:59 │              React Router │ }
+14:58:59 │              React Router │ [BILLING FINANCIAL] provider charge reconciliation: {
+14:58:59 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+14:58:59 │              React Router │   subscriptionGid: 'gid://shopify/AppSubscription/33325482180',
+14:58:59 │              React Router │   providerChargeId: null,
+14:58:59 │              React Router │   providerChargeStatus: null,
+14:58:59 │              React Router │   providerChargeActivatedAt: null,
+14:58:59 │              React Router │   providerChargeBillingOn: null,
+14:58:59 │              React Router │   providerChargeTest: true
+14:58:59 │              React Router │ }
+14:58:59 │              React Router │ [BILLING MATRIX] reconcile transition: {
+14:58:59 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+14:58:59 │              React Router │   source: 'CALLBACK',
+14:58:59 │              React Router │   gid: 'gid://shopify/AppSubscription/33325482180',
+14:58:59 │              React Router │   previousStatus: 'INACTIVE',
+14:58:59 │              React Router │   subscriptionPreviousStatus: null,
+14:58:59 │              React Router │   status: 'PENDING',
+14:58:59 │              React Router │   previousPlan: 'NONE',
+14:58:59 │              React Router │   nextPlan: 'BASIC',
+14:58:59 │              React Router │   previousPlanHandle: null,
+14:58:59 │              React Router │   nextPlanHandle: 'basic',
+14:58:59 │              React Router │   trialStatus: 'NONE',
+14:58:59 │              React Router │   cancellationStatus: 'NONE',
+14:58:59 │              React Router │   planChangeStatus: 'PENDING',
+14:58:59 │              React Router │   chargeStatus: 'NONE',
+14:58:59 │              React Router │   paymentStatus: 'NONE',
+14:58:59 │              React Router │   accessStatus: 'NONE',
+14:58:59 │              React Router │   currentSubscriptionGid: null,
+14:58:59 │              React Router │   pendingSubscriptionGid: 'gid://shopify/AppSubscription/33325482180',
+14:58:59 │              React Router │   pendingPlanHandle: 'basic',
+14:58:59 │              React Router │   shopifyCreatedAt: '2026-10-08T07:58:58.000Z',
+14:58:59 │              React Router │   shopifyUpdatedAt: null
+14:58:59 │              React Router │ }
+14:58:59 │              React Router │ [BILLING STATE] snapshot pointer mismatch; retrying {
+14:58:59 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+14:58:59 │              React Router │   pointerGid: null,
+14:58:59 │              React Router │   selectedGid: 'gid://shopify/AppSubscription/33325482180'
+14:58:59 │              React Router │ }
+14:58:59 │              React Router │ [BILLING STATE] snapshot pointer retry {
+14:58:59 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+14:58:59 │              React Router │   pointerGid: null,
+14:58:59 │              React Router │   selectedGid: 'gid://shopify/AppSubscription/33325482180',
+14:58:59 │              React Router │   consistent: false
+14:58:59 │              React Router │ }
+14:58:59 │              React Router │ [BILLING STATE] snapshot pointer mismatch; retrying {
+14:58:59 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+14:58:59 │              React Router │   pointerGid: null,
+14:58:59 │              React Router │   selectedGid: 'gid://shopify/AppSubscription/33325482180'
+14:58:59 │              React Router │ }
+14:58:59 │              React Router │ [BILLING STATE] snapshot pointer retry {
+14:58:59 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+14:58:59 │              React Router │   pointerGid: null,
+14:58:59 │              React Router │   selectedGid: 'gid://shopify/AppSubscription/33325482180',
+14:58:59 │              React Router │   consistent: false
+14:58:59 │              React Router │ }
+14:58:59 │              React Router │ [BILLING BACKEND CONTRACT] pointer/snapshot race; retrying {
+14:58:59 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+14:58:59 │              React Router │   pointerBefore: null,
+14:58:59 │              React Router │   pointerAfter: null,
+14:58:59 │              React Router │   snapshotGid: 'gid://shopify/AppSubscription/33325482180'
+14:58:59 │              React Router │ }
+14:58:59 │              React Router │ [BILLING STATE] snapshot pointer mismatch; retrying {
+14:58:59 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+14:58:59 │              React Router │   pointerGid: null,
+14:58:59 │              React Router │   selectedGid: 'gid://shopify/AppSubscription/33325482180'
+14:58:59 │              React Router │ }
+14:58:59 │              React Router │ [BILLING STATE] snapshot pointer retry {
+14:58:59 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+14:58:59 │              React Router │   pointerGid: null,
+14:58:59 │              React Router │   selectedGid: 'gid://shopify/AppSubscription/33325482180',
+14:58:59 │              React Router │   consistent: false
+14:58:59 │              React Router │ }
+14:58:59 │              React Router │ [BILLING BACKEND CONTRACT] {"contractVersion":"1.0.0","emittedAt":"2026-10-08T07:58:59.325Z","source":
+"CALLBACK","sourceOfTruth":"SHOPIFY_ADMIN_API","shop":"billing-test-shop9.myshopify.com","shopLifecycleStatus":"ACTIVE","pointers":{"currentP
+lanHandle":null,"currentSubscriptionGid":null,"pendingPlanHandle":"basic","pendingSubscriptionGid":"gid://shopify/AppSubscription/33325482180
+","pendingChangeAt":"2026-10-08T07:58:59.275Z"},"current":{"plan":"BASIC","planHandle":"basic","subscriptionGid":"gid://shopify/AppSubscripti
+on/33325482180","status":"PENDING","commercialStatus":"PENDING","trialStatus":"ACTIVE","cancellationStatus":"NONE","planChangeStatus":"PENDIN
+G","chargeStatus":"NONE","paymentStatus":"NONE","refundStatus":"NONE","accessStatus":"NONE","reconciliationStatus":"SYNCED","reconciliationRe
+ason":null,"trialStartsAt":"2026-10-08T07:58:58.000Z","trialEndsAt":"2026-10-15T07:58:58.000Z","billingPeriodStart":"2026-10-08T07:58:58.000Z
+","billingPeriodEnd":null,"billingInterval":"EVERY_30_DAYS","price":null,"currencyCode":null,"testMode":null,"activatedAt":null,"cancelledAt"
+:null,"frozenAt":null,"lastSyncedAt":"2026-10-08T07:58:59.238Z","charge":null,"refund":null},"pending":{"planHandle":"basic","subscriptionGid
+":"gid://shopify/AppSubscription/33325482180","status":"PENDING","trialStatus":"NONE","cancellationStatus":"NONE","planChangeStatus":"PENDING
+","chargeStatus":"NONE","paymentStatus":"NONE","refundStatus":"NONE","accessStatus":"NONE","reconciliationStatus":"SYNCED","trialStartsAt":"2
+026-10-08T07:58:58.000Z","trialEndsAt":"2026-10-15T07:58:58.000Z","billingPeriodStart":"2026-10-08T07:58:58.000Z","billingPeriodEnd":null},"e
+vent":{"type":"BILLING_RECONCILED","occurredAt":"2026-10-08T07:58:59.325Z","payload":{"subscriptionGid":"gid://shopify/AppSubscription/333254
+82180","planHandle":"basic","plan":"BASIC","status":"PENDING","previousStatus":"INACTIVE","subscriptionPreviousStatus":null,"previousPlanHand
+le":null,"replacementStatus":"PENDING","trialStatus":"NONE","cancellationStatus":"NONE","chargeStatus":"NONE","paymentStatus":"NONE","accessS
+tatus":"NONE"}},"recentEvents":[{"type":"BILLING_RECONCILED","source":"CALLBACK","subscriptionGid":"gid://shopify/AppSubscription/33325482180
+","occurredAt":"2026-10-08T07:58:59.270Z"},{"type":"SUBSCRIPTION_UPDATED","source":"CALLBACK","subscriptionGid":"gid://shopify/AppSubscriptio
+n/33325482180","occurredAt":"2026-10-08T07:58:59.265Z"},{"type":"PLAN_CHANGE_REQUESTED","source":"CALLBACK","subscriptionGid":"gid://shopify/
+AppSubscription/33325482180","occurredAt":"2026-10-08T07:58:59.260Z"},{"type":"SUBSCRIPTION_CREATED","source":"CALLBACK","subscriptionGid":"g
+id://shopify/AppSubscription/33325482180","occurredAt":"2026-10-08T07:58:59.256Z"},{"type":"MISSING_DB_RECORD","source":"CALLBACK","subscript
+ionGid":"gid://shopify/AppSubscription/33325482180","occurredAt":"2026-10-08T07:58:59.251Z"}]}
+14:58:59 │              React Router │ [BILLING TRACE] checkpoint:after-reconcile {
+14:58:59 │              React Router │   debugId: 'd4f1aaa1',
+14:58:59 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+14:58:59 │              React Router │   subscriptionId: 'gid://shopify/AppSubscription/33325482180'
+14:58:59 │              React Router │ }
+14:58:59 │              React Router │ [BILLING TRACE] redirect:before {
+14:58:59 │              React Router │   debugId: 'd4f1aaa1',
+14:58:59 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+14:58:59 │              React Router │   subscriptionId: 'gid://shopify/AppSubscription/33325482180',
+14:58:59 │              React Router │   confirmationUrl:
+'https://billing-test-shop9.myshopify.com/admin/charges/426912448513/33325482180/RecurringApplicationCharge/confirm_recurring_application_cha
+rge?signature=BAh7BzoHaWRsKwjEgFrCBwA6EmF1dG9fYWN0aXZhdGVU--aca0a71db49db33d4265b58e080969a47fe6022c',
+14:58:59 │              React Router │   returnUrl:
+'https://admin.shopify.com/store/billing-test-shop9/apps/dbe92d75b95bbae5496ef1794a6cb752/app/billing?billing_callback=1',
+14:58:59 │              React Router │   requestMethod: 'POST',
+14:58:59 │              React Router │   secFetchMode: 'cors',
+14:58:59 │              React Router │   secFetchDest: 'empty',
+14:58:59 │              React Router │   origin: 'https://level-sheet-glenn-integrity.trycloudflare.com',
+14:58:59 │              React Router │   referer:
+'https://level-sheet-glenn-integrity.trycloudflare.com/app/billing?admin_theme=admin-next&embedded=1&hmac=fd39d2d7449677f6306c90c1a33bc9a3825
+10611c9c9c312b5e4be997396eaed&host=YWRtaW4uc2hvcGlmeS5jb20vc3RvcmUvYmlsbGluZy10ZXN0LXNob3A5&id_token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ
+pc3MiOiJodHRwczpcL1wvYmlsbGluZy10ZXN0LXNob3A5Lm15c2hvcGlmeS5jb21cL2FkbWluIiwiZGVzdCI6Imh0dHBzOlwvXC9iaWxsaW5nLXRlc3Qtc2hvcDkubXlzaG9waWZ5LmNv
+bSIsImF1ZCI6ImRiZTkyZDc1Yjk1YmJhZTU0OTZlZjE3OTRhNmNiNzUyIiwic3ViIjoiMTAzNjk0MTM5NTg4IiwiZXhwIjoxNzkxNDQ2Mzk0LCJuYmYiOjE3OTE0NDYzMzQsImlhdCI6M
+Tc5MTQ0NjMzNCwianRpIjoiYzA2MmY2NjYtM2NlZS00NGZjLTkxMjMtNzkyYTM5OTY5NDc3Iiwic2lkIjoiYzM2ZDBkZDUtZDEzNC00ZWVhLTgwZmItMTg4YjNlYTlhOWFiIiwic2lnIj
+oiNzQxYjJmZDU1MjVlMTdiNjA5NDBlNDU5OGQ1ZDhkOTQ2MzkxYTQ0Mzk1MzNhNGVhM2I4MzU4M2Q4ZGNjNTVkMSJ9.V8fN64B8ur3zfxrxdDhM5i4sEf1RuVOCSIp9lVVbDBQ&locale
+=en-US&session=c0fb49455ae45e90a563dbd52608410176aeb351558f3843a79bb3b9d64ee89d&shop=billing-test-shop9.myshopify.com&timestamp=1791446334'
+14:58:59 │              React Router │ }
+14:58:59 │              React Router │ [BILLING TRACE] action:confirmation-url-ready {
+14:58:59 │              React Router │   debugId: 'd4f1aaa1',
+14:58:59 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+14:58:59 │              React Router │   subscriptionId: 'gid://shopify/AppSubscription/33325482180',
+14:58:59 │              React Router │   confirmationUrl:
+'https://billing-test-shop9.myshopify.com/admin/charges/426912448513/33325482180/RecurringApplicationCharge/confirm_recurring_application_cha
+rge?signature=BAh7BzoHaWRsKwjEgFrCBwA6EmF1dG9fYWN0aXZhdGVU--aca0a71db49db33d4265b58e080969a47fe6022c'
+14:58:59 │              React Router │ }
+14:58:59 │              React Router │ [APP TRACE] loader:start {
+14:58:59 │              React Router │   debugId: '83fae7e3',
+14:58:59 │              React Router │   method: 'GET',
+14:58:59 │              React Router │   pathname: '/app/billing',
+14:58:59 │              React Router │   search: '?admin_theme=admin-next&embedded=1&hmac=fd39d2d7449677f6306c90c1a33bc9a382510611c9c9c312b5e
+4be997396eaed&host=YWRtaW4uc2hvcGlmeS5jb20vc3RvcmUvYmlsbGluZy10ZXN0LXNob3A5&id_token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJodHRwczp
+cL1wvYmlsbGluZy10ZXN0LXNob3A5Lm15c2hvcGlmeS5jb21cL2FkbWluIiwiZGVzdCI6Imh0dHBzOlwvXC9iaWxsaW5nLXRlc3Qtc2hvcDkubXlzaG9waWZ5LmNvbSIsImF1ZCI6ImRi
+ZTkyZDc1Yjk1YmJhZTU0OTZlZjE3OTRhNmNiNzUyIiwic3ViIjoiMTAzNjk0MTM5NTg4IiwiZXhwIjoxNzkxNDQ2Mzk0LCJuYmYiOjE3OTE0NDYzMzQsImlhdCI6MTc5MTQ0NjMzNCwia
+nRpIjoiYzA2MmY2NjYtM2NlZS00NGZjLTkxMjMtNzkyYTM5OTY5NDc3Iiwic2lkIjoiYzM2ZDBkZDUtZDEzNC00ZWVhLTgwZmItMTg4YjNlYTlhOWFiIiwic2lnIjoiNzQxYjJmZDU1Mj
+VlMTdiNjA5NDBlNDU5OGQ1ZDhkOTQ2MzkxYTQ0Mzk1MzNhNGVhM2I4MzU4M2Q4ZGNjNTVkMSJ9.V8fN64B8ur3zfxrxdDhM5i4sEf1RuVOCSIp9lVVbDBQ&locale=en-US&session=c
+0fb49455ae45e90a563dbd52608410176aeb351558f3843a79bb3b9d64ee89d&shop=billing-test-shop9.myshopify.com&timestamp=1791446334',
+14:58:59 │              React Router │   referer:
+'https://level-sheet-glenn-integrity.trycloudflare.com/app/billing?admin_theme=admin-next&embedded=1&hmac=fd39d2d7449677f6306c90c1a33bc9a3825
+10611c9c9c312b5e4be997396eaed&host=YWRtaW4uc2hvcGlmeS5jb20vc3RvcmUvYmlsbGluZy10ZXN0LXNob3A5&id_token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ
+pc3MiOiJodHRwczpcL1wvYmlsbGluZy10ZXN0LXNob3A5Lm15c2hvcGlmeS5jb21cL2FkbWluIiwiZGVzdCI6Imh0dHBzOlwvXC9iaWxsaW5nLXRlc3Qtc2hvcDkubXlzaG9waWZ5LmNv
+bSIsImF1ZCI6ImRiZTkyZDc1Yjk1YmJhZTU0OTZlZjE3OTRhNmNiNzUyIiwic3ViIjoiMTAzNjk0MTM5NTg4IiwiZXhwIjoxNzkxNDQ2Mzk0LCJuYmYiOjE3OTE0NDYzMzQsImlhdCI6M
+Tc5MTQ0NjMzNCwianRpIjoiYzA2MmY2NjYtM2NlZS00NGZjLTkxMjMtNzkyYTM5OTY5NDc3Iiwic2lkIjoiYzM2ZDBkZDUtZDEzNC00ZWVhLTgwZmItMTg4YjNlYTlhOWFiIiwic2lnIj
+oiNzQxYjJmZDU1MjVlMTdiNjA5NDBlNDU5OGQ1ZDhkOTQ2MzkxYTQ0Mzk1MzNhNGVhM2I4MzU4M2Q4ZGNjNTVkMSJ9.V8fN64B8ur3zfxrxdDhM5i4sEf1RuVOCSIp9lVVbDBQ&locale
+=en-US&session=c0fb49455ae45e90a563dbd52608410176aeb351558f3843a79bb3b9d64ee89d&shop=billing-test-shop9.myshopify.com&timestamp=1791446334',
+14:58:59 │              React Router │   remixRequest: null,
+14:58:59 │              React Router │   secFetchMode: 'cors'
+14:58:59 │              React Router │ }
+14:58:59 │              React Router │ [BILLING TRACE] loader:start {
+14:58:59 │              React Router │   debugId: 'e73fe7e5',
+14:58:59 │              React Router │   method: 'GET',
+14:58:59 │              React Router │   url:
+'http://level-sheet-glenn-integrity.trycloudflare.com/app/billing?admin_theme=admin-next&embedded=1&hmac=fd39d2d7449677f6306c90c1a33bc9a38251
+0611c9c9c312b5e4be997396eaed&host=YWRtaW4uc2hvcGlmeS5jb20vc3RvcmUvYmlsbGluZy10ZXN0LXNob3A5&id_token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJp
+c3MiOiJodHRwczpcL1wvYmlsbGluZy10ZXN0LXNob3A5Lm15c2hvcGlmeS5jb21cL2FkbWluIiwiZGVzdCI6Imh0dHBzOlwvXC9iaWxsaW5nLXRlc3Qtc2hvcDkubXlzaG9waWZ5LmNvb
+SIsImF1ZCI6ImRiZTkyZDc1Yjk1YmJhZTU0OTZlZjE3OTRhNmNiNzUyIiwic3ViIjoiMTAzNjk0MTM5NTg4IiwiZXhwIjoxNzkxNDQ2Mzk0LCJuYmYiOjE3OTE0NDYzMzQsImlhdCI6MT
+c5MTQ0NjMzNCwianRpIjoiYzA2MmY2NjYtM2NlZS00NGZjLTkxMjMtNzkyYTM5OTY5NDc3Iiwic2lkIjoiYzM2ZDBkZDUtZDEzNC00ZWVhLTgwZmItMTg4YjNlYTlhOWFiIiwic2lnIjo
+iNzQxYjJmZDU1MjVlMTdiNjA5NDBlNDU5OGQ1ZDhkOTQ2MzkxYTQ0Mzk1MzNhNGVhM2I4MzU4M2Q4ZGNjNTVkMSJ9.V8fN64B8ur3zfxrxdDhM5i4sEf1RuVOCSIp9lVVbDBQ&locale=
+en-US&session=c0fb49455ae45e90a563dbd52608410176aeb351558f3843a79bb3b9d64ee89d&shop=billing-test-shop9.myshopify.com&timestamp=1791446334',
+14:58:59 │              React Router │   referer:
+'https://level-sheet-glenn-integrity.trycloudflare.com/app/billing?admin_theme=admin-next&embedded=1&hmac=fd39d2d7449677f6306c90c1a33bc9a3825
+10611c9c9c312b5e4be997396eaed&host=YWRtaW4uc2hvcGlmeS5jb20vc3RvcmUvYmlsbGluZy10ZXN0LXNob3A5&id_token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ
+pc3MiOiJodHRwczpcL1wvYmlsbGluZy10ZXN0LXNob3A5Lm15c2hvcGlmeS5jb21cL2FkbWluIiwiZGVzdCI6Imh0dHBzOlwvXC9iaWxsaW5nLXRlc3Qtc2hvcDkubXlzaG9waWZ5LmNv
+bSIsImF1ZCI6ImRiZTkyZDc1Yjk1YmJhZTU0OTZlZjE3OTRhNmNiNzUyIiwic3ViIjoiMTAzNjk0MTM5NTg4IiwiZXhwIjoxNzkxNDQ2Mzk0LCJuYmYiOjE3OTE0NDYzMzQsImlhdCI6M
+Tc5MTQ0NjMzNCwianRpIjoiYzA2MmY2NjYtM2NlZS00NGZjLTkxMjMtNzkyYTM5OTY5NDc3Iiwic2lkIjoiYzM2ZDBkZDUtZDEzNC00ZWVhLTgwZmItMTg4YjNlYTlhOWFiIiwic2lnIj
+oiNzQxYjJmZDU1MjVlMTdiNjA5NDBlNDU5OGQ1ZDhkOTQ2MzkxYTQ0Mzk1MzNhNGVhM2I4MzU4M2Q4ZGNjNTVkMSJ9.V8fN64B8ur3zfxrxdDhM5i4sEf1RuVOCSIp9lVVbDBQ&locale
+=en-US&session=c0fb49455ae45e90a563dbd52608410176aeb351558f3843a79bb3b9d64ee89d&shop=billing-test-shop9.myshopify.com&timestamp=1791446334',
+14:58:59 │              React Router │   remixRequest: null,
+14:58:59 │              React Router │   secFetchMode: 'cors'
+14:58:59 │              React Router │ }
+14:58:59 │              React Router │ [shopify-app/INFO] Authenticating admin request | {shop: billing-test-shop9.myshopify.com}
+14:58:59 │              React Router │ [shopify-app/INFO] Authenticating admin request | {shop: billing-test-shop9.myshopify.com}
+14:58:59 │              React Router │ [APP DEBUG] loader:authenticated {
+14:58:59 │              React Router │   debugId: '83fae7e3',
+14:58:59 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+14:58:59 │              React Router │   pathname: '/app/billing'
+14:58:59 │              React Router │ }
+14:58:59 │              React Router │ [APP DEBUG] ensureShopFromAdmin:start { debugId: '83fae7e3', shop: 'billing-test-shop9.myshopify.com'
+}
+14:58:59 │              React Router │ [BILLING DEBUG] loader:authenticated { debugId: 'e73fe7e5', shop: 'billing-test-shop9.myshopify.com' }
+14:58:59 │              React Router │ [BILLING STATE] snapshot pointer retry {
+14:58:59 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+14:58:59 │              React Router │   pointerGid: null,
+14:58:59 │              React Router │   selectedGid: 'gid://shopify/AppSubscription/33325482180',
+14:58:59 │              React Router │   consistent: false
+14:58:59 │              React Router │ }
+14:58:59 │              React Router │ [BILLING STATE] snapshot pointer mismatch; retrying {
+14:58:59 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+14:58:59 │              React Router │   pointerGid: null,
+14:58:59 │              React Router │   selectedGid: 'gid://shopify/AppSubscription/33325482180'
+14:58:59 │              React Router │ }
+14:58:59 │              React Router │ [BILLING STATE] snapshot pointer mismatch; retrying {
+14:58:59 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+14:58:59 │              React Router │   pointerGid: null,
+14:58:59 │              React Router │   selectedGid: 'gid://shopify/AppSubscription/33325482180'
+14:58:59 │              React Router │ }
+14:58:59 │              React Router │ [BILLING STATE] snapshot pointer retry {
+14:58:59 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+14:58:59 │              React Router │   pointerGid: null,
+14:58:59 │              React Router │   selectedGid: 'gid://shopify/AppSubscription/33325482180',
+14:58:59 │              React Router │   consistent: false
+14:58:59 │              React Router │ }
+14:58:59 │              React Router │ [AI Search] Catalog sync job failed: {
+14:58:59 │              React Router │   jobId: 75,
+14:58:59 │              React Router │   attempts: 1,
+14:58:59 │              React Router │   maxAttempts: 4,
+14:58:59 │              React Router │   willRetry: true,
+14:58:59 │              React Router │   retryInMs: 10000,
+14:58:59 │              React Router │   error: '[object Response]'
+14:58:59 │              React Router │ }
+14:58:59 │              React Router │ [APP DEBUG] ensureShopFromAdmin:done { debugId: '83fae7e3', shop: 'billing-test-shop9.myshopify.com' }
+14:59:08 │              React Router │ [APP TRACE] loader:start {
+14:59:08 │              React Router │   debugId: '2103aad5',
+14:59:08 │              React Router │   method: 'GET',
+14:59:08 │              React Router │   pathname: '/app/billing',
+14:59:08 │              React Router │   search: '?admin_theme=admin-next&embedded=1&hmac=24ad206d3e6189a3795f3b69325bc951c5163aacd028cd58a55
+ef0a8cc15da42&host=YWRtaW4uc2hvcGlmeS5jb20vc3RvcmUvYmlsbGluZy10ZXN0LXNob3A5&id_token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJodHRwczp
+cL1wvYmlsbGluZy10ZXN0LXNob3A5Lm15c2hvcGlmeS5jb21cL2FkbWluIiwiZGVzdCI6Imh0dHBzOlwvXC9iaWxsaW5nLXRlc3Qtc2hvcDkubXlzaG9waWZ5LmNvbSIsImF1ZCI6ImRi
+ZTkyZDc1Yjk1YmJhZTU0OTZlZjE3OTRhNmNiNzUyIiwic3ViIjoiMTAzNjk0MTM5NTg4IiwiZXhwIjoxNzkxNDQ2NDA4LCJuYmYiOjE3OTE0NDYzNDgsImlhdCI6MTc5MTQ0NjM0OCwia
+nRpIjoiYzZlZWNkYWItN2E4Mi00YmE5LTlhYjktYzE2MTIzNTM4MzgzIiwic2lkIjoiYzM2ZDBkZDUtZDEzNC00ZWVhLTgwZmItMTg4YjNlYTlhOWFiIiwic2lnIjoiODRhM2Q4Njk2NT
+RmZDE5YTA3YzRiNWRkZGI4NzI3N2IxNzE0MTcxOGVhMTFmYzBlNmZkNDJkM2YxY2FhOGNiMCJ9.BtnsxemiC7wWxxWbFFEb2MFHav0-TJS3AeXCQKxwVOo&locale=en-US&session=c
+0fb49455ae45e90a563dbd52608410176aeb351558f3843a79bb3b9d64ee89d&shop=billing-test-shop9.myshopify.com&timestamp=1791446348',
+14:59:08 │              React Router │   referer: 'https://admin.shopify.com/',
+14:59:08 │              React Router │   remixRequest: null,
+14:59:08 │              React Router │   secFetchMode: 'navigate'
+14:59:08 │              React Router │ }
+14:59:08 │              React Router │ [BILLING TRACE] loader:start {
+14:59:08 │              React Router │   debugId: 'a2a273c8',
+14:59:08 │              React Router │   method: 'GET',
+14:59:08 │              React Router │   url:
+'http://level-sheet-glenn-integrity.trycloudflare.com/app/billing?admin_theme=admin-next&embedded=1&hmac=24ad206d3e6189a3795f3b69325bc951c516
+3aacd028cd58a55ef0a8cc15da42&host=YWRtaW4uc2hvcGlmeS5jb20vc3RvcmUvYmlsbGluZy10ZXN0LXNob3A5&id_token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJp
+c3MiOiJodHRwczpcL1wvYmlsbGluZy10ZXN0LXNob3A5Lm15c2hvcGlmeS5jb21cL2FkbWluIiwiZGVzdCI6Imh0dHBzOlwvXC9iaWxsaW5nLXRlc3Qtc2hvcDkubXlzaG9waWZ5LmNvb
+SIsImF1ZCI6ImRiZTkyZDc1Yjk1YmJhZTU0OTZlZjE3OTRhNmNiNzUyIiwic3ViIjoiMTAzNjk0MTM5NTg4IiwiZXhwIjoxNzkxNDQ2NDA4LCJuYmYiOjE3OTE0NDYzNDgsImlhdCI6MT
+c5MTQ0NjM0OCwianRpIjoiYzZlZWNkYWItN2E4Mi00YmE5LTlhYjktYzE2MTIzNTM4MzgzIiwic2lkIjoiYzM2ZDBkZDUtZDEzNC00ZWVhLTgwZmItMTg4YjNlYTlhOWFiIiwic2lnIjo
+iODRhM2Q4Njk2NTRmZDE5YTA3YzRiNWRkZGI4NzI3N2IxNzE0MTcxOGVhMTFmYzBlNmZkNDJkM2YxY2FhOGNiMCJ9.BtnsxemiC7wWxxWbFFEb2MFHav0-TJS3AeXCQKxwVOo&locale=
+en-US&session=c0fb49455ae45e90a563dbd52608410176aeb351558f3843a79bb3b9d64ee89d&shop=billing-test-shop9.myshopify.com&timestamp=1791446348',
+14:59:08 │              React Router │   referer: 'https://admin.shopify.com/',
+14:59:08 │              React Router │   remixRequest: null,
+14:59:08 │              React Router │   secFetchMode: 'navigate'
+14:59:08 │              React Router │ }
+14:59:08 │              React Router │ [shopify-app/INFO] Authenticating admin request | {shop: billing-test-shop9.myshopify.com}
+14:59:08 │              React Router │ [shopify-app/INFO] Authenticating admin request | {shop: billing-test-shop9.myshopify.com}
+14:59:08 │              React Router │ [APP DEBUG] loader:authenticated {
+14:59:08 │              React Router │   debugId: '2103aad5',
+14:59:08 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+14:59:08 │              React Router │   pathname: '/app/billing'
+14:59:08 │              React Router │ }
+14:59:08 │              React Router │ [APP DEBUG] ensureShopFromAdmin:start { debugId: '2103aad5', shop: 'billing-test-shop9.myshopify.com'
+}
+14:59:08 │              React Router │ [BILLING DEBUG] loader:authenticated { debugId: 'a2a273c8', shop: 'billing-test-shop9.myshopify.com' }
+14:59:08 │              React Router │ [BILLING STATE] snapshot pointer retry {
+14:59:08 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+14:59:08 │              React Router │   pointerGid: null,
+14:59:08 │              React Router │   selectedGid: 'gid://shopify/AppSubscription/33325482180',
+14:59:08 │              React Router │   consistent: false
+14:59:08 │              React Router │ }
+14:59:08 │              React Router │ [BILLING STATE] snapshot pointer mismatch; retrying {
+14:59:08 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+14:59:08 │              React Router │   pointerGid: null,
+14:59:08 │              React Router │   selectedGid: 'gid://shopify/AppSubscription/33325482180'
+14:59:08 │              React Router │ }
+14:59:08 │              React Router │ [BILLING STATE] snapshot pointer mismatch; retrying {
+14:59:08 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+14:59:08 │              React Router │   pointerGid: null,
+14:59:08 │              React Router │   selectedGid: 'gid://shopify/AppSubscription/33325482180'
+14:59:08 │              React Router │ }
+14:59:08 │              React Router │ [BILLING STATE] snapshot pointer retry {
+14:59:08 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+14:59:08 │              React Router │   pointerGid: null,
+14:59:08 │              React Router │   selectedGid: 'gid://shopify/AppSubscription/33325482180',
+14:59:08 │              React Router │   consistent: false
+14:59:08 │              React Router │ }
+14:59:08 │              React Router │ [APP DEBUG] ensureShopFromAdmin:done { debugId: '2103aad5', shop: 'billing-test-shop9.myshopify.com' }
+14:59:10 │              React Router │ [AI Search] Catalog sync job claimed: {
+14:59:10 │              React Router │   jobId: 73,
+14:59:10 │              React Router │   shop: 'billing-test-shop8.myshopify.com',
+14:59:10 │              React Router │   attempt: 2,
+14:59:10 │              React Router │   reason: 'INITIAL'
+14:59:10 │              React Router │ }
+14:59:11 │              React Router │ [BILLING TRACE] action:start {
+14:59:11 │              React Router │   debugId: '51f20872',
+14:59:11 │              React Router │   method: 'POST',
+14:59:11 │              React Router │   url:
+'http://level-sheet-glenn-integrity.trycloudflare.com/app/billing?admin_theme=admin-next&embedded=1&hmac=24ad206d3e6189a3795f3b69325bc951c516
+3aacd028cd58a55ef0a8cc15da42&host=YWRtaW4uc2hvcGlmeS5jb20vc3RvcmUvYmlsbGluZy10ZXN0LXNob3A5&id_token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJp
+c3MiOiJodHRwczpcL1wvYmlsbGluZy10ZXN0LXNob3A5Lm15c2hvcGlmeS5jb21cL2FkbWluIiwiZGVzdCI6Imh0dHBzOlwvXC9iaWxsaW5nLXRlc3Qtc2hvcDkubXlzaG9waWZ5LmNvb
+SIsImF1ZCI6ImRiZTkyZDc1Yjk1YmJhZTU0OTZlZjE3OTRhNmNiNzUyIiwic3ViIjoiMTAzNjk0MTM5NTg4IiwiZXhwIjoxNzkxNDQ2NDA4LCJuYmYiOjE3OTE0NDYzNDgsImlhdCI6MT
+c5MTQ0NjM0OCwianRpIjoiYzZlZWNkYWItN2E4Mi00YmE5LTlhYjktYzE2MTIzNTM4MzgzIiwic2lkIjoiYzM2ZDBkZDUtZDEzNC00ZWVhLTgwZmItMTg4YjNlYTlhOWFiIiwic2lnIjo
+iODRhM2Q4Njk2NTRmZDE5YTA3YzRiNWRkZGI4NzI3N2IxNzE0MTcxOGVhMTFmYzBlNmZkNDJkM2YxY2FhOGNiMCJ9.BtnsxemiC7wWxxWbFFEb2MFHav0-TJS3AeXCQKxwVOo&locale=
+en-US&session=c0fb49455ae45e90a563dbd52608410176aeb351558f3843a79bb3b9d64ee89d&shop=billing-test-shop9.myshopify.com&timestamp=1791446348',
+14:59:11 │              React Router │   referer:
+'https://level-sheet-glenn-integrity.trycloudflare.com/app/billing?admin_theme=admin-next&embedded=1&hmac=24ad206d3e6189a3795f3b69325bc951c51
+63aacd028cd58a55ef0a8cc15da42&host=YWRtaW4uc2hvcGlmeS5jb20vc3RvcmUvYmlsbGluZy10ZXN0LXNob3A5&id_token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ
+pc3MiOiJodHRwczpcL1wvYmlsbGluZy10ZXN0LXNob3A5Lm15c2hvcGlmeS5jb21cL2FkbWluIiwiZGVzdCI6Imh0dHBzOlwvXC9iaWxsaW5nLXRlc3Qtc2hvcDkubXlzaG9waWZ5LmNv
+bSIsImF1ZCI6ImRiZTkyZDc1Yjk1YmJhZTU0OTZlZjE3OTRhNmNiNzUyIiwic3ViIjoiMTAzNjk0MTM5NTg4IiwiZXhwIjoxNzkxNDQ2NDA4LCJuYmYiOjE3OTE0NDYzNDgsImlhdCI6M
+Tc5MTQ0NjM0OCwianRpIjoiYzZlZWNkYWItN2E4Mi00YmE5LTlhYjktYzE2MTIzNTM4MzgzIiwic2lkIjoiYzM2ZDBkZDUtZDEzNC00ZWVhLTgwZmItMTg4YjNlYTlhOWFiIiwic2lnIj
+oiODRhM2Q4Njk2NTRmZDE5YTA3YzRiNWRkZGI4NzI3N2IxNzE0MTcxOGVhMTFmYzBlNmZkNDJkM2YxY2FhOGNiMCJ9.BtnsxemiC7wWxxWbFFEb2MFHav0-TJS3AeXCQKxwVOo&locale
+=en-US&session=c0fb49455ae45e90a563dbd52608410176aeb351558f3843a79bb3b9d64ee89d&shop=billing-test-shop9.myshopify.com&timestamp=1791446348',
+14:59:11 │              React Router │   origin: 'https://level-sheet-glenn-integrity.trycloudflare.com',
+14:59:11 │              React Router │   secFetchMode: 'cors',
+14:59:11 │              React Router │   secFetchDest: 'empty',
+14:59:11 │              React Router │   contentType: 'application/x-www-form-urlencoded;charset=UTF-8'
+14:59:11 │              React Router │ }
+14:59:11 │              React Router │ [shopify-app/INFO] Authenticating admin request | {shop: billing-test-shop9.myshopify.com}
+14:59:11 │              React Router │ [BILLING DEBUG] action:authenticated {
+14:59:11 │              React Router │   debugId: '51f20872',
+14:59:11 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+14:59:11 │              React Router │   intent: 'subscribe'
+14:59:11 │              React Router │ }
+14:59:11 │              React Router │ [BILLING STATE] snapshot pointer retry {
+14:59:11 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+14:59:11 │              React Router │   pointerGid: null,
+14:59:11 │              React Router │   selectedGid: 'gid://shopify/AppSubscription/33325482180',
+14:59:11 │              React Router │   consistent: false
+14:59:11 │              React Router │ }
+14:59:11 │              React Router │ [BILLING STATE] snapshot pointer retry {
+14:59:11 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+14:59:11 │              React Router │   pointerGid: null,
+14:59:11 │              React Router │   selectedGid: 'gid://shopify/AppSubscription/33325482180',
+14:59:11 │              React Router │   consistent: false
+14:59:11 │              React Router │ }
+14:59:11 │              React Router │ [BILLING STATE] snapshot pointer mismatch; retrying {
+14:59:11 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+14:59:11 │              React Router │   pointerGid: null,
+14:59:11 │              React Router │   selectedGid: 'gid://shopify/AppSubscription/33325482180'
+14:59:11 │              React Router │ }
+14:59:11 │              React Router │ [BILLING STATE] snapshot pointer mismatch; retrying {
+14:59:11 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+14:59:11 │              React Router │   pointerGid: null,
+14:59:11 │              React Router │   selectedGid: 'gid://shopify/AppSubscription/33325482180'
+14:59:11 │              React Router │ }
+14:59:11 │              React Router │ [BILLING TRACE] env:billing-config {
+14:59:11 │              React Router │   debugId: '51f20872',
+14:59:11 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+14:59:11 │              React Router │   billingTestMode: true,
+14:59:11 │              React Router │   hasShopifyAppHandle: false,
+14:59:11 │              React Router │   hasShopifyApiKey: true,
+14:59:11 │              React Router │   appIdentifierSource: 'SHOPIFY_API_KEY_FALLBACK',
+14:59:11 │              React Router │   hasShopifyAppUrl: true,
+14:59:11 │              React Router │   hasShopifyApiSecret: true,
+14:59:11 │              React Router │   nodeEnv: 'development'
+14:59:11 │              React Router │ }
+14:59:11 │              React Router │ [BILLING TRACE] appSubscriptionCreate:response {
+14:59:11 │              React Router │   debugId: '51f20872',
+14:59:11 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+14:59:11 │              React Router │   httpStatus: 200,
+14:59:11 │              React Router │   httpOk: true,
+14:59:11 │              React Router │   responseContentType: 'text/plain;charset=UTF-8',
+14:59:11 │              React Router │   responseHasErrors: false,
+14:59:11 │              React Router │   userErrors: [],
+14:59:11 │              React Router │   subscriptionId: 'gid://shopify/AppSubscription/33325514948',
+14:59:11 │              React Router │   subscriptionStatus: 'PENDING',
+14:59:11 │              React Router │   confirmationUrl:
+'https://billing-test-shop9.myshopify.com/admin/charges/426912448513/33325514948/RecurringApplicationCharge/confirm_recurring_application_cha
+rge?signature=BAh7BzoHaWRsKwjEAFvCBwA6EmF1dG9fYWN0aXZhdGVU--8264252796edcacb9809b2d8171ec50a8952992c',
+14:59:11 │              React Router │   returnUrl:
+'https://admin.shopify.com/store/billing-test-shop9/apps/dbe92d75b95bbae5496ef1794a6cb752/app/billing?billing_callback=1'
+14:59:11 │              React Router │ }
+14:59:11 │              React Router │ [BILLING TRACE] checkpoint:after-pending-update {
+14:59:11 │              React Router │   debugId: '51f20872',
+14:59:11 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+14:59:11 │              React Router │   subscriptionId: 'gid://shopify/AppSubscription/33325514948'
+14:59:11 │              React Router │ }
+14:59:11 │              React Router │ [BILLING TRACE] checkpoint:before-reconcile {
+14:59:11 │              React Router │   debugId: '51f20872',
+14:59:11 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+14:59:11 │              React Router │   subscriptionId: 'gid://shopify/AppSubscription/33325514948'
+14:59:11 │              React Router │ }
+14:59:11 │              React Router │ [BILLING] Shopify subscription verified: {
+14:59:11 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+14:59:11 │              React Router │   expectedSubscriptionGid: 'gid://shopify/AppSubscription/33325514948',
+14:59:11 │              React Router │   actualSubscriptionGid: 'gid://shopify/AppSubscription/33325514948',
+14:59:11 │              React Router │   status: 'PENDING',
+14:59:11 │              React Router │   name: 'AI Search Pro Plan'
+14:59:11 │              React Router │ }
+14:59:12 │              React Router │ [BILLING STATE] snapshot pointer mismatch; retrying {
+14:59:12 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+14:59:12 │              React Router │   pointerGid: null,
+14:59:12 │              React Router │   selectedGid: 'gid://shopify/AppSubscription/33325482180'
+14:59:12 │              React Router │ }
+14:59:12 │              React Router │ [BILLING STATE] snapshot pointer retry {
+14:59:12 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+14:59:12 │              React Router │   pointerGid: null,
+14:59:12 │              React Router │   selectedGid: 'gid://shopify/AppSubscription/33325482180',
+14:59:12 │              React Router │   consistent: false
+14:59:12 │              React Router │ }
+14:59:12 │              React Router │ [BILLING DEBUG] Plan mapping inputs: {
+14:59:12 │              React Router │   gid: 'gid://shopify/AppSubscription/33325514948',
+14:59:12 │              React Router │   status: 'PENDING',
+14:59:12 │              React Router │   authoritativePlanHandle: 'pro',
+14:59:12 │              React Router │   preferredPlanHandle: 'pro',
+14:59:12 │              React Router │   persistedPlanHandle: null,
+14:59:12 │              React Router │   persistedPlan: 'NONE',
+14:59:12 │              React Router │   exactPointerPlanHandle: 'pro',
+14:59:12 │              React Router │   currentSubscriptionGid: null,
+14:59:12 │              React Router │   pendingSubscriptionGid: 'gid://shopify/AppSubscription/33325514948',
+14:59:12 │              React Router │   itemHandles: []
+14:59:12 │              React Router │ }
+14:59:12 │              React Router │ [BILLING DEBUG] Plan mapping result: {
+14:59:12 │              React Router │   gid: 'gid://shopify/AppSubscription/33325514948',
+14:59:12 │              React Router │   inferredPlan: 'PRO',
+14:59:12 │              React Router │   inferredPlanHandle: 'pro'
+14:59:12 │              React Router │ }
+14:59:12 │              React Router │ [BILLING FINANCIAL] provider charge reconciliation: {
+14:59:12 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+14:59:12 │              React Router │   subscriptionGid: 'gid://shopify/AppSubscription/33325514948',
+14:59:12 │              React Router │   providerChargeId: null,
+14:59:12 │              React Router │   providerChargeStatus: null,
+14:59:12 │              React Router │   providerChargeActivatedAt: null,
+14:59:12 │              React Router │   providerChargeBillingOn: null,
+14:59:12 │              React Router │   providerChargeTest: true
+14:59:12 │              React Router │ }
+14:59:12 │              React Router │ [BILLING MATRIX] reconcile transition: {
+14:59:12 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+14:59:12 │              React Router │   source: 'CALLBACK',
+14:59:12 │              React Router │   gid: 'gid://shopify/AppSubscription/33325514948',
+14:59:12 │              React Router │   previousStatus: 'PENDING',
+14:59:12 │              React Router │   subscriptionPreviousStatus: null,
+14:59:12 │              React Router │   status: 'PENDING',
+14:59:12 │              React Router │   previousPlan: 'BASIC',
+14:59:12 │              React Router │   nextPlan: 'PRO',
+14:59:12 │              React Router │   previousPlanHandle: 'basic',
+14:59:12 │              React Router │   nextPlanHandle: 'pro',
+14:59:12 │              React Router │   trialStatus: 'NONE',
+14:59:12 │              React Router │   cancellationStatus: 'NONE',
+14:59:12 │              React Router │   planChangeStatus: 'PENDING',
+14:59:12 │              React Router │   chargeStatus: 'NONE',
+14:59:12 │              React Router │   paymentStatus: 'NONE',
+14:59:12 │              React Router │   accessStatus: 'NONE',
+14:59:12 │              React Router │   currentSubscriptionGid: null,
+14:59:12 │              React Router │   pendingSubscriptionGid: 'gid://shopify/AppSubscription/33325514948',
+14:59:12 │              React Router │   pendingPlanHandle: 'pro',
+14:59:12 │              React Router │   shopifyCreatedAt: '2026-10-08T07:59:11.000Z',
+14:59:12 │              React Router │   shopifyUpdatedAt: null
+14:59:12 │              React Router │ }
+14:59:12 │              React Router │ [BILLING STATE] snapshot pointer mismatch; retrying {
+14:59:12 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+14:59:12 │              React Router │   pointerGid: null,
+14:59:12 │              React Router │   selectedGid: 'gid://shopify/AppSubscription/33325514948'
+14:59:12 │              React Router │ }
+14:59:12 │              React Router │ [BILLING STATE] snapshot pointer retry {
+14:59:12 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+14:59:12 │              React Router │   pointerGid: null,
+14:59:12 │              React Router │   selectedGid: 'gid://shopify/AppSubscription/33325514948',
+14:59:12 │              React Router │   consistent: false
+14:59:12 │              React Router │ }
+14:59:12 │              React Router │ [BILLING STATE] snapshot pointer mismatch; retrying {
+14:59:12 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+14:59:12 │              React Router │   pointerGid: null,
+14:59:12 │              React Router │   selectedGid: 'gid://shopify/AppSubscription/33325514948'
+14:59:12 │              React Router │ }
+14:59:12 │              React Router │ [BILLING STATE] snapshot pointer retry {
+14:59:12 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+14:59:12 │              React Router │   pointerGid: null,
+14:59:12 │              React Router │   selectedGid: 'gid://shopify/AppSubscription/33325514948',
+14:59:12 │              React Router │   consistent: false
+14:59:12 │              React Router │ }
+14:59:12 │              React Router │ [BILLING BACKEND CONTRACT] pointer/snapshot race; retrying {
+14:59:12 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+14:59:12 │              React Router │   pointerBefore: null,
+14:59:12 │              React Router │   pointerAfter: null,
+14:59:12 │              React Router │   snapshotGid: 'gid://shopify/AppSubscription/33325514948'
+14:59:12 │              React Router │ }
+14:59:12 │              React Router │ [BILLING STATE] snapshot pointer mismatch; retrying {
+14:59:12 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+14:59:12 │              React Router │   pointerGid: null,
+14:59:12 │              React Router │   selectedGid: 'gid://shopify/AppSubscription/33325514948'
+14:59:12 │              React Router │ }
+14:59:12 │              React Router │ [BILLING STATE] snapshot pointer retry {
+14:59:12 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+14:59:12 │              React Router │   pointerGid: null,
+14:59:12 │              React Router │   selectedGid: 'gid://shopify/AppSubscription/33325514948',
+14:59:12 │              React Router │   consistent: false
+14:59:12 │              React Router │ }
+14:59:12 │              React Router │ [BILLING BACKEND CONTRACT] {"contractVersion":"1.0.0","emittedAt":"2026-10-08T07:59:12.397Z","source":
+"CALLBACK","sourceOfTruth":"SHOPIFY_ADMIN_API","shop":"billing-test-shop9.myshopify.com","shopLifecycleStatus":"ACTIVE","pointers":{"currentP
+lanHandle":null,"currentSubscriptionGid":null,"pendingPlanHandle":"pro","pendingSubscriptionGid":"gid://shopify/AppSubscription/33325514948",
+"pendingChangeAt":"2026-10-08T07:59:12.346Z"},"current":{"plan":"PRO","planHandle":"pro","subscriptionGid":"gid://shopify/AppSubscription/333
+25514948","status":"PENDING","commercialStatus":"PENDING","trialStatus":"NONE","cancellationStatus":"NONE","planChangeStatus":"PENDING","char
+geStatus":"NONE","paymentStatus":"NONE","refundStatus":"NONE","accessStatus":"NONE","reconciliationStatus":"SYNCED","reconciliationReason":nu
+ll,"trialStartsAt":null,"trialEndsAt":null,"billingPeriodStart":"2026-10-08T07:59:11.000Z","billingPeriodEnd":null,"billingInterval":"EVERY_3
+0_DAYS","price":null,"currencyCode":null,"testMode":null,"activatedAt":null,"cancelledAt":null,"frozenAt":null,"lastSyncedAt":"2026-10-08T07:
+59:12.308Z","charge":null,"refund":null},"pending":{"planHandle":"pro","subscriptionGid":"gid://shopify/AppSubscription/33325514948","status"
+:"PENDING","trialStatus":"NONE","cancellationStatus":"NONE","planChangeStatus":"PENDING","chargeStatus":"NONE","paymentStatus":"NONE","refund
+Status":"NONE","accessStatus":"NONE","reconciliationStatus":"SYNCED","trialStartsAt":null,"trialEndsAt":null,"billingPeriodStart":"2026-10-08
+T07:59:11.000Z","billingPeriodEnd":null},"event":{"type":"BILLING_RECONCILED","occurredAt":"2026-10-08T07:59:12.397Z","payload":{"subscriptio
+nGid":"gid://shopify/AppSubscription/33325514948","planHandle":"pro","plan":"PRO","status":"PENDING","previousStatus":"PENDING","subscription
+PreviousStatus":null,"previousPlanHandle":"basic","replacementStatus":"PENDING","trialStatus":"NONE","cancellationStatus":"NONE","chargeStatu
+s":"NONE","paymentStatus":"NONE","accessStatus":"NONE"}},"recentEvents":[{"type":"BILLING_RECONCILED","source":"CALLBACK","subscriptionGid":"
+gid://shopify/AppSubscription/33325514948","occurredAt":"2026-10-08T07:59:12.341Z"},{"type":"SUBSCRIPTION_UPDATED","source":"CALLBACK","subsc
+riptionGid":"gid://shopify/AppSubscription/33325514948","occurredAt":"2026-10-08T07:59:12.335Z"},{"type":"PLAN_CHANGE_REQUESTED","source":"CA
+LLBACK","subscriptionGid":"gid://shopify/AppSubscription/33325514948","occurredAt":"2026-10-08T07:59:12.330Z"},{"type":"SUBSCRIPTION_CREATED"
+,"source":"CALLBACK","subscriptionGid":"gid://shopify/AppSubscription/33325514948","occurredAt":"2026-10-08T07:59:12.326Z"},{"type":"MISSING_
+DB_RECORD","source":"CALLBACK","subscriptionGid":"gid://shopify/AppSubscription/33325514948","occurredAt":"2026-10-08T07:59:12.321Z"}]}
+14:59:12 │              React Router │ [BILLING TRACE] checkpoint:after-reconcile {
+14:59:12 │              React Router │   debugId: '51f20872',
+14:59:12 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+14:59:12 │              React Router │   subscriptionId: 'gid://shopify/AppSubscription/33325514948'
+14:59:12 │              React Router │ }
+14:59:12 │              React Router │ [BILLING TRACE] redirect:before {
+14:59:12 │              React Router │   debugId: '51f20872',
+14:59:12 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+14:59:12 │              React Router │   subscriptionId: 'gid://shopify/AppSubscription/33325514948',
+14:59:12 │              React Router │   confirmationUrl:
+'https://billing-test-shop9.myshopify.com/admin/charges/426912448513/33325514948/RecurringApplicationCharge/confirm_recurring_application_cha
+rge?signature=BAh7BzoHaWRsKwjEAFvCBwA6EmF1dG9fYWN0aXZhdGVU--8264252796edcacb9809b2d8171ec50a8952992c',
+14:59:12 │              React Router │   returnUrl:
+'https://admin.shopify.com/store/billing-test-shop9/apps/dbe92d75b95bbae5496ef1794a6cb752/app/billing?billing_callback=1',
+14:59:12 │              React Router │   requestMethod: 'POST',
+14:59:12 │              React Router │   secFetchMode: 'cors',
+14:59:12 │              React Router │   secFetchDest: 'empty',
+14:59:12 │              React Router │   origin: 'https://level-sheet-glenn-integrity.trycloudflare.com',
+14:59:12 │              React Router │   referer:
+'https://level-sheet-glenn-integrity.trycloudflare.com/app/billing?admin_theme=admin-next&embedded=1&hmac=24ad206d3e6189a3795f3b69325bc951c51
+63aacd028cd58a55ef0a8cc15da42&host=YWRtaW4uc2hvcGlmeS5jb20vc3RvcmUvYmlsbGluZy10ZXN0LXNob3A5&id_token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ
+pc3MiOiJodHRwczpcL1wvYmlsbGluZy10ZXN0LXNob3A5Lm15c2hvcGlmeS5jb21cL2FkbWluIiwiZGVzdCI6Imh0dHBzOlwvXC9iaWxsaW5nLXRlc3Qtc2hvcDkubXlzaG9waWZ5LmNv
+bSIsImF1ZCI6ImRiZTkyZDc1Yjk1YmJhZTU0OTZlZjE3OTRhNmNiNzUyIiwic3ViIjoiMTAzNjk0MTM5NTg4IiwiZXhwIjoxNzkxNDQ2NDA4LCJuYmYiOjE3OTE0NDYzNDgsImlhdCI6M
+Tc5MTQ0NjM0OCwianRpIjoiYzZlZWNkYWItN2E4Mi00YmE5LTlhYjktYzE2MTIzNTM4MzgzIiwic2lkIjoiYzM2ZDBkZDUtZDEzNC00ZWVhLTgwZmItMTg4YjNlYTlhOWFiIiwic2lnIj
+oiODRhM2Q4Njk2NTRmZDE5YTA3YzRiNWRkZGI4NzI3N2IxNzE0MTcxOGVhMTFmYzBlNmZkNDJkM2YxY2FhOGNiMCJ9.BtnsxemiC7wWxxWbFFEb2MFHav0-TJS3AeXCQKxwVOo&locale
+=en-US&session=c0fb49455ae45e90a563dbd52608410176aeb351558f3843a79bb3b9d64ee89d&shop=billing-test-shop9.myshopify.com&timestamp=1791446348'
+14:59:12 │              React Router │ }
+14:59:12 │              React Router │ [BILLING TRACE] action:confirmation-url-ready {
+14:59:12 │              React Router │   debugId: '51f20872',
+14:59:12 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+14:59:12 │              React Router │   subscriptionId: 'gid://shopify/AppSubscription/33325514948',
+14:59:12 │              React Router │   confirmationUrl:
+'https://billing-test-shop9.myshopify.com/admin/charges/426912448513/33325514948/RecurringApplicationCharge/confirm_recurring_application_cha
+rge?signature=BAh7BzoHaWRsKwjEAFvCBwA6EmF1dG9fYWN0aXZhdGVU--8264252796edcacb9809b2d8171ec50a8952992c'
+14:59:12 │              React Router │ }
+14:59:12 │              React Router │ [APP TRACE] loader:start {
+14:59:12 │              React Router │   debugId: '84f041aa',
+14:59:12 │              React Router │   method: 'GET',
+14:59:12 │              React Router │   pathname: '/app/billing',
+14:59:12 │              React Router │   search: '?admin_theme=admin-next&embedded=1&hmac=24ad206d3e6189a3795f3b69325bc951c5163aacd028cd58a55
+ef0a8cc15da42&host=YWRtaW4uc2hvcGlmeS5jb20vc3RvcmUvYmlsbGluZy10ZXN0LXNob3A5&id_token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJodHRwczp
+cL1wvYmlsbGluZy10ZXN0LXNob3A5Lm15c2hvcGlmeS5jb21cL2FkbWluIiwiZGVzdCI6Imh0dHBzOlwvXC9iaWxsaW5nLXRlc3Qtc2hvcDkubXlzaG9waWZ5LmNvbSIsImF1ZCI6ImRi
+ZTkyZDc1Yjk1YmJhZTU0OTZlZjE3OTRhNmNiNzUyIiwic3ViIjoiMTAzNjk0MTM5NTg4IiwiZXhwIjoxNzkxNDQ2NDA4LCJuYmYiOjE3OTE0NDYzNDgsImlhdCI6MTc5MTQ0NjM0OCwia
+nRpIjoiYzZlZWNkYWItN2E4Mi00YmE5LTlhYjktYzE2MTIzNTM4MzgzIiwic2lkIjoiYzM2ZDBkZDUtZDEzNC00ZWVhLTgwZmItMTg4YjNlYTlhOWFiIiwic2lnIjoiODRhM2Q4Njk2NT
+RmZDE5YTA3YzRiNWRkZGI4NzI3N2IxNzE0MTcxOGVhMTFmYzBlNmZkNDJkM2YxY2FhOGNiMCJ9.BtnsxemiC7wWxxWbFFEb2MFHav0-TJS3AeXCQKxwVOo&locale=en-US&session=c
+0fb49455ae45e90a563dbd52608410176aeb351558f3843a79bb3b9d64ee89d&shop=billing-test-shop9.myshopify.com&timestamp=1791446348',
+14:59:12 │              React Router │   referer:
+'https://level-sheet-glenn-integrity.trycloudflare.com/app/billing?admin_theme=admin-next&embedded=1&hmac=24ad206d3e6189a3795f3b69325bc951c51
+63aacd028cd58a55ef0a8cc15da42&host=YWRtaW4uc2hvcGlmeS5jb20vc3RvcmUvYmlsbGluZy10ZXN0LXNob3A5&id_token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ
+pc3MiOiJodHRwczpcL1wvYmlsbGluZy10ZXN0LXNob3A5Lm15c2hvcGlmeS5jb21cL2FkbWluIiwiZGVzdCI6Imh0dHBzOlwvXC9iaWxsaW5nLXRlc3Qtc2hvcDkubXlzaG9waWZ5LmNv
+bSIsImF1ZCI6ImRiZTkyZDc1Yjk1YmJhZTU0OTZlZjE3OTRhNmNiNzUyIiwic3ViIjoiMTAzNjk0MTM5NTg4IiwiZXhwIjoxNzkxNDQ2NDA4LCJuYmYiOjE3OTE0NDYzNDgsImlhdCI6M
+Tc5MTQ0NjM0OCwianRpIjoiYzZlZWNkYWItN2E4Mi00YmE5LTlhYjktYzE2MTIzNTM4MzgzIiwic2lkIjoiYzM2ZDBkZDUtZDEzNC00ZWVhLTgwZmItMTg4YjNlYTlhOWFiIiwic2lnIj
+oiODRhM2Q4Njk2NTRmZDE5YTA3YzRiNWRkZGI4NzI3N2IxNzE0MTcxOGVhMTFmYzBlNmZkNDJkM2YxY2FhOGNiMCJ9.BtnsxemiC7wWxxWbFFEb2MFHav0-TJS3AeXCQKxwVOo&locale
+=en-US&session=c0fb49455ae45e90a563dbd52608410176aeb351558f3843a79bb3b9d64ee89d&shop=billing-test-shop9.myshopify.com&timestamp=1791446348',
+14:59:12 │              React Router │   remixRequest: null,
+14:59:12 │              React Router │   secFetchMode: 'cors'
+14:59:12 │              React Router │ }
+14:59:12 │              React Router │ [BILLING TRACE] loader:start {
+14:59:12 │              React Router │   debugId: '74cc0ea2',
+14:59:12 │              React Router │   method: 'GET',
+14:59:12 │              React Router │   url:
+'http://level-sheet-glenn-integrity.trycloudflare.com/app/billing?admin_theme=admin-next&embedded=1&hmac=24ad206d3e6189a3795f3b69325bc951c516
+3aacd028cd58a55ef0a8cc15da42&host=YWRtaW4uc2hvcGlmeS5jb20vc3RvcmUvYmlsbGluZy10ZXN0LXNob3A5&id_token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJp
+c3MiOiJodHRwczpcL1wvYmlsbGluZy10ZXN0LXNob3A5Lm15c2hvcGlmeS5jb21cL2FkbWluIiwiZGVzdCI6Imh0dHBzOlwvXC9iaWxsaW5nLXRlc3Qtc2hvcDkubXlzaG9waWZ5LmNvb
+SIsImF1ZCI6ImRiZTkyZDc1Yjk1YmJhZTU0OTZlZjE3OTRhNmNiNzUyIiwic3ViIjoiMTAzNjk0MTM5NTg4IiwiZXhwIjoxNzkxNDQ2NDA4LCJuYmYiOjE3OTE0NDYzNDgsImlhdCI6MT
+c5MTQ0NjM0OCwianRpIjoiYzZlZWNkYWItN2E4Mi00YmE5LTlhYjktYzE2MTIzNTM4MzgzIiwic2lkIjoiYzM2ZDBkZDUtZDEzNC00ZWVhLTgwZmItMTg4YjNlYTlhOWFiIiwic2lnIjo
+iODRhM2Q4Njk2NTRmZDE5YTA3YzRiNWRkZGI4NzI3N2IxNzE0MTcxOGVhMTFmYzBlNmZkNDJkM2YxY2FhOGNiMCJ9.BtnsxemiC7wWxxWbFFEb2MFHav0-TJS3AeXCQKxwVOo&locale=
+en-US&session=c0fb49455ae45e90a563dbd52608410176aeb351558f3843a79bb3b9d64ee89d&shop=billing-test-shop9.myshopify.com&timestamp=1791446348',
+14:59:12 │              React Router │   referer:
+'https://level-sheet-glenn-integrity.trycloudflare.com/app/billing?admin_theme=admin-next&embedded=1&hmac=24ad206d3e6189a3795f3b69325bc951c51
+63aacd028cd58a55ef0a8cc15da42&host=YWRtaW4uc2hvcGlmeS5jb20vc3RvcmUvYmlsbGluZy10ZXN0LXNob3A5&id_token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ
+pc3MiOiJodHRwczpcL1wvYmlsbGluZy10ZXN0LXNob3A5Lm15c2hvcGlmeS5jb21cL2FkbWluIiwiZGVzdCI6Imh0dHBzOlwvXC9iaWxsaW5nLXRlc3Qtc2hvcDkubXlzaG9waWZ5LmNv
+bSIsImF1ZCI6ImRiZTkyZDc1Yjk1YmJhZTU0OTZlZjE3OTRhNmNiNzUyIiwic3ViIjoiMTAzNjk0MTM5NTg4IiwiZXhwIjoxNzkxNDQ2NDA4LCJuYmYiOjE3OTE0NDYzNDgsImlhdCI6M
+Tc5MTQ0NjM0OCwianRpIjoiYzZlZWNkYWItN2E4Mi00YmE5LTlhYjktYzE2MTIzNTM4MzgzIiwic2lkIjoiYzM2ZDBkZDUtZDEzNC00ZWVhLTgwZmItMTg4YjNlYTlhOWFiIiwic2lnIj
+oiODRhM2Q4Njk2NTRmZDE5YTA3YzRiNWRkZGI4NzI3N2IxNzE0MTcxOGVhMTFmYzBlNmZkNDJkM2YxY2FhOGNiMCJ9.BtnsxemiC7wWxxWbFFEb2MFHav0-TJS3AeXCQKxwVOo&locale
+=en-US&session=c0fb49455ae45e90a563dbd52608410176aeb351558f3843a79bb3b9d64ee89d&shop=billing-test-shop9.myshopify.com&timestamp=1791446348',
+14:59:12 │              React Router │   remixRequest: null,
+14:59:12 │              React Router │   secFetchMode: 'cors'
+14:59:12 │              React Router │ }
+14:59:12 │              React Router │ [shopify-app/INFO] Authenticating admin request | {shop: billing-test-shop9.myshopify.com}
+14:59:12 │              React Router │ [shopify-app/INFO] Authenticating admin request | {shop: billing-test-shop9.myshopify.com}
+14:59:12 │              React Router │ [APP DEBUG] loader:authenticated {
+14:59:12 │              React Router │   debugId: '84f041aa',
+14:59:12 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+14:59:12 │              React Router │   pathname: '/app/billing'
+14:59:12 │              React Router │ }
+14:59:12 │              React Router │ [APP DEBUG] ensureShopFromAdmin:start { debugId: '84f041aa', shop: 'billing-test-shop9.myshopify.com'
+}
+14:59:12 │              React Router │ [BILLING DEBUG] loader:authenticated { debugId: '74cc0ea2', shop: 'billing-test-shop9.myshopify.com' }
+14:59:12 │              React Router │ [BILLING STATE] snapshot pointer retry {
+14:59:12 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+14:59:12 │              React Router │   pointerGid: null,
+14:59:12 │              React Router │   selectedGid: 'gid://shopify/AppSubscription/33325514948',
+14:59:12 │              React Router │   consistent: false
+14:59:12 │              React Router │ }
+14:59:12 │              React Router │ [BILLING STATE] snapshot pointer mismatch; retrying {
+14:59:12 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+14:59:12 │              React Router │   pointerGid: null,
+14:59:12 │              React Router │   selectedGid: 'gid://shopify/AppSubscription/33325514948'
+14:59:12 │              React Router │ }
+14:59:12 │              React Router │ [BILLING STATE] snapshot pointer mismatch; retrying {
+14:59:12 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+14:59:12 │              React Router │   pointerGid: null,
+14:59:12 │              React Router │   selectedGid: 'gid://shopify/AppSubscription/33325514948'
+14:59:12 │              React Router │ }
+14:59:12 │              React Router │ [BILLING STATE] snapshot pointer retry {
+14:59:12 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+14:59:12 │              React Router │   pointerGid: null,
+14:59:12 │              React Router │   selectedGid: 'gid://shopify/AppSubscription/33325514948',
+14:59:12 │              React Router │   consistent: false
+14:59:12 │              React Router │ }
+14:59:12 │              React Router │ [APP DEBUG] ensureShopFromAdmin:done { debugId: '84f041aa', shop: 'billing-test-shop9.myshopify.com' }
+14:59:22 │              React Router │ [APP TRACE] loader:start {
+14:59:22 │              React Router │   debugId: 'eb997182',
+14:59:22 │              React Router │   method: 'GET',
+14:59:22 │              React Router │   pathname: '/app/billing',
+14:59:22 │              React Router │   search: '?admin_theme=admin-next&embedded=1&hmac=894e008044ad3cafc7c32a529524e4bb0ff6156e68b9a23d4fc
+8baf3efdb3c8b&host=YWRtaW4uc2hvcGlmeS5jb20vc3RvcmUvYmlsbGluZy10ZXN0LXNob3A5&id_token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJodHRwczp
+cL1wvYmlsbGluZy10ZXN0LXNob3A5Lm15c2hvcGlmeS5jb21cL2FkbWluIiwiZGVzdCI6Imh0dHBzOlwvXC9iaWxsaW5nLXRlc3Qtc2hvcDkubXlzaG9waWZ5LmNvbSIsImF1ZCI6ImRi
+ZTkyZDc1Yjk1YmJhZTU0OTZlZjE3OTRhNmNiNzUyIiwic3ViIjoiMTAzNjk0MTM5NTg4IiwiZXhwIjoxNzkxNDQ2NDIyLCJuYmYiOjE3OTE0NDYzNjIsImlhdCI6MTc5MTQ0NjM2Miwia
+nRpIjoiZDg1Nzc0MWUtM2EwOC00N2U2LWFkNGYtYjgwMmU1MmVlZWYyIiwic2lkIjoiYzM2ZDBkZDUtZDEzNC00ZWVhLTgwZmItMTg4YjNlYTlhOWFiIiwic2lnIjoiMGUzNjExNWU3OD
+cxOWMyZTJhZjBkNzFiMzBhNTFjOGYyZDU5OWRjM2JjMTE3OGVlMDBhNTc3YWQ2OThjMTU2NCJ9.DWXBvXKklm1PV2TeEk6p3RXTui9ISSeRu_S9DTEaeY4&locale=en-US&session=c
+0fb49455ae45e90a563dbd52608410176aeb351558f3843a79bb3b9d64ee89d&shop=billing-test-shop9.myshopify.com&timestamp=1791446362',
+14:59:22 │              React Router │   referer: 'https://admin.shopify.com/',
+14:59:22 │              React Router │   remixRequest: null,
+14:59:22 │              React Router │   secFetchMode: 'navigate'
+14:59:22 │              React Router │ }
+14:59:22 │              React Router │ [BILLING TRACE] loader:start {
+14:59:22 │              React Router │   debugId: '7d2d296c',
+14:59:22 │              React Router │   method: 'GET',
+14:59:22 │              React Router │   url:
+'http://level-sheet-glenn-integrity.trycloudflare.com/app/billing?admin_theme=admin-next&embedded=1&hmac=894e008044ad3cafc7c32a529524e4bb0ff6
+156e68b9a23d4fc8baf3efdb3c8b&host=YWRtaW4uc2hvcGlmeS5jb20vc3RvcmUvYmlsbGluZy10ZXN0LXNob3A5&id_token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJp
+c3MiOiJodHRwczpcL1wvYmlsbGluZy10ZXN0LXNob3A5Lm15c2hvcGlmeS5jb21cL2FkbWluIiwiZGVzdCI6Imh0dHBzOlwvXC9iaWxsaW5nLXRlc3Qtc2hvcDkubXlzaG9waWZ5LmNvb
+SIsImF1ZCI6ImRiZTkyZDc1Yjk1YmJhZTU0OTZlZjE3OTRhNmNiNzUyIiwic3ViIjoiMTAzNjk0MTM5NTg4IiwiZXhwIjoxNzkxNDQ2NDIyLCJuYmYiOjE3OTE0NDYzNjIsImlhdCI6MT
+c5MTQ0NjM2MiwianRpIjoiZDg1Nzc0MWUtM2EwOC00N2U2LWFkNGYtYjgwMmU1MmVlZWYyIiwic2lkIjoiYzM2ZDBkZDUtZDEzNC00ZWVhLTgwZmItMTg4YjNlYTlhOWFiIiwic2lnIjo
+iMGUzNjExNWU3ODcxOWMyZTJhZjBkNzFiMzBhNTFjOGYyZDU5OWRjM2JjMTE3OGVlMDBhNTc3YWQ2OThjMTU2NCJ9.DWXBvXKklm1PV2TeEk6p3RXTui9ISSeRu_S9DTEaeY4&locale=
+en-US&session=c0fb49455ae45e90a563dbd52608410176aeb351558f3843a79bb3b9d64ee89d&shop=billing-test-shop9.myshopify.com&timestamp=1791446362',
+14:59:22 │              React Router │   referer: 'https://admin.shopify.com/',
+14:59:22 │              React Router │   remixRequest: null,
+14:59:22 │              React Router │   secFetchMode: 'navigate'
+14:59:22 │              React Router │ }
+14:59:22 │              React Router │ [shopify-app/INFO] Authenticating admin request | {shop: billing-test-shop9.myshopify.com}
+14:59:22 │              React Router │ [shopify-app/INFO] Authenticating admin request | {shop: billing-test-shop9.myshopify.com}
+14:59:22 │              React Router │ [APP DEBUG] loader:authenticated {
+14:59:22 │              React Router │   debugId: 'eb997182',
+14:59:22 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+14:59:22 │              React Router │   pathname: '/app/billing'
+14:59:22 │              React Router │ }
+14:59:22 │              React Router │ [APP DEBUG] ensureShopFromAdmin:start { debugId: 'eb997182', shop: 'billing-test-shop9.myshopify.com'
+}
+14:59:22 │              React Router │ [BILLING DEBUG] loader:authenticated { debugId: '7d2d296c', shop: 'billing-test-shop9.myshopify.com' }
+14:59:22 │              React Router │ [BILLING STATE] snapshot pointer retry {
+14:59:22 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+14:59:22 │              React Router │   pointerGid: null,
+14:59:22 │              React Router │   selectedGid: 'gid://shopify/AppSubscription/33325514948',
+14:59:22 │              React Router │   consistent: false
+14:59:22 │              React Router │ }
+14:59:22 │              React Router │ [BILLING STATE] snapshot pointer mismatch; retrying {
+14:59:22 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+14:59:22 │              React Router │   pointerGid: null,
+14:59:22 │              React Router │   selectedGid: 'gid://shopify/AppSubscription/33325514948'
+14:59:22 │              React Router │ }
+14:59:23 │              React Router │ [BILLING STATE] snapshot pointer mismatch; retrying {
+14:59:23 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+14:59:23 │              React Router │   pointerGid: null,
+14:59:23 │              React Router │   selectedGid: 'gid://shopify/AppSubscription/33325514948'
+14:59:23 │              React Router │ }
+14:59:23 │              React Router │ [BILLING STATE] snapshot pointer retry {
+14:59:23 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+14:59:23 │              React Router │   pointerGid: null,
+14:59:23 │              React Router │   selectedGid: 'gid://shopify/AppSubscription/33325514948',
+14:59:23 │              React Router │   consistent: false
+14:59:23 │              React Router │ }
+14:59:23 │              React Router │ [APP DEBUG] ensureShopFromAdmin:done { debugId: 'eb997182', shop: 'billing-test-shop9.myshopify.com' }
+
+
+
+---- Log ở trên hiện chưa biết vấn đề gì :
+
+-- Bước này tiến hành gỡ app cài lại: trạng thái cũ là pending của gói Pro ko phải pending gói basic: kiểu như trang thái bấm vào gói pro bị cancel
+: nếu đúng sau bước test này chọn gói basic phải còn gói trial vì thực tế chưa mua gói nào cả:
+
+
+[BILLING TRACE] action:start {
+15:04:00 │              React Router │   debugId: '560feadd',
+15:04:00 │              React Router │   method: 'POST',
+15:04:00 │              React Router │   url: 'http://boots-tried-soundtrack-approach.trycloudflare.com/app/billing',
+15:04:00 │              React Router │   referer: 'https://boots-tried-soundtrack-approach.trycloudflare.com/app/billing',
+15:04:00 │              React Router │   origin: 'https://boots-tried-soundtrack-approach.trycloudflare.com',
+15:04:00 │              React Router │   secFetchMode: 'cors',
+15:04:00 │              React Router │   secFetchDest: 'empty',
+15:04:00 │              React Router │   contentType: 'application/x-www-form-urlencoded;charset=UTF-8'
+15:04:00 │              React Router │ }
+15:04:00 │              React Router │ [shopify-app/INFO] Authenticating admin request | {shop: null}
+15:04:00 │              React Router │ [BILLING DEBUG] action:authenticated {
+15:04:00 │              React Router │   debugId: '560feadd',
+15:04:00 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+15:04:00 │              React Router │   intent: 'subscribe'
+15:04:00 │              React Router │ }
+15:04:00 │              React Router │ [BILLING TRACE] env:billing-config {
+15:04:00 │              React Router │   debugId: '560feadd',
+15:04:00 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+15:04:00 │              React Router │   billingTestMode: true,
+15:04:00 │              React Router │   hasShopifyAppHandle: false,
+15:04:00 │              React Router │   hasShopifyApiKey: true,
+15:04:00 │              React Router │   appIdentifierSource: 'SHOPIFY_API_KEY_FALLBACK',
+15:04:00 │              React Router │   hasShopifyAppUrl: true,
+15:04:00 │              React Router │   hasShopifyApiSecret: true,
+15:04:00 │              React Router │   nodeEnv: 'development'
+15:04:00 │              React Router │ }
+15:04:00 │              React Router │ [BILLING TRACE] appSubscriptionCreate:response {
+15:04:00 │              React Router │   debugId: '560feadd',
+15:04:00 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+15:04:00 │              React Router │   httpStatus: 200,
+15:04:00 │              React Router │   httpOk: true,
+15:04:00 │              React Router │   responseContentType: 'text/plain;charset=UTF-8',
+15:04:00 │              React Router │   responseHasErrors: false,
+15:04:00 │              React Router │   userErrors: [],
+15:04:00 │              React Router │   subscriptionId: 'gid://shopify/AppSubscription/33325613252',
+15:04:00 │              React Router │   subscriptionStatus: 'PENDING',
+15:04:00 │              React Router │   confirmationUrl:
+'https://billing-test-shop9.myshopify.com/admin/charges/426912448513/33325613252/RecurringApplicationCharge/confirm_recurring_application_cha
+rge?signature=BAh7BzoHaWRsKwjEgFzCBwA6EmF1dG9fYWN0aXZhdGVU--3416b4a52541306261d1aa87ecd857487bcf3f76',
+15:04:00 │              React Router │   returnUrl:
+'https://admin.shopify.com/store/billing-test-shop9/apps/dbe92d75b95bbae5496ef1794a6cb752/app/billing?billing_callback=1'
+15:04:00 │              React Router │ }
+15:04:00 │              React Router │ [BILLING TRACE] checkpoint:after-pending-update {
+15:04:00 │              React Router │   debugId: '560feadd',
+15:04:00 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+15:04:00 │              React Router │   subscriptionId: 'gid://shopify/AppSubscription/33325613252'
+15:04:00 │              React Router │ }
+15:04:00 │              React Router │ [BILLING TRACE] checkpoint:before-reconcile {
+15:04:00 │              React Router │   debugId: '560feadd',
+15:04:00 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+15:04:00 │              React Router │   subscriptionId: 'gid://shopify/AppSubscription/33325613252'
+15:04:00 │              React Router │ }
+15:04:01 │              React Router │ [BILLING] Shopify subscription verified: {
+15:04:01 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+15:04:01 │              React Router │   expectedSubscriptionGid: 'gid://shopify/AppSubscription/33325613252',
+15:04:01 │              React Router │   actualSubscriptionGid: 'gid://shopify/AppSubscription/33325613252',
+15:04:01 │              React Router │   status: 'PENDING',
+15:04:01 │              React Router │   name: 'AI Search Basic Plan'
+15:04:01 │              React Router │ }
+15:04:01 │              React Router │ [BILLING DEBUG] Plan mapping inputs: {
+15:04:01 │              React Router │   gid: 'gid://shopify/AppSubscription/33325613252',
+15:04:01 │              React Router │   status: 'PENDING',
+15:04:01 │              React Router │   authoritativePlanHandle: 'basic',
+15:04:01 │              React Router │   preferredPlanHandle: 'basic',
+15:04:01 │              React Router │   persistedPlanHandle: null,
+15:04:01 │              React Router │   persistedPlan: 'NONE',
+15:04:01 │              React Router │   exactPointerPlanHandle: 'basic',
+15:04:01 │              React Router │   currentSubscriptionGid: null,
+15:04:01 │              React Router │   pendingSubscriptionGid: 'gid://shopify/AppSubscription/33325613252',
+15:04:01 │              React Router │   itemHandles: []
+15:04:01 │              React Router │ }
+15:04:01 │              React Router │ [BILLING DEBUG] Plan mapping result: {
+15:04:01 │              React Router │   gid: 'gid://shopify/AppSubscription/33325613252',
+15:04:01 │              React Router │   inferredPlan: 'BASIC',
+15:04:01 │              React Router │   inferredPlanHandle: 'basic'
+15:04:01 │              React Router │ }
+15:04:01 │              React Router │ [BILLING FINANCIAL] provider charge reconciliation: {
+15:04:01 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+15:04:01 │              React Router │   subscriptionGid: 'gid://shopify/AppSubscription/33325613252',
+15:04:01 │              React Router │   providerChargeId: null,
+15:04:01 │              React Router │   providerChargeStatus: null,
+15:04:01 │              React Router │   providerChargeActivatedAt: null,
+15:04:01 │              React Router │   providerChargeBillingOn: null,
+15:04:01 │              React Router │   providerChargeTest: true
+15:04:01 │              React Router │ }
+15:04:01 │              React Router │ [BILLING MATRIX] reconcile transition: {
+15:04:01 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+15:04:01 │              React Router │   source: 'CALLBACK',
+15:04:01 │              React Router │   gid: 'gid://shopify/AppSubscription/33325613252',
+15:04:01 │              React Router │   previousStatus: 'INACTIVE',
+15:04:01 │              React Router │   subscriptionPreviousStatus: null,
+15:04:01 │              React Router │   status: 'PENDING',
+15:04:01 │              React Router │   previousPlan: 'NONE',
+15:04:01 │              React Router │   nextPlan: 'BASIC',
+15:04:01 │              React Router │   previousPlanHandle: null,
+15:04:01 │              React Router │   nextPlanHandle: 'basic',
+15:04:01 │              React Router │   trialStatus: 'NONE',
+15:04:01 │              React Router │   cancellationStatus: 'NONE',
+15:04:01 │              React Router │   planChangeStatus: 'PENDING',
+15:04:01 │              React Router │   chargeStatus: 'NONE',
+15:04:01 │              React Router │   paymentStatus: 'NONE',
+15:04:01 │              React Router │   accessStatus: 'NONE',
+15:04:01 │              React Router │   currentSubscriptionGid: null,
+15:04:01 │              React Router │   pendingSubscriptionGid: 'gid://shopify/AppSubscription/33325613252',
+15:04:01 │              React Router │   pendingPlanHandle: 'basic',
+15:04:01 │              React Router │   shopifyCreatedAt: '2026-10-08T08:04:00.000Z',
+15:04:01 │              React Router │   shopifyUpdatedAt: null
+15:04:01 │              React Router │ }
+15:04:01 │              React Router │ [BILLING STATE] snapshot pointer mismatch; retrying {
+15:04:01 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+15:04:01 │              React Router │   pointerGid: null,
+15:04:01 │              React Router │   selectedGid: 'gid://shopify/AppSubscription/33325613252'
+15:04:01 │              React Router │ }
+15:04:01 │              React Router │ [BILLING STATE] snapshot pointer retry {
+15:04:01 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+15:04:01 │              React Router │   pointerGid: null,
+15:04:01 │              React Router │   selectedGid: 'gid://shopify/AppSubscription/33325613252',
+15:04:01 │              React Router │   consistent: false
+15:04:01 │              React Router │ }
+15:04:01 │              React Router │ [BILLING STATE] snapshot pointer mismatch; retrying {
+15:04:01 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+15:04:01 │              React Router │   pointerGid: null,
+15:04:01 │              React Router │   selectedGid: 'gid://shopify/AppSubscription/33325613252'
+15:04:01 │              React Router │ }
+15:04:01 │              React Router │ [BILLING STATE] snapshot pointer retry {
+15:04:01 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+15:04:01 │              React Router │   pointerGid: null,
+15:04:01 │              React Router │   selectedGid: 'gid://shopify/AppSubscription/33325613252',
+15:04:01 │              React Router │   consistent: false
+15:04:01 │              React Router │ }
+15:04:01 │              React Router │ [BILLING BACKEND CONTRACT] pointer/snapshot race; retrying {
+15:04:01 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+15:04:01 │              React Router │   pointerBefore: null,
+15:04:01 │              React Router │   pointerAfter: null,
+15:04:01 │              React Router │   snapshotGid: 'gid://shopify/AppSubscription/33325613252'
+15:04:01 │              React Router │ }
+15:04:01 │              React Router │ [BILLING STATE] snapshot pointer mismatch; retrying {
+15:04:01 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+15:04:01 │              React Router │   pointerGid: null,
+15:04:01 │              React Router │   selectedGid: 'gid://shopify/AppSubscription/33325613252'
+15:04:01 │              React Router │ }
+15:04:01 │              React Router │ [BILLING STATE] snapshot pointer retry {
+15:04:01 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+15:04:01 │              React Router │   pointerGid: null,
+15:04:01 │              React Router │   selectedGid: 'gid://shopify/AppSubscription/33325613252',
+15:04:01 │              React Router │   consistent: false
+15:04:01 │              React Router │ }
+15:04:01 │              React Router │ [BILLING BACKEND CONTRACT] {"contractVersion":"1.0.0","emittedAt":"2026-10-08T08:04:01.494Z","source":
+"CALLBACK","sourceOfTruth":"SHOPIFY_ADMIN_API","shop":"billing-test-shop9.myshopify.com","shopLifecycleStatus":"ACTIVE","pointers":{"currentP
+lanHandle":null,"currentSubscriptionGid":null,"pendingPlanHandle":"basic","pendingSubscriptionGid":"gid://shopify/AppSubscription/33325613252
+","pendingChangeAt":"2026-10-08T08:04:01.437Z"},"current":{"plan":"BASIC","planHandle":"basic","subscriptionGid":"gid://shopify/AppSubscripti
+on/33325613252","status":"PENDING","commercialStatus":"PENDING","trialStatus":"ACTIVE","cancellationStatus":"NONE","planChangeStatus":"PENDIN
+G","chargeStatus":"NONE","paymentStatus":"NONE","refundStatus":"NONE","accessStatus":"NONE","reconciliationStatus":"SYNCED","reconciliationRe
+ason":null,"trialStartsAt":"2026-10-08T08:04:00.000Z","trialEndsAt":"2026-10-15T08:04:00.000Z","billingPeriodStart":"2026-10-08T08:04:00.000Z
+","billingPeriodEnd":null,"billingInterval":"EVERY_30_DAYS","price":null,"currencyCode":null,"testMode":null,"activatedAt":null,"cancelledAt"
+:null,"frozenAt":null,"lastSyncedAt":"2026-10-08T08:04:01.397Z","charge":null,"refund":null},"pending":{"planHandle":"basic","subscriptionGid
+":"gid://shopify/AppSubscription/33325613252","status":"PENDING","trialStatus":"NONE","cancellationStatus":"NONE","planChangeStatus":"PENDING
+","chargeStatus":"NONE","paymentStatus":"NONE","refundStatus":"NONE","accessStatus":"NONE","reconciliationStatus":"SYNCED","trialStartsAt":"2
+026-10-08T08:04:00.000Z","trialEndsAt":"2026-10-15T08:04:00.000Z","billingPeriodStart":"2026-10-08T08:04:00.000Z","billingPeriodEnd":null},"e
+vent":{"type":"BILLING_RECONCILED","occurredAt":"2026-10-08T08:04:01.495Z","payload":{"subscriptionGid":"gid://shopify/AppSubscription/333256
+13252","planHandle":"basic","plan":"BASIC","status":"PENDING","previousStatus":"INACTIVE","subscriptionPreviousStatus":null,"previousPlanHand
+le":null,"replacementStatus":"PENDING","trialStatus":"NONE","cancellationStatus":"NONE","chargeStatus":"NONE","paymentStatus":"NONE","accessS
+tatus":"NONE"}},"recentEvents":[{"type":"BILLING_RECONCILED","source":"CALLBACK","subscriptionGid":"gid://shopify/AppSubscription/33325613252
+","occurredAt":"2026-10-08T08:04:01.422Z"},{"type":"SUBSCRIPTION_UPDATED","source":"CALLBACK","subscriptionGid":"gid://shopify/AppSubscriptio
+n/33325613252","occurredAt":"2026-10-08T08:04:01.417Z"},{"type":"PLAN_CHANGE_REQUESTED","source":"CALLBACK","subscriptionGid":"gid://shopify/
+AppSubscription/33325613252","occurredAt":"2026-10-08T08:04:01.411Z"},{"type":"SUBSCRIPTION_CREATED","source":"CALLBACK","subscriptionGid":"g
+id://shopify/AppSubscription/33325613252","occurredAt":"2026-10-08T08:04:01.407Z"},{"type":"MISSING_DB_RECORD","source":"CALLBACK","subscript
+ionGid":"gid://shopify/AppSubscription/33325613252","occurredAt":"2026-10-08T08:04:01.401Z"}]}
+15:04:01 │              React Router │ [BILLING TRACE] checkpoint:after-reconcile {
+15:04:01 │              React Router │   debugId: '560feadd',
+15:04:01 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+15:04:01 │              React Router │   subscriptionId: 'gid://shopify/AppSubscription/33325613252'
+15:04:01 │              React Router │ }
+15:04:01 │              React Router │ [BILLING TRACE] redirect:before {
+15:04:01 │              React Router │   debugId: '560feadd',
+15:04:01 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+15:04:01 │              React Router │   subscriptionId: 'gid://shopify/AppSubscription/33325613252',
+15:04:01 │              React Router │   confirmationUrl:
+'https://billing-test-shop9.myshopify.com/admin/charges/426912448513/33325613252/RecurringApplicationCharge/confirm_recurring_application_cha
+rge?signature=BAh7BzoHaWRsKwjEgFzCBwA6EmF1dG9fYWN0aXZhdGVU--3416b4a52541306261d1aa87ecd857487bcf3f76',
+15:04:01 │              React Router │   returnUrl:
+'https://admin.shopify.com/store/billing-test-shop9/apps/dbe92d75b95bbae5496ef1794a6cb752/app/billing?billing_callback=1',
+15:04:01 │              React Router │   requestMethod: 'POST',
+15:04:01 │              React Router │   secFetchMode: 'cors',
+15:04:01 │              React Router │   secFetchDest: 'empty',
+15:04:01 │              React Router │   origin: 'https://boots-tried-soundtrack-approach.trycloudflare.com',
+15:04:01 │              React Router │   referer: 'https://boots-tried-soundtrack-approach.trycloudflare.com/app/billing'
+15:04:01 │              React Router │ }
+15:04:01 │              React Router │ [BILLING TRACE] action:confirmation-url-ready {
+15:04:01 │              React Router │   debugId: '560feadd',
+15:04:01 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+15:04:01 │              React Router │   subscriptionId: 'gid://shopify/AppSubscription/33325613252',
+15:04:01 │              React Router │   confirmationUrl:
+'https://billing-test-shop9.myshopify.com/admin/charges/426912448513/33325613252/RecurringApplicationCharge/confirm_recurring_application_cha
+rge?signature=BAh7BzoHaWRsKwjEgFzCBwA6EmF1dG9fYWN0aXZhdGVU--3416b4a52541306261d1aa87ecd857487bcf3f76'
+15:04:01 │              React Router │ }
+15:04:01 │              React Router │ [APP TRACE] loader:start {
+15:04:01 │              React Router │   debugId: '210c688f',
+15:04:01 │              React Router │   method: 'GET',
+15:04:01 │              React Router │   pathname: '/app/billing',
+15:04:01 │              React Router │   search: '',
+15:04:01 │              React Router │   referer: 'https://boots-tried-soundtrack-approach.trycloudflare.com/app/billing',
+15:04:01 │              React Router │   remixRequest: null,
+15:04:01 │              React Router │   secFetchMode: 'cors'
+15:04:01 │              React Router │ }
+15:04:01 │              React Router │ [BILLING TRACE] loader:start {
+15:04:01 │              React Router │   debugId: '8d9bbedd',
+15:04:01 │              React Router │   method: 'GET',
+15:04:01 │              React Router │   url: 'http://boots-tried-soundtrack-approach.trycloudflare.com/app/billing',
+15:04:01 │              React Router │   referer: 'https://boots-tried-soundtrack-approach.trycloudflare.com/app/billing',
+15:04:01 │              React Router │   remixRequest: null,
+15:04:01 │              React Router │   secFetchMode: 'cors'
+15:04:01 │              React Router │ }
+15:04:01 │              React Router │ [shopify-app/INFO] Authenticating admin request | {shop: null}
+15:04:01 │              React Router │ [shopify-app/INFO] Authenticating admin request | {shop: null}
+15:04:01 │              React Router │ [APP DEBUG] loader:authenticated {
+15:04:01 │              React Router │   debugId: '210c688f',
+15:04:01 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+15:04:01 │              React Router │   pathname: '/app/billing'
+15:04:01 │              React Router │ }
+15:04:01 │              React Router │ [APP DEBUG] ensureShopFromAdmin:start { debugId: '210c688f', shop: 'billing-test-shop9.myshopify.com'
+}
+15:04:01 │              React Router │ [BILLING DEBUG] loader:authenticated { debugId: '8d9bbedd', shop: 'billing-test-shop9.myshopify.com' }
+15:04:01 │              React Router │ [BILLING STATE] snapshot pointer mismatch; retrying {
+15:04:01 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+15:04:01 │              React Router │   pointerGid: null,
+15:04:01 │              React Router │   selectedGid: 'gid://shopify/AppSubscription/33325613252'
+15:04:01 │              React Router │ }
+15:04:01 │              React Router │ [BILLING STATE] snapshot pointer retry {
+15:04:01 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+15:04:01 │              React Router │   pointerGid: null,
+15:04:01 │              React Router │   selectedGid: 'gid://shopify/AppSubscription/33325613252',
+15:04:01 │              React Router │   consistent: false
+15:04:01 │              React Router │ }
+15:04:01 │              React Router │ [BILLING STATE] snapshot pointer retry {
+15:04:01 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+15:04:01 │              React Router │   pointerGid: null,
+15:04:01 │              React Router │   selectedGid: 'gid://shopify/AppSubscription/33325613252',
+15:04:01 │              React Router │   consistent: false
+15:04:01 │              React Router │ }
+15:04:01 │              React Router │ [BILLING STATE] snapshot pointer mismatch; retrying {
+15:04:01 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+15:04:01 │              React Router │   pointerGid: null,
+15:04:01 │              React Router │   selectedGid: 'gid://shopify/AppSubscription/33325613252'
+15:04:01 │              React Router │ }
+15:04:02 │              React Router │ [APP DEBUG] ensureShopFromAdmin:done { debugId: '210c688f', shop: 'billing-test-shop9.myshopify.com' }
+15:04:10 │              React Router │ ========== [WEBHOOK TEST] APP_SUBSCRIPTIONS_UPDATE RECEIVED ==========
+15:04:10 │              React Router │ [BILLING] Received Shopify subscription webhook: {
+15:04:10 │              React Router │   topic: 'APP_SUBSCRIPTIONS_UPDATE',
+15:04:10 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+15:04:10 │              React Router │   subscriptionGid: 'gid://shopify/AppSubscription/33325613252',
+15:04:10 │              React Router │   status: 'ACTIVE',
+15:04:10 │              React Router │   planHandle: null,
+15:04:10 │              React Router │   name: 'AI Search Basic Plan'
+15:04:10 │              React Router │ }
+15:04:10 │              React Router │ [BILLING] Shopify subscription verified: {
+15:04:10 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+15:04:10 │              React Router │   expectedSubscriptionGid: 'gid://shopify/AppSubscription/33325613252',
+15:04:10 │              React Router │   actualSubscriptionGid: 'gid://shopify/AppSubscription/33325613252',
+15:04:10 │              React Router │   status: 'ACTIVE',
+15:04:10 │              React Router │   name: 'AI Search Basic Plan'
+15:04:10 │              React Router │ }
+15:04:11 │              React Router │ [BILLING STATE] snapshot pointer mismatch; retrying {
+15:04:11 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+15:04:11 │              React Router │   pointerGid: null,
+15:04:11 │              React Router │   selectedGid: 'gid://shopify/AppSubscription/33325613252'
+15:04:11 │              React Router │ }
+15:04:11 │              React Router │ [BILLING STATE] snapshot pointer retry {
+15:04:11 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+15:04:11 │              React Router │   pointerGid: null,
+15:04:11 │              React Router │   selectedGid: 'gid://shopify/AppSubscription/33325613252',
+15:04:11 │              React Router │   consistent: false
+15:04:11 │              React Router │ }
+15:04:11 │              React Router │ [BILLING DEBUG] Plan mapping inputs: {
+15:04:11 │              React Router │   gid: 'gid://shopify/AppSubscription/33325613252',
+15:04:11 │              React Router │   status: 'ACTIVE',
+15:04:11 │              React Router │   authoritativePlanHandle: undefined,
+15:04:11 │              React Router │   preferredPlanHandle: null,
+15:04:11 │              React Router │   persistedPlanHandle: 'basic',
+15:04:11 │              React Router │   persistedPlan: 'BASIC',
+15:04:11 │              React Router │   exactPointerPlanHandle: 'basic',
+15:04:11 │              React Router │   currentSubscriptionGid: null,
+15:04:11 │              React Router │   pendingSubscriptionGid: 'gid://shopify/AppSubscription/33325613252',
+15:04:11 │              React Router │   itemHandles: []
+15:04:11 │              React Router │ }
+15:04:11 │              React Router │ [BILLING DEBUG] Plan mapping result: {
+15:04:11 │              React Router │   gid: 'gid://shopify/AppSubscription/33325613252',
+15:04:11 │              React Router │   inferredPlan: 'BASIC',
+15:04:11 │              React Router │   inferredPlanHandle: 'basic'
+15:04:11 │              React Router │ }
+15:04:11 │              React Router │ [BILLING FINANCIAL] provider charge reconciliation: {
+15:04:11 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+15:04:11 │              React Router │   subscriptionGid: 'gid://shopify/AppSubscription/33325613252',
+15:04:11 │              React Router │   providerChargeId: null,
+15:04:11 │              React Router │   providerChargeStatus: null,
+15:04:11 │              React Router │   providerChargeActivatedAt: null,
+15:04:11 │              React Router │   providerChargeBillingOn: null,
+15:04:11 │              React Router │   providerChargeTest: true
+15:04:11 │              React Router │ }
+15:04:11 │              React Router │ [BILLING MATRIX] reconcile transition: {
+15:04:11 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+15:04:11 │              React Router │   source: 'WEBHOOK',
+15:04:11 │              React Router │   gid: 'gid://shopify/AppSubscription/33325613252',
+15:04:11 │              React Router │   previousStatus: 'PENDING',
+15:04:11 │              React Router │   subscriptionPreviousStatus: 'PENDING',
+15:04:11 │              React Router │   status: 'ACTIVE',
+15:04:11 │              React Router │   previousPlan: 'BASIC',
+15:04:11 │              React Router │   nextPlan: 'BASIC',
+15:04:11 │              React Router │   previousPlanHandle: 'basic',
+15:04:11 │              React Router │   nextPlanHandle: 'basic',
+15:04:11 │              React Router │   trialStatus: 'ACTIVE',
+15:04:11 │              React Router │   cancellationStatus: 'NONE',
+15:04:11 │              React Router │   planChangeStatus: 'PENDING',
+15:04:11 │              React Router │   chargeStatus: 'NONE',
+15:04:11 │              React Router │   paymentStatus: 'NONE',
+15:04:11 │              React Router │   accessStatus: 'BASIC',
+15:04:11 │              React Router │   currentSubscriptionGid: null,
+15:04:11 │              React Router │   pendingSubscriptionGid: 'gid://shopify/AppSubscription/33325613252',
+15:04:11 │              React Router │   pendingPlanHandle: 'basic',
+15:04:11 │              React Router │   shopifyCreatedAt: '2026-10-08T08:04:00.000Z',
+15:04:11 │              React Router │   shopifyUpdatedAt: null
+15:04:11 │              React Router │ }
+15:04:11 │              React Router │ [BILLING BACKEND CONTRACT]
+{"contractVersion":"1.0.0","emittedAt":"2026-10-08T08:04:11.384Z","source":"WEBHOOK","sourceOfTruth":"SHOPIFY_ADMIN_API","shop":"billing-test
+-shop9.myshopify.com","shopLifecycleStatus":"ACTIVE","pointers":{"currentPlanHandle":"basic","currentSubscriptionGid":"gid://shopify/AppSubsc
+ription/33325613252","pendingPlanHandle":null,"pendingSubscriptionGid":null,"pendingChangeAt":null},"current":{"plan":"BASIC","planHandle":"b
+asic","subscriptionGid":"gid://shopify/AppSubscription/33325613252","status":"ACTIVE","commercialStatus":"TRIAL","trialStatus":"ACTIVE","canc
+ellationStatus":"NONE","planChangeStatus":"PENDING","chargeStatus":"NONE","paymentStatus":"NONE","refundStatus":"NONE","accessStatus":"BASIC"
+,"reconciliationStatus":"SYNCED","reconciliationReason":null,"trialStartsAt":"2026-10-08T08:04:00.000Z","trialEndsAt":"2026-10-15T08:04:00.00
+0Z","billingPeriodStart":"2026-10-08T08:04:00.000Z","billingPeriodEnd":"2026-11-14T08:04:08.000Z","billingInterval":"EVERY_30_DAYS","price":9
+.9,"currencyCode":"USD","testMode":true,"activatedAt":"2026-10-08T08:04:11.308Z","cancelledAt":null,"frozenAt":null,"lastSyncedAt":"2026-10-0
+8T08:04:11.319Z","charge":{"shopifyChargeId":null,"status":"NONE","amount":9.9,"currency":"USD","billingPeriodStart":"2026-10-08T08:04:00.000
+Z","billingPeriodEnd":"2026-11-14T08:04:08.000Z","acceptedAt":"2026-10-08T08:04:11.308Z","paidAt":null,"failedAt":null,"frozenAt":null},"refu
+nd":null},"pending":null,"event":{"type":"BILLING_RECONCILED","occurredAt":"2026-10-08T08:04:11.385Z","payload":{"subscriptionGid":"gid://sho
+pify/AppSubscription/33325613252","planHandle":"basic","plan":"BASIC","status":"ACTIVE","previousStatus":"PENDING","subscriptionPreviousStatu
+s":"PENDING","previousPlanHandle":"basic","replacementStatus":"PENDING","trialStatus":"ACTIVE","cancellationStatus":"NONE","chargeStatus":"NO
+NE","paymentStatus":"NONE","accessStatus":"BASIC"}},"recentEvents":[{"type":"BILLING_RECONCILED","source":"WEBHOOK","subscriptionGid":"gid://
+shopify/AppSubscription/33325613252","occurredAt":"2026-10-08T08:04:11.345Z"},{"type":"SUBSCRIPTION_UPDATED","source":"WEBHOOK","subscription
+Gid":"gid://shopify/AppSubscription/33325613252","occurredAt":"2026-10-08T08:04:11.339Z"},{"type":"TRIAL_STARTED","source":"WEBHOOK","subscri
+ptionGid":"gid://shopify/AppSubscription/33325613252","occurredAt":"2026-10-08T08:04:11.334Z"},{"type":"SUBSCRIPTION_APPROVED","source":"WEBH
+OOK","subscriptionGid":"gid://shopify/AppSubscription/33325613252","occurredAt":"2026-10-08T08:04:11.328Z"},{"type":"SUBSCRIPTION_ACTIVATED",
+"source":"WEBHOOK","subscriptionGid":"gid://shopify/AppSubscription/33325613252","occurredAt":"2026-10-08T08:04:11.323Z"}]}
+15:04:11 │              React Router │ [BILLING] Shopify subscription webhook reconciled: {
+15:04:11 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+15:04:11 │              React Router │   subscriptionGid: 'gid://shopify/AppSubscription/33325613252',
+15:04:11 │              React Router │   webhookStatus: 'ACTIVE',
+15:04:11 │              React Router │   confirmed: true,
+15:04:11 │              React Router │   changed: true,
+15:04:11 │              React Router │   localStatus: 'ACTIVE'
+15:04:11 │              React Router │ }
+15:04:11 │              React Router │ [COMMERCIAL DEBUG] reconcile:start { shop: 'billing-test-shop9.myshopify.com', forceCatalogRefresh:
+true }
+15:04:11 │              React Router │ [COMMERCIAL DEBUG] entitlement:beforeRecovery {
+15:04:11 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+15:04:11 │              React Router │   plan: 'BASIC',
+15:04:11 │              React Router │   active: true,
+15:04:11 │              React Router │   indexedProducts: 0,
+15:04:11 │              React Router │   productSlotsUsed: 0,
+15:04:11 │              React Router │   catalogProductCount: 0
+15:04:11 │              React Router │ }
+15:04:11 │              React Router │ [PRODUCT POLICY RECONCILE START] {
+15:04:11 │              React Router │   policyVersion: 0,
+15:04:11 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+15:04:11 │              React Router │   effectiveProductLimit: 505,
+15:04:11 │              React Router │   catalogCount: 0,
+15:04:11 │              React Router │   cachedVectorCount: 0,
+15:04:11 │              React Router │   activeCount: 0,
+15:04:11 │              React Router │   blockedCount: 0
+15:04:11 │              React Router │ }
+15:04:11 │              React Router │ [PRODUCT POLICY RECONCILE PLAN] {
+15:04:11 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+15:04:11 │              React Router │   policyVersion: 0,
+15:04:11 │              React Router │   keepActive: 0,
+15:04:11 │              React Router │   deactivate: 0,
+15:04:11 │              React Router │   reactivateReady: 0,
+15:04:11 │              React Router │   requiresReindex: 0,
+15:04:11 │              React Router │   productCapacityReindex: 0,
+15:04:11 │              React Router │   subscriptionRecoveryReindex: 0,
+15:04:11 │              React Router │   quotaControlledReindex: 0
+15:04:11 │              React Router │ }
+15:04:11 │              React Router │ [PRODUCT POLICY RECONCILE DONE] {
+15:04:11 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+15:04:11 │              React Router │   policyVersion: 0,
+15:04:11 │              React Router │   activeBefore: 0,
+15:04:11 │              React Router │   activeAfter: 0,
+15:04:11 │              React Router │   cachedBefore: 0,
+15:04:11 │              React Router │   cachedAfter: 0,
+15:04:11 │              React Router │   blockedAfter: 0,
+15:04:11 │              React Router │   targetLimit: 505
+15:04:11 │              React Router │ }
+15:04:11 │              React Router │ [COMMERCIAL DEBUG] entitlement:afterRecovery {
+15:04:11 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+15:04:11 │              React Router │   plan: 'BASIC',
+15:04:11 │              React Router │   active: true,
+15:04:11 │              React Router │   indexedProducts: 0,
+15:04:11 │              React Router │   productSlotsUsed: 0,
+15:04:11 │              React Router │   catalogProductCount: 0
+15:04:11 │              React Router │ }
+15:04:11 │              React Router │ [COMMERCIAL DEBUG] catalogDecision {
+15:04:11 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+15:04:11 │              React Router │   latestCatalogJobId: null,
+15:04:11 │              React Router │   latestCatalogStatus: null,
+15:04:11 │              React Router │   latestCatalogPlan: null,
+15:04:11 │              React Router │   needsInitialCatalogSync: true,
+15:04:11 │              React Router │   planNeedsExpansionScan: false,
+15:04:11 │              React Router │   forceCatalogRefresh: true,
+15:04:11 │              React Router │   shouldRefreshCatalog: false
+15:04:11 │              React Router │ }
+15:04:11 │              React Router │ [AI Search] Catalog sync job queued: {
+15:04:11 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+15:04:11 │              React Router │   jobId: 76,
+15:04:11 │              React Router │   force: false,
+15:04:11 │              React Router │   reason: 'INITIAL',
+15:04:11 │              React Router │   planAtStart: 'BASIC'
+15:04:11 │              React Router │ }
+15:04:11 │              React Router │ [COMMERCIAL DEBUG] catalogDecision:result { shop: 'billing-test-shop9.myshopify.com', catalogJobId: 76
+ }
+15:04:11 │              React Router │ [AI Search] Catalog sync job claimed: {
+15:04:11 │              React Router │   jobId: 76,
+15:04:11 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+15:04:11 │              React Router │   attempt: 1,
+15:04:11 │              React Router │   reason: 'INITIAL'
+15:04:11 │              React Router │ }
+15:04:11 │              React Router │ [AI Search] Catalog sync started: { shop: 'billing-test-shop9.myshopify.com', initialCursor: null }
+15:04:11 │              React Router │ [AI Search] Catalog sync completed: {
+15:04:11 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+15:04:11 │              React Router │   pagesProcessed: 1,
+15:04:11 │              React Router │   productsProcessed: 0,
+15:04:11 │              React Router │   productsIndexed: 0,
+15:04:11 │              React Router │   productsSkipped: 0,
+15:04:11 │              React Router │   productsBlocked: 0,
+15:04:11 │              React Router │   productsFailed: 0,
+15:04:11 │              React Router │   stoppedByProductLimit: false,
+15:04:11 │              React Router │   failures: []
+15:04:11 │              React Router │ }
+15:04:12 │              React Router │ [APP TRACE] loader:start {
+15:04:12 │              React Router │   debugId: '2bd4d3c5',
+15:04:12 │              React Router │   method: 'GET',
+15:04:12 │              React Router │   pathname: '/app/billing',
+15:04:12 │              React Router │   search:
+'?admin_theme=admin-next&billing_callback=1&charge_id=33325613252&embedded=1&hmac=ccd223dee1c7cfbf85511d15d109d42e7dfe0cc7dbdfce7efff38756be5
+cb1ed&host=YWRtaW4uc2hvcGlmeS5jb20vc3RvcmUvYmlsbGluZy10ZXN0LXNob3A5&id_token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJodHRwczpcL1wvYml
+sbGluZy10ZXN0LXNob3A5Lm15c2hvcGlmeS5jb21cL2FkbWluIiwiZGVzdCI6Imh0dHBzOlwvXC9iaWxsaW5nLXRlc3Qtc2hvcDkubXlzaG9waWZ5LmNvbSIsImF1ZCI6ImRiZTkyZDc1
+Yjk1YmJhZTU0OTZlZjE3OTRhNmNiNzUyIiwic3ViIjoiMTAzNjk0MTM5NTg4IiwiZXhwIjoxNzkxNDQ2NzExLCJuYmYiOjE3OTE0NDY2NTEsImlhdCI6MTc5MTQ0NjY1MSwianRpIjoiN
+jRkMzEwN2ItNWIyYS00MTdhLWE2MGMtNGYyODcxOWY4OTNjIiwic2lkIjoiYzM2ZDBkZDUtZDEzNC00ZWVhLTgwZmItMTg4YjNlYTlhOWFiIiwic2lnIjoiODJkNjIyZmZkYjI2YmIwMG
+JmOTM2YzM1ZTYxYzQxZmQzNDYxOWY4ZGRkMzU3MzRiOWQ5ZmUxNTA4YzgwNjM4MSJ9.3b_tUg9Q1iQDefplEYgH4S3GsnTVNzKNRw5M3fETPdQ&locale=en-US&session=c0fb49455
+ae45e90a563dbd52608410176aeb351558f3843a79bb3b9d64ee89d&shop=billing-test-shop9.myshopify.com&timestamp=1791446651',
+15:04:12 │              React Router │   referer: 'https://admin.shopify.com/',
+15:04:12 │              React Router │   remixRequest: null,
+15:04:12 │              React Router │   secFetchMode: 'navigate'
+15:04:12 │              React Router │ }
+15:04:12 │              React Router │ [BILLING TRACE] loader:start {
+15:04:12 │              React Router │   debugId: '219dd543',
+15:04:12 │              React Router │   method: 'GET',
+15:04:12 │              React Router │   url: 'http://boots-tried-soundtrack-approach.trycloudflare.com/app/billing?admin_theme=admin-next&bi
+lling_callback=1&charge_id=33325613252&embedded=1&hmac=ccd223dee1c7cfbf85511d15d109d42e7dfe0cc7dbdfce7efff38756be5cb1ed&host=YWRtaW4uc2hvcGlm
+eS5jb20vc3RvcmUvYmlsbGluZy10ZXN0LXNob3A5&id_token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJodHRwczpcL1wvYmlsbGluZy10ZXN0LXNob3A5Lm15c2
+hvcGlmeS5jb21cL2FkbWluIiwiZGVzdCI6Imh0dHBzOlwvXC9iaWxsaW5nLXRlc3Qtc2hvcDkubXlzaG9waWZ5LmNvbSIsImF1ZCI6ImRiZTkyZDc1Yjk1YmJhZTU0OTZlZjE3OTRhNmN
+iNzUyIiwic3ViIjoiMTAzNjk0MTM5NTg4IiwiZXhwIjoxNzkxNDQ2NzExLCJuYmYiOjE3OTE0NDY2NTEsImlhdCI6MTc5MTQ0NjY1MSwianRpIjoiNjRkMzEwN2ItNWIyYS00MTdhLWE2
+MGMtNGYyODcxOWY4OTNjIiwic2lkIjoiYzM2ZDBkZDUtZDEzNC00ZWVhLTgwZmItMTg4YjNlYTlhOWFiIiwic2lnIjoiODJkNjIyZmZkYjI2YmIwMGJmOTM2YzM1ZTYxYzQxZmQzNDYxO
+WY4ZGRkMzU3MzRiOWQ5ZmUxNTA4YzgwNjM4MSJ9.3b_tUg9Q1iQDefplEYgH4S3GsnTVNzKNRw5M3fETPdQ&locale=en-US&session=c0fb49455ae45e90a563dbd52608410176ae
+b351558f3843a79bb3b9d64ee89d&shop=billing-test-shop9.myshopify.com&timestamp=1791446651',
+15:04:12 │              React Router │   referer: 'https://admin.shopify.com/',
+15:04:12 │              React Router │   remixRequest: null,
+15:04:12 │              React Router │   secFetchMode: 'navigate'
+15:04:12 │              React Router │ }
+15:04:12 │              React Router │ [shopify-app/INFO] Authenticating admin request | {shop: billing-test-shop9.myshopify.com}
+15:04:12 │              React Router │ [shopify-app/INFO] Authenticating admin request | {shop: billing-test-shop9.myshopify.com}
+15:04:12 │              React Router │ [APP DEBUG] loader:authenticated {
+15:04:12 │              React Router │   debugId: '2bd4d3c5',
+15:04:12 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+15:04:12 │              React Router │   pathname: '/app/billing'
+15:04:12 │              React Router │ }
+15:04:12 │              React Router │ [APP DEBUG] ensureShopFromAdmin:start { debugId: '2bd4d3c5', shop: 'billing-test-shop9.myshopify.com'
+}
+15:04:12 │              React Router │ [BILLING DEBUG] loader:authenticated { debugId: '219dd543', shop: 'billing-test-shop9.myshopify.com' }
+15:04:12 │              React Router │ [AI Search] Qdrant orphan reconciliation complete: {
+15:04:12 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+15:04:12 │              React Router │   scannedPoints: 0,
+15:04:12 │              React Router │   validPoints: 0,
+15:04:12 │              React Router │   removedPoints: 0,
+15:04:12 │              React Router │   malformedPointsRemoved: 0,
+15:04:12 │              React Router │   recentPointsSkipped: 0,
+15:04:12 │              React Router │   removedProductIds: []
+15:04:12 │              React Router │ }
+15:04:12 │              React Router │ [PRODUCT POLICY RECONCILE START] {
+15:04:12 │              React Router │   policyVersion: 0,
+15:04:12 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+15:04:12 │              React Router │   effectiveProductLimit: 505,
+15:04:12 │              React Router │   catalogCount: 0,
+15:04:12 │              React Router │   cachedVectorCount: 0,
+15:04:12 │              React Router │   activeCount: 0,
+15:04:12 │              React Router │   blockedCount: 0
+15:04:12 │              React Router │ }
+15:04:12 │              React Router │ [PRODUCT POLICY RECONCILE PLAN] {
+15:04:12 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+15:04:12 │              React Router │   policyVersion: 0,
+15:04:12 │              React Router │   keepActive: 0,
+15:04:12 │              React Router │   deactivate: 0,
+15:04:12 │              React Router │   reactivateReady: 0,
+15:04:12 │              React Router │   requiresReindex: 0,
+15:04:12 │              React Router │   productCapacityReindex: 0,
+15:04:12 │              React Router │   subscriptionRecoveryReindex: 0,
+15:04:12 │              React Router │   quotaControlledReindex: 0
+15:04:12 │              React Router │ }
+15:04:12 │              React Router │ [PRODUCT POLICY RECONCILE DONE] {
+15:04:12 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+15:04:12 │              React Router │   policyVersion: 0,
+15:04:12 │              React Router │   activeBefore: 0,
+15:04:12 │              React Router │   activeAfter: 0,
+15:04:12 │              React Router │   cachedBefore: 0,
+15:04:12 │              React Router │   cachedAfter: 0,
+15:04:12 │              React Router │   blockedAfter: 0,
+15:04:12 │              React Router │   targetLimit: 505
+15:04:12 │              React Router │ }
+15:04:12 │              React Router │ [AI Search] Catalog sync job completed: {
+15:04:12 │              React Router │   jobId: 76,
+15:04:12 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+15:04:12 │              React Router │   attempt: 1,
+15:04:12 │              React Router │   indexed: 0,
+15:04:12 │              React Router │   skipped: 0,
+15:04:12 │              React Router │   blocked: 0,
+15:04:12 │              React Router │   failed: 0,
+15:04:12 │              React Router │   retryJobs: 0,
+15:04:12 │              React Router │   staleRemoved: 0,
+15:04:12 │              React Router │   staleRevalidatedSearchable: 0,
+15:04:12 │              React Router │   orphanVectorsScanned: 0,
+15:04:12 │              React Router │   orphanVectorsRemoved: 0,
+15:04:12 │              React Router │   orphanMalformedVectorsRemoved: 0,
+15:04:12 │              React Router │   orphanRecentVectorsSkipped: 0,
+15:04:12 │              React Router │   recovered: 0
+15:04:12 │              React Router │ }
+15:04:12 │              React Router │ [APP DEBUG] ensureShopFromAdmin:done { debugId: '2bd4d3c5', shop: 'billing-test-shop9.myshopify.com' }
+15:04:12 │              React Router │ [BILLING] Shopify subscription verified: {
+15:04:12 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+15:04:12 │              React Router │   expectedSubscriptionGid: null,
+15:04:12 │              React Router │   actualSubscriptionGid: 'gid://shopify/AppSubscription/33325613252',
+15:04:12 │              React Router │   status: 'ACTIVE',
+15:04:12 │              React Router │   name: 'AI Search Basic Plan'
+15:04:12 │              React Router │ }
+15:04:12 │              React Router │ [APP TRACE] loader:start {
+15:04:12 │              React Router │   debugId: '451f1501',
+15:04:12 │              React Router │   method: 'GET',
+15:04:12 │              React Router │   pathname: '/app/billing',
+15:04:12 │              React Router │   search:
+'?admin_theme=admin-next&billing_callback=1&charge_id=33325613252&embedded=1&hmac=e40a6e7a25443c702de21297d1cafe95e7dd2400bb7a59c94552f84150f
+79e68&host=YWRtaW4uc2hvcGlmeS5jb20vc3RvcmUvYmlsbGluZy10ZXN0LXNob3A5&id_token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJodHRwczpcL1wvYml
+sbGluZy10ZXN0LXNob3A5Lm15c2hvcGlmeS5jb21cL2FkbWluIiwiZGVzdCI6Imh0dHBzOlwvXC9iaWxsaW5nLXRlc3Qtc2hvcDkubXlzaG9waWZ5LmNvbSIsImF1ZCI6ImRiZTkyZDc1
+Yjk1YmJhZTU0OTZlZjE3OTRhNmNiNzUyIiwic3ViIjoiMTAzNjk0MTM5NTg4IiwiZXhwIjoxNzkxNDQ2NzEyLCJuYmYiOjE3OTE0NDY2NTIsImlhdCI6MTc5MTQ0NjY1MiwianRpIjoiN
+zYyN2QwNzUtN2JmZS00NzI3LWI2NWYtNDNiYmMyN2ZhOWM2Iiwic2lkIjoiYzM2ZDBkZDUtZDEzNC00ZWVhLTgwZmItMTg4YjNlYTlhOWFiIiwic2lnIjoiODAzYjU4ZDYwNzU4ZjQ4Ym
+VjMTFlZjg5ZjcwMzY3MGMzYmYwMDlmNjJlY2JmNGMzOWQzMDcwMmMwNDI3ZGE2MiJ9.YPA1GhbyWS7wlDLdoXoHmQtiI8eMRL9EaBkJyzLZasY&locale=en-US&session=c0fb49455
+ae45e90a563dbd52608410176aeb351558f3843a79bb3b9d64ee89d&shop=billing-test-shop9.myshopify.com&timestamp=1791446652',
+15:04:12 │              React Router │   referer: 'https://admin.shopify.com/',
+15:04:12 │              React Router │   remixRequest: null,
+15:04:12 │              React Router │   secFetchMode: 'navigate'
+15:04:12 │              React Router │ }
+15:04:12 │              React Router │ [BILLING TRACE] loader:start {
+15:04:12 │              React Router │   debugId: '805322a9',
+15:04:12 │              React Router │   method: 'GET',
+15:04:12 │              React Router │   url: 'http://boots-tried-soundtrack-approach.trycloudflare.com/app/billing?admin_theme=admin-next&bi
+lling_callback=1&charge_id=33325613252&embedded=1&hmac=e40a6e7a25443c702de21297d1cafe95e7dd2400bb7a59c94552f84150f79e68&host=YWRtaW4uc2hvcGlm
+eS5jb20vc3RvcmUvYmlsbGluZy10ZXN0LXNob3A5&id_token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJodHRwczpcL1wvYmlsbGluZy10ZXN0LXNob3A5Lm15c2
+hvcGlmeS5jb21cL2FkbWluIiwiZGVzdCI6Imh0dHBzOlwvXC9iaWxsaW5nLXRlc3Qtc2hvcDkubXlzaG9waWZ5LmNvbSIsImF1ZCI6ImRiZTkyZDc1Yjk1YmJhZTU0OTZlZjE3OTRhNmN
+iNzUyIiwic3ViIjoiMTAzNjk0MTM5NTg4IiwiZXhwIjoxNzkxNDQ2NzEyLCJuYmYiOjE3OTE0NDY2NTIsImlhdCI6MTc5MTQ0NjY1MiwianRpIjoiNzYyN2QwNzUtN2JmZS00NzI3LWI2
+NWYtNDNiYmMyN2ZhOWM2Iiwic2lkIjoiYzM2ZDBkZDUtZDEzNC00ZWVhLTgwZmItMTg4YjNlYTlhOWFiIiwic2lnIjoiODAzYjU4ZDYwNzU4ZjQ4YmVjMTFlZjg5ZjcwMzY3MGMzYmYwM
+DlmNjJlY2JmNGMzOWQzMDcwMmMwNDI3ZGE2MiJ9.YPA1GhbyWS7wlDLdoXoHmQtiI8eMRL9EaBkJyzLZasY&locale=en-US&session=c0fb49455ae45e90a563dbd52608410176ae
+b351558f3843a79bb3b9d64ee89d&shop=billing-test-shop9.myshopify.com&timestamp=1791446652',
+15:04:12 │              React Router │   referer: 'https://admin.shopify.com/',
+15:04:12 │              React Router │   remixRequest: null,
+15:04:12 │              React Router │   secFetchMode: 'navigate'
+15:04:12 │              React Router │ }
+15:04:12 │              React Router │ [shopify-app/INFO] Authenticating admin request | {shop: billing-test-shop9.myshopify.com}
+15:04:12 │              React Router │ [shopify-app/INFO] Authenticating admin request | {shop: billing-test-shop9.myshopify.com}
+15:04:12 │              React Router │ [APP DEBUG] loader:authenticated {
+15:04:12 │              React Router │   debugId: '451f1501',
+15:04:12 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+15:04:12 │              React Router │   pathname: '/app/billing'
+15:04:12 │              React Router │ }
+15:04:12 │              React Router │ [APP DEBUG] ensureShopFromAdmin:start { debugId: '451f1501', shop: 'billing-test-shop9.myshopify.com'
+}
+15:04:12 │              React Router │ [BILLING DEBUG] loader:authenticated { debugId: '805322a9', shop: 'billing-test-shop9.myshopify.com' }
+15:04:13 │              React Router │ [BILLING DEBUG] Plan mapping inputs: {
+15:04:13 │              React Router │   gid: 'gid://shopify/AppSubscription/33325613252',
+15:04:13 │              React Router │   status: 'ACTIVE',
+15:04:13 │              React Router │   authoritativePlanHandle: undefined,
+15:04:13 │              React Router │   preferredPlanHandle: undefined,
+15:04:13 │              React Router │   persistedPlanHandle: 'basic',
+15:04:13 │              React Router │   persistedPlan: 'BASIC',
+15:04:13 │              React Router │   exactPointerPlanHandle: 'basic',
+15:04:13 │              React Router │   currentSubscriptionGid: 'gid://shopify/AppSubscription/33325613252',
+15:04:13 │              React Router │   pendingSubscriptionGid: null,
+15:04:13 │              React Router │   itemHandles: []
+15:04:13 │              React Router │ }
+15:04:13 │              React Router │ [BILLING DEBUG] Plan mapping result: {
+15:04:13 │              React Router │   gid: 'gid://shopify/AppSubscription/33325613252',
+15:04:13 │              React Router │   inferredPlan: 'BASIC',
+15:04:13 │              React Router │   inferredPlanHandle: 'basic'
+15:04:13 │              React Router │ }
+15:04:13 │              React Router │ [BILLING FINANCIAL] provider charge reconciliation: {
+15:04:13 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+15:04:13 │              React Router │   subscriptionGid: 'gid://shopify/AppSubscription/33325613252',
+15:04:13 │              React Router │   providerChargeId: '33325613252',
+15:04:13 │              React Router │   providerChargeStatus: null,
+15:04:13 │              React Router │   providerChargeActivatedAt: null,
+15:04:13 │              React Router │   providerChargeBillingOn: null,
+15:04:13 │              React Router │   providerChargeTest: true
+15:04:13 │              React Router │ }
+15:04:13 │              React Router │ [BILLING MATRIX] reconcile transition: {
+15:04:13 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+15:04:13 │              React Router │   source: 'CALLBACK',
+15:04:13 │              React Router │   gid: 'gid://shopify/AppSubscription/33325613252',
+15:04:13 │              React Router │   previousStatus: 'ACTIVE',
+15:04:13 │              React Router │   subscriptionPreviousStatus: 'ACTIVE',
+15:04:13 │              React Router │   status: 'ACTIVE',
+15:04:13 │              React Router │   previousPlan: 'BASIC',
+15:04:13 │              React Router │   nextPlan: 'BASIC',
+15:04:13 │              React Router │   previousPlanHandle: 'basic',
+15:04:13 │              React Router │   nextPlanHandle: 'basic',
+15:04:13 │              React Router │   trialStatus: 'ACTIVE',
+15:04:13 │              React Router │   cancellationStatus: 'NONE',
+15:04:13 │              React Router │   planChangeStatus: 'PENDING',
+15:04:13 │              React Router │   chargeStatus: 'NONE',
+15:04:13 │              React Router │   paymentStatus: 'NONE',
+15:04:13 │              React Router │   accessStatus: 'BASIC',
+15:04:13 │              React Router │   currentSubscriptionGid: 'gid://shopify/AppSubscription/33325613252',
+15:04:13 │              React Router │   pendingSubscriptionGid: null,
+15:04:13 │              React Router │   pendingPlanHandle: null,
+15:04:13 │              React Router │   shopifyCreatedAt: '2026-10-08T08:04:00.000Z',
+15:04:13 │              React Router │   shopifyUpdatedAt: null
+15:04:13 │              React Router │ }
+15:04:13 │              React Router │ [BILLING BACKEND CONTRACT]
+{"contractVersion":"1.0.0","emittedAt":"2026-10-08T08:04:13.154Z","source":"CALLBACK","sourceOfTruth":"SHOPIFY_ADMIN_API","shop":"billing-tes
+t-shop9.myshopify.com","shopLifecycleStatus":"ACTIVE","pointers":{"currentPlanHandle":"basic","currentSubscriptionGid":"gid://shopify/AppSubs
+cription/33325613252","pendingPlanHandle":null,"pendingSubscriptionGid":null,"pendingChangeAt":null},"current":{"plan":"BASIC","planHandle":"
+basic","subscriptionGid":"gid://shopify/AppSubscription/33325613252","status":"ACTIVE","commercialStatus":"TRIAL","trialStatus":"ACTIVE","can
+cellationStatus":"NONE","planChangeStatus":"PENDING","chargeStatus":"NONE","paymentStatus":"NONE","refundStatus":"NONE","accessStatus":"BASIC
+","reconciliationStatus":"SYNCED","reconciliationReason":null,"trialStartsAt":"2026-10-08T08:04:00.000Z","trialEndsAt":"2026-10-15T08:04:00.0
+00Z","billingPeriodStart":"2026-10-08T08:04:00.000Z","billingPeriodEnd":"2026-11-14T08:04:08.000Z","billingInterval":"EVERY_30_DAYS","price":
+9.9,"currencyCode":"USD","testMode":true,"activatedAt":"2026-10-08T08:04:11.308Z","cancelledAt":null,"frozenAt":null,"lastSyncedAt":"2026-10-
+08T08:04:13.124Z","charge":{"shopifyChargeId":"33325613252","status":"NONE","amount":9.9,"currency":"USD","billingPeriodStart":"2026-10-08T08
+:04:00.000Z","billingPeriodEnd":"2026-11-14T08:04:08.000Z","acceptedAt":"2026-10-08T08:04:11.308Z","paidAt":null,"failedAt":null,"frozenAt":n
+ull},"refund":null},"pending":null,"event":{"type":"BILLING_RECONCILED","occurredAt":"2026-10-08T08:04:13.154Z","payload":{"subscriptionGid":
+"gid://shopify/AppSubscription/33325613252","planHandle":"basic","plan":"BASIC","status":"ACTIVE","previousStatus":"ACTIVE","subscriptionPrev
+iousStatus":"ACTIVE","previousPlanHandle":"basic","replacementStatus":"PENDING","trialStatus":"ACTIVE","cancellationStatus":"NONE","chargeSta
+tus":"NONE","paymentStatus":"NONE","accessStatus":"BASIC"}},"recentEvents":[{"type":"BILLING_RECONCILED","source":"WEBHOOK","subscriptionGid"
+:"gid://shopify/AppSubscription/33325613252","occurredAt":"2026-10-08T08:04:11.345Z"},{"type":"SUBSCRIPTION_UPDATED","source":"WEBHOOK","subs
+criptionGid":"gid://shopify/AppSubscription/33325613252","occurredAt":"2026-10-08T08:04:11.339Z"},{"type":"TRIAL_STARTED","source":"WEBHOOK",
+"subscriptionGid":"gid://shopify/AppSubscription/33325613252","occurredAt":"2026-10-08T08:04:11.334Z"},{"type":"SUBSCRIPTION_APPROVED","sourc
+e":"WEBHOOK","subscriptionGid":"gid://shopify/AppSubscription/33325613252","occurredAt":"2026-10-08T08:04:11.328Z"},{"type":"SUBSCRIPTION_ACT
+IVATED","source":"WEBHOOK","subscriptionGid":"gid://shopify/AppSubscription/33325613252","occurredAt":"2026-10-08T08:04:11.323Z"}]}
+15:04:13 │              React Router │ [COMMERCIAL DEBUG] reconcile:start {
+15:04:13 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+15:04:13 │              React Router │   forceCatalogRefresh: false
+15:04:13 │              React Router │ }
+15:04:13 │              React Router │ [COMMERCIAL DEBUG] entitlement:beforeRecovery {
+15:04:13 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+15:04:13 │              React Router │   plan: 'BASIC',
+15:04:13 │              React Router │   active: true,
+15:04:13 │              React Router │   indexedProducts: 0,
+15:04:13 │              React Router │   productSlotsUsed: 0,
+15:04:13 │              React Router │   catalogProductCount: 0
+15:04:13 │              React Router │ }
+15:04:13 │              React Router │ [PRODUCT POLICY RECONCILE START] {
+15:04:13 │              React Router │   policyVersion: 0,
+15:04:13 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+15:04:13 │              React Router │   effectiveProductLimit: 505,
+15:04:13 │              React Router │   catalogCount: 0,
+15:04:13 │              React Router │   cachedVectorCount: 0,
+15:04:13 │              React Router │   activeCount: 0,
+15:04:13 │              React Router │   blockedCount: 0
+15:04:13 │              React Router │ }
+15:04:13 │              React Router │ [PRODUCT POLICY RECONCILE PLAN] {
+15:04:13 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+15:04:13 │              React Router │   policyVersion: 0,
+15:04:13 │              React Router │   keepActive: 0,
+15:04:13 │              React Router │   deactivate: 0,
+15:04:13 │              React Router │   reactivateReady: 0,
+15:04:13 │              React Router │   requiresReindex: 0,
+15:04:13 │              React Router │   productCapacityReindex: 0,
+15:04:13 │              React Router │   subscriptionRecoveryReindex: 0,
+15:04:13 │              React Router │   quotaControlledReindex: 0
+15:04:13 │              React Router │ }
+15:04:13 │              React Router │ [PRODUCT POLICY RECONCILE DONE] {
+15:04:13 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+15:04:13 │              React Router │   policyVersion: 0,
+15:04:13 │              React Router │   activeBefore: 0,
+15:04:13 │              React Router │   activeAfter: 0,
+15:04:13 │              React Router │   cachedBefore: 0,
+15:04:13 │              React Router │   cachedAfter: 0,
+15:04:13 │              React Router │   blockedAfter: 0,
+15:04:13 │              React Router │   targetLimit: 505
+15:04:13 │              React Router │ }
+15:04:13 │              React Router │ [COMMERCIAL DEBUG] entitlement:afterRecovery {
+15:04:13 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+15:04:13 │              React Router │   plan: 'BASIC',
+15:04:13 │              React Router │   active: true,
+15:04:13 │              React Router │   indexedProducts: 0,
+15:04:13 │              React Router │   productSlotsUsed: 0,
+15:04:13 │              React Router │   catalogProductCount: 0
+15:04:13 │              React Router │ }
+15:04:13 │              React Router │ [COMMERCIAL DEBUG] catalogDecision {
+15:04:13 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+15:04:13 │              React Router │   latestCatalogJobId: 76,
+15:04:13 │              React Router │   latestCatalogStatus: 'DONE',
+15:04:13 │              React Router │   latestCatalogPlan: 'BASIC',
+15:04:13 │              React Router │   needsInitialCatalogSync: false,
+15:04:13 │              React Router │   planNeedsExpansionScan: false,
+15:04:13 │              React Router │   forceCatalogRefresh: false,
+15:04:13 │              React Router │   shouldRefreshCatalog: false
+15:04:13 │              React Router │ }
+15:04:13 │              React Router │ [COMMERCIAL DEBUG] catalogDecision:result { shop: 'billing-test-shop9.myshopify.com', catalogJobId:
+null }
+15:04:13 │              React Router │ [BILLING CALLBACK] synchronous reconciliation complete {
+15:04:13 │              React Router │   debugId: '219dd543',
+15:04:13 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+15:04:13 │              React Router │   chargeId: '33325613252',
+15:04:13 │              React Router │   status: 'ACTIVE',
+15:04:13 │              React Router │   plan: 'BASIC',
+15:04:13 │              React Router │   paymentStatus: 'NONE'
+15:04:13 │              React Router │ }
+15:04:13 │              React Router │ [APP DEBUG] ensureShopFromAdmin:done { debugId: '451f1501', shop: 'billing-test-shop9.myshopify.com' }
+15:04:13 │              React Router │ [BILLING] Shopify subscription verified: {
+15:04:13 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+15:04:13 │              React Router │   expectedSubscriptionGid: null,
+15:04:13 │              React Router │   actualSubscriptionGid: 'gid://shopify/AppSubscription/33325613252',
+15:04:13 │              React Router │   status: 'ACTIVE',
+15:04:13 │              React Router │   name: 'AI Search Basic Plan'
+15:04:13 │              React Router │ }
+15:04:13 │              React Router │ [BILLING DEBUG] Plan mapping inputs: {
+15:04:13 │              React Router │   gid: 'gid://shopify/AppSubscription/33325613252',
+15:04:13 │              React Router │   status: 'ACTIVE',
+15:04:13 │              React Router │   authoritativePlanHandle: undefined,
+15:04:13 │              React Router │   preferredPlanHandle: undefined,
+15:04:13 │              React Router │   persistedPlanHandle: 'basic',
+15:04:13 │              React Router │   persistedPlan: 'BASIC',
+15:04:13 │              React Router │   exactPointerPlanHandle: 'basic',
+15:04:13 │              React Router │   currentSubscriptionGid: 'gid://shopify/AppSubscription/33325613252',
+15:04:13 │              React Router │   pendingSubscriptionGid: null,
+15:04:13 │              React Router │   itemHandles: []
+15:04:13 │              React Router │ }
+15:04:13 │              React Router │ [BILLING DEBUG] Plan mapping result: {
+15:04:13 │              React Router │   gid: 'gid://shopify/AppSubscription/33325613252',
+15:04:13 │              React Router │   inferredPlan: 'BASIC',
+15:04:13 │              React Router │   inferredPlanHandle: 'basic'
+15:04:13 │              React Router │ }
+15:04:13 │              React Router │ [BILLING FINANCIAL] provider charge reconciliation: {
+15:04:13 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+15:04:13 │              React Router │   subscriptionGid: 'gid://shopify/AppSubscription/33325613252',
+15:04:13 │              React Router │   providerChargeId: '33325613252',
+15:04:13 │              React Router │   providerChargeStatus: null,
+15:04:13 │              React Router │   providerChargeActivatedAt: null,
+15:04:13 │              React Router │   providerChargeBillingOn: null,
+15:04:13 │              React Router │   providerChargeTest: true
+15:04:13 │              React Router │ }
+15:04:13 │              React Router │ [BILLING MATRIX] reconcile transition: {
+15:04:13 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+15:04:13 │              React Router │   source: 'CALLBACK',
+15:04:13 │              React Router │   gid: 'gid://shopify/AppSubscription/33325613252',
+15:04:13 │              React Router │   previousStatus: 'ACTIVE',
+15:04:13 │              React Router │   subscriptionPreviousStatus: 'ACTIVE',
+15:04:13 │              React Router │   status: 'ACTIVE',
+15:04:13 │              React Router │   previousPlan: 'BASIC',
+15:04:13 │              React Router │   nextPlan: 'BASIC',
+15:04:13 │              React Router │   previousPlanHandle: 'basic',
+15:04:13 │              React Router │   nextPlanHandle: 'basic',
+15:04:13 │              React Router │   trialStatus: 'ACTIVE',
+15:04:13 │              React Router │   cancellationStatus: 'NONE',
+15:04:13 │              React Router │   planChangeStatus: 'PENDING',
+15:04:13 │              React Router │   chargeStatus: 'NONE',
+15:04:13 │              React Router │   paymentStatus: 'NONE',
+15:04:13 │              React Router │   accessStatus: 'BASIC',
+15:04:13 │              React Router │   currentSubscriptionGid: 'gid://shopify/AppSubscription/33325613252',
+15:04:13 │              React Router │   pendingSubscriptionGid: null,
+15:04:13 │              React Router │   pendingPlanHandle: null,
+15:04:13 │              React Router │   shopifyCreatedAt: '2026-10-08T08:04:00.000Z',
+15:04:13 │              React Router │   shopifyUpdatedAt: null
+15:04:13 │              React Router │ }
+15:04:13 │              React Router │ [BILLING BACKEND CONTRACT]
+{"contractVersion":"1.0.0","emittedAt":"2026-10-08T08:04:13.743Z","source":"CALLBACK","sourceOfTruth":"SHOPIFY_ADMIN_API","shop":"billing-tes
+t-shop9.myshopify.com","shopLifecycleStatus":"ACTIVE","pointers":{"currentPlanHandle":"basic","currentSubscriptionGid":"gid://shopify/AppSubs
+cription/33325613252","pendingPlanHandle":null,"pendingSubscriptionGid":null,"pendingChangeAt":null},"current":{"plan":"BASIC","planHandle":"
+basic","subscriptionGid":"gid://shopify/AppSubscription/33325613252","status":"ACTIVE","commercialStatus":"TRIAL","trialStatus":"ACTIVE","can
+cellationStatus":"NONE","planChangeStatus":"PENDING","chargeStatus":"NONE","paymentStatus":"NONE","refundStatus":"NONE","accessStatus":"BASIC
+","reconciliationStatus":"SYNCED","reconciliationReason":null,"trialStartsAt":"2026-10-08T08:04:00.000Z","trialEndsAt":"2026-10-15T08:04:00.0
+00Z","billingPeriodStart":"2026-10-08T08:04:00.000Z","billingPeriodEnd":"2026-11-14T08:04:08.000Z","billingInterval":"EVERY_30_DAYS","price":
+9.9,"currencyCode":"USD","testMode":true,"activatedAt":"2026-10-08T08:04:11.308Z","cancelledAt":null,"frozenAt":null,"lastSyncedAt":"2026-10-
+08T08:04:13.710Z","charge":{"shopifyChargeId":"33325613252","status":"NONE","amount":9.9,"currency":"USD","billingPeriodStart":"2026-10-08T08
+:04:00.000Z","billingPeriodEnd":"2026-11-14T08:04:08.000Z","acceptedAt":"2026-10-08T08:04:11.308Z","paidAt":null,"failedAt":null,"frozenAt":n
+ull},"refund":null},"pending":null,"event":{"type":"BILLING_RECONCILED","occurredAt":"2026-10-08T08:04:13.743Z","payload":{"subscriptionGid":
+"gid://shopify/AppSubscription/33325613252","planHandle":"basic","plan":"BASIC","status":"ACTIVE","previousStatus":"ACTIVE","subscriptionPrev
+iousStatus":"ACTIVE","previousPlanHandle":"basic","replacementStatus":"PENDING","trialStatus":"ACTIVE","cancellationStatus":"NONE","chargeSta
+tus":"NONE","paymentStatus":"NONE","accessStatus":"BASIC"}},"recentEvents":[{"type":"BILLING_RECONCILED","source":"WEBHOOK","subscriptionGid"
+:"gid://shopify/AppSubscription/33325613252","occurredAt":"2026-10-08T08:04:11.345Z"},{"type":"SUBSCRIPTION_UPDATED","source":"WEBHOOK","subs
+criptionGid":"gid://shopify/AppSubscription/33325613252","occurredAt":"2026-10-08T08:04:11.339Z"},{"type":"TRIAL_STARTED","source":"WEBHOOK",
+"subscriptionGid":"gid://shopify/AppSubscription/33325613252","occurredAt":"2026-10-08T08:04:11.334Z"},{"type":"SUBSCRIPTION_APPROVED","sourc
+e":"WEBHOOK","subscriptionGid":"gid://shopify/AppSubscription/33325613252","occurredAt":"2026-10-08T08:04:11.328Z"},{"type":"SUBSCRIPTION_ACT
+IVATED","source":"WEBHOOK","subscriptionGid":"gid://shopify/AppSubscription/33325613252","occurredAt":"2026-10-08T08:04:11.323Z"}]}
+15:04:13 │              React Router │ [COMMERCIAL DEBUG] reconcile:start {
+15:04:13 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+15:04:13 │              React Router │   forceCatalogRefresh: false
+15:04:13 │              React Router │ }
+15:04:13 │              React Router │ [COMMERCIAL DEBUG] entitlement:beforeRecovery {
+15:04:13 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+15:04:13 │              React Router │   plan: 'BASIC',
+15:04:13 │              React Router │   active: true,
+15:04:13 │              React Router │   indexedProducts: 0,
+15:04:13 │              React Router │   productSlotsUsed: 0,
+15:04:13 │              React Router │   catalogProductCount: 0
+15:04:13 │              React Router │ }
+15:04:13 │              React Router │ [PRODUCT POLICY RECONCILE START] {
+15:04:13 │              React Router │   policyVersion: 0,
+15:04:13 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+15:04:13 │              React Router │   effectiveProductLimit: 505,
+15:04:13 │              React Router │   catalogCount: 0,
+15:04:13 │              React Router │   cachedVectorCount: 0,
+15:04:13 │              React Router │   activeCount: 0,
+15:04:13 │              React Router │   blockedCount: 0
+15:04:13 │              React Router │ }
+15:04:13 │              React Router │ [PRODUCT POLICY RECONCILE PLAN] {
+15:04:13 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+15:04:13 │              React Router │   policyVersion: 0,
+15:04:13 │              React Router │   keepActive: 0,
+15:04:13 │              React Router │   deactivate: 0,
+15:04:13 │              React Router │   reactivateReady: 0,
+15:04:13 │              React Router │   requiresReindex: 0,
+15:04:13 │              React Router │   productCapacityReindex: 0,
+15:04:13 │              React Router │   subscriptionRecoveryReindex: 0,
+15:04:13 │              React Router │   quotaControlledReindex: 0
+15:04:13 │              React Router │ }
+15:04:13 │              React Router │ [PRODUCT POLICY RECONCILE DONE] {
+15:04:13 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+15:04:13 │              React Router │   policyVersion: 0,
+15:04:13 │              React Router │   activeBefore: 0,
+15:04:13 │              React Router │   activeAfter: 0,
+15:04:13 │              React Router │   cachedBefore: 0,
+15:04:13 │              React Router │   cachedAfter: 0,
+15:04:13 │              React Router │   blockedAfter: 0,
+15:04:13 │              React Router │   targetLimit: 505
+15:04:13 │              React Router │ }
+15:04:13 │              React Router │ [COMMERCIAL DEBUG] entitlement:afterRecovery {
+15:04:13 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+15:04:13 │              React Router │   plan: 'BASIC',
+15:04:13 │              React Router │   active: true,
+15:04:13 │              React Router │   indexedProducts: 0,
+15:04:13 │              React Router │   productSlotsUsed: 0,
+15:04:13 │              React Router │   catalogProductCount: 0
+15:04:13 │              React Router │ }
+15:04:13 │              React Router │ [COMMERCIAL DEBUG] catalogDecision {
+15:04:13 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+15:04:13 │              React Router │   latestCatalogJobId: 76,
+15:04:13 │              React Router │   latestCatalogStatus: 'DONE',
+15:04:13 │              React Router │   latestCatalogPlan: 'BASIC',
+15:04:13 │              React Router │   needsInitialCatalogSync: false,
+15:04:13 │              React Router │   planNeedsExpansionScan: false,
+15:04:13 │              React Router │   forceCatalogRefresh: false,
+15:04:13 │              React Router │   shouldRefreshCatalog: false
+15:04:13 │              React Router │ }
+15:04:13 │              React Router │ [COMMERCIAL DEBUG] catalogDecision:result { shop: 'billing-test-shop9.myshopify.com', catalogJobId:
+null }
+15:04:13 │              React Router │ [BILLING CALLBACK] synchronous reconciliation complete {
+15:04:13 │              React Router │   debugId: '805322a9',
+15:04:13 │              React Router │   shop: 'billing-test-shop9.myshopify.com',
+15:04:13 │              React Router │   chargeId: '33325613252',
+15:04:13 │              React Router │   status: 'ACTIVE',
+15:04:13 │              React Router │   plan: 'BASIC',
+15:04:13 │              React Router │   paymentStatus: 'NONE'
