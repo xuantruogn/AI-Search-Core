@@ -2550,27 +2550,43 @@ let resultCacheStatus: "HIT" | "MISS" = "MISS";
           );
       }
 
-      const structuredPrefetchStartedAt = Date.now();
-      const structuredPromise = queryPlan
+      // Measure the actual lifetimes of the independent retrieval promises.
+      // The previous structuredMs used the timestamp at the end of the whole
+      // pipeline, including LLM/context/proof and semantic work, so it could
+      // make an inexpensive structured lookup appear to be the bottleneck.
+      const structuredStartedAt = Date.now();
+      let structuredRetrievalMs = 0;
+      const structuredPromise = (queryPlan
         ? retrieveStructuredCandidates({
             shop: session.shop,
             plan: queryPlan,
             limit: SEARCH_LIMIT,
           })
-        : Promise.resolve([]);
+        : Promise.resolve([])).finally(() => {
+        structuredRetrievalMs = Date.now() - structuredStartedAt;
+      });
+      const lexicalStartedAt = Date.now();
+      let lexicalRetrievalMs = 0;
       const lexicalPromise = retrieveLexicalCandidates({
         shop: session.shop,
         query,
         limit: Math.min(100, SEARCH_LIMIT),
+      }).finally(() => {
+        lexicalRetrievalMs = Date.now() - lexicalStartedAt;
       });
-      const sparsePromise =
+      const sparseStartedAt = Date.now();
+      let sparseRetrievalMs = 0;
+      const sparsePromise = (
         queryPlan?.route === "STRUCTURED_ONLY"
           ? Promise.resolve([])
           : retrieveSparseCandidates({
               shop: session.shop,
               query,
               limit: Math.min(100, SEARCH_LIMIT),
-            });
+            })
+      ).finally(() => {
+        sparseRetrievalMs = Date.now() - sparseStartedAt;
+      });
 
       if (queryPlan) {
         console.log("[AI Search][QUERY PLAN]", {
@@ -2830,7 +2846,9 @@ let resultCacheStatus: "HIT" | "MISS" = "MISS";
       console.log("[AI Search][PARALLEL RETRIEVAL]", {
         shop: session.shop,
         route: queryPlan?.route ?? "LEGACY",
-        structuredMs: Date.now() - structuredPrefetchStartedAt,
+        structuredMs: structuredRetrievalMs,
+        lexicalMs: lexicalRetrievalMs,
+        sparseMs: sparseRetrievalMs,
         finalProof: finalProof?.status ?? "DISABLED",
         resultCount: rawSearchResults.length,
         hybridFusion: hybridFusionDiagnostics,
