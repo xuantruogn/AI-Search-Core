@@ -83,6 +83,14 @@ assert.equal(classifyFamilyProduct(category(
 assert.equal(classifyFamilyProduct(category(
   "Toys & Games > Toys > Toy Vehicles > Cars"), "vehicles").match, false);
 assert.equal(classifyFamilyProduct({
+  canonicalTypes: ["Bicycle Helmet"], merchantTypes: ["Bicycle"],
+  shopifyCategoryPaths: ["Vehicles & Parts > Vehicles > Bicycles"],
+}, "bicycle").match, false, "Wrong Shopify classification cannot turn a helmet into a bicycle");
+assert.equal(classifyFamilyProduct({
+  canonicalTypes: ["Dress Shirt"], merchantTypes: [],
+  shopifyCategoryPaths: ["Apparel & Accessories > Clothing > Dresses"],
+}, "dress_or_skirt").match, false, "Dress shirt does not inherit Dress from mistaken standard category");
+assert.equal(classifyFamilyProduct({
   canonicalTypes: ["Helmet"], merchantTypes: ["Bicycle"], shopifyCategoryPaths: [],
 }, "bicycle").match, false, "Merchant type must not override a helmet identity");
 
