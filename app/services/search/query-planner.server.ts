@@ -1,3 +1,4 @@
+import { isGenericDiscoveryFamily } from "./query-family.server";
 import { matchCatalogTerms } from "./catalog-term-matcher.server";
 import {
   normalizeQueryText,
@@ -492,24 +493,9 @@ async function buildUncachedPlan(
   }));
 
   const identityConstraints = byField("PRODUCT_TYPE");
-  const genericDiscoveryIdentities = new Set([
-    "apparel",
-    "clothing",
-    "fashion",
-    "gear",
-    "equipment",
-    "accessory",
-    "accessories",
-    "outfit",
-    "outfits",
-    "products",
-    "items",
-  ]);
-  const onlyGenericIdentity =
-    identityConstraints.length > 0 &&
-    identityConstraints.every((item) =>
-      genericDiscoveryIdentities.has(normalizeQueryText(item.value)),
-    );
+  const onlyGenericIdentity = identityConstraints.length > 0
+    ? identityConstraints.every((item) => isGenericDiscoveryFamily(item.value))
+    : normalizedQuery.split(" ").some((token) => isGenericDiscoveryFamily(token));
   const hardIdentityIntersection =
     identityConstraints.length === 1 ||
     deterministic.relation === "ALL";
@@ -517,7 +503,7 @@ async function buildUncachedPlan(
     complementaryRelation
       ? "COMPLEMENT"
       : (identityConstraints.length === 0 || onlyGenericIdentity) &&
-          (routed.route === "LIGHT_LLM" || routed.route === "FULL_LLM")
+          (onlyGenericIdentity || routed.route === "LIGHT_LLM" || routed.route === "FULL_LLM")
         ? "DISCOVERY"
         : "DIRECT";
   const resolvedReferenceTerms =
@@ -565,7 +551,7 @@ async function buildUncachedPlan(
     referenceTerms,
     identities: identityConstraints.map((item) => ({
       ...item,
-      mode: hardIdentityIntersection ? "MUST" : "SHOULD",
+      mode: !onlyGenericIdentity && hardIdentityIntersection ? "MUST" : "SHOULD",
     })),
     entities: {
       brands: byField("BRAND"),

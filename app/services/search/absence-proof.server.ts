@@ -6,6 +6,7 @@ import {
   countSemanticProductsForKind,
   findSemanticProductIds,
   semanticPayloadToken,
+  loadShopSemanticRows,
 } from "./product-semantic-profile.server";
 import {
   countProductsBySemanticKind,
@@ -165,6 +166,27 @@ async function enrichmentCoverage(
   return count === expected;
 }
 
+/** Enrichment/payload completeness describes indexing, not source truth.
+ * The current PSF has no source-field completeness manifest for LLM-enriched
+ * model, compatibility or measurement facts. Missing values stay UNKNOWN.
+ * Shopify identifiers/vendor can prove absence only with typed field coverage.
+ */
+async function closedWorldSourceCoverage(
+  shop: string,
+  item: ProofConstraint,
+  productIds: string[] | null,
+  searchableCount: number,
+) {
+  if (item.requiresEnrichment) return false;
+  if (!["CODE", "DICTIONARY"].includes(item.constraint.source)) return false;
+  const rows = await loadShopSemanticRows(shop);
+  const scope = productIds ? new Set(productIds) : null;
+  const covered = new Set(rows.filter((row) =>
+    item.kinds.includes(row.kind) && (!scope || scope.has(row.productId)),
+  ).map((row) => row.productId));
+  return covered.size === (scope?.size ?? searchableCount);
+}
+
 export async function proveNoResult(args: {
   shop: string;
   plan: QueryPlan;
@@ -242,8 +264,6 @@ export async function proveNoResult(args: {
     try {
       const groups: string[][] = [];
       let candidateCount = searchableCount;
-      let globalEnrichmentComplete: boolean | null =
-        identities.length > 0 ? currentEnrichmentComplete : null;
       let cumulativeProofComplete =
         identities.length > 0 ? identityProofComplete : true;
 
@@ -275,17 +295,9 @@ export async function proveNoResult(args: {
       }
 
       for (const item of closedWorldConstraints) {
-        let coverageComplete = true;
-        if (item.requiresEnrichment) {
-          if (globalEnrichmentComplete === null) {
-            globalEnrichmentComplete = await enrichmentCoverage(
-              args.shop,
-              null,
-              searchableCount,
-            );
-          }
-          coverageComplete = globalEnrichmentComplete;
-        }
+        const coverageComplete = await closedWorldSourceCoverage(
+          args.shop, item, null, searchableCount,
+        );
 
         cumulativeProofComplete =
           cumulativeProofComplete &&
@@ -313,7 +325,7 @@ export async function proveNoResult(args: {
               : `${item.label.toUpperCase()}_COVERAGE_INCOMPLETE`,
             durationMs: Date.now() - startedAt,
             candidateCount: 0,
-            coverageComplete,
+            coverageComplete: cumulativeProofComplete,
             evidence,
           };
         }
@@ -368,9 +380,9 @@ export async function proveNoResult(args: {
 
   for (const item of closedWorldConstraints) {
     const candidateIds = candidates ? [...candidates] : null;
-    const coverageComplete = item.requiresEnrichment
-      ? await enrichmentCoverage(args.shop, candidateIds, searchableCount)
-      : true;
+    const coverageComplete = await closedWorldSourceCoverage(
+      args.shop, item, candidateIds, searchableCount,
+    );
     cumulativeProofComplete =
       cumulativeProofComplete &&
       coverageComplete &&
@@ -391,7 +403,7 @@ export async function proveNoResult(args: {
           : `${item.label.toUpperCase()}_COVERAGE_INCOMPLETE`,
         durationMs: Date.now() - startedAt,
         candidateCount: 0,
-        coverageComplete,
+        coverageComplete: cumulativeProofComplete,
         evidence,
       };
     }
@@ -406,7 +418,7 @@ export async function proveNoResult(args: {
           : "MUST_COVERAGE_INCOMPLETE",
         durationMs: Date.now() - startedAt,
         candidateCount: 0,
-        coverageComplete,
+        coverageComplete: cumulativeProofComplete,
         evidence,
       };
     }

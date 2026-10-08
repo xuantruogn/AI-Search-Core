@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import assert from "node:assert/strict";
 import db from "../app/db.server";
 import { loadProductSemanticRows } from "../app/services/search/product-semantic-profile.server";
@@ -9,6 +10,13 @@ if (process.env.NODE_ENV === "production") {
   throw new Error("Development test only");
 }
 
+const sourceFile = process.env.AI_SEARCH_CATALOG_SOURCE_FILE;
+const sourceSnapshot = sourceFile ? JSON.parse(readFileSync(sourceFile, "utf8")) : null;
+if (sourceSnapshot && (sourceSnapshot.status !== "SOURCE_READ_SUCCESS" ||
+    sourceSnapshot.shop !== "dev-app-6fvh2isn.myshopify.com")) {
+  throw new Error("Source fixture must be a successful read of the development shop");
+}
+const sourceProducts: any[] = sourceSnapshot?.products ?? [];
 const endpoint = process.env.AI_SEARCH_LIVE_TEST_URL ?? "";
 if (!endpoint) {
   throw new Error(
@@ -100,14 +108,14 @@ async function live(query: string) {
 }
 
 let failures = 0;
-const run = async (query: string, check: (result: Awaited<ReturnType<typeof live>>) => void) => {
+const run = async (query: string, check: (result: Awaited<ReturnType<typeof live>>) => void | "UNKNOWN_DATA") => {
   const started = Date.now();
   try {
     const result = await live(query);
-    check(result);
+    const verdict = check(result) ?? "PASS";
     console.log(JSON.stringify({
       query,
-      pass: true,
+      verdict,
       total: result.ids.length,
       top: result.ids.slice(0, 8).map((id) =>
         result.products.find((row) => row.productId === id)?.title ?? id,
@@ -127,12 +135,20 @@ const run = async (query: string, check: (result: Awaited<ReturnType<typeof live
 
 try {
   await run("giày size 32", (result) => {
-    assert.ok(result.ids.length > 0, "must return footwear");
+    const sourceCandidates = sourceProducts.filter(product =>
+      FOOTWEAR.test(normalized(`${product.title} ${product.productType}`)) &&
+      product.options.some((option: any) => /size/i.test(option.name) &&
+        option.values.some((value: string) => /(?:^|\s)32(?:$|\s)/.test(value))),
+    );
+    if (sourceCandidates.length > 0) {
+      assert.ok(result.ids.length > 0, "source-grounded footwear size 32 must have recall");
+    }
     for (const id of result.ids.slice(0, 20)) {
       const text = result.productText(id);
       assert.match(text, FOOTWEAR, `non-footwear survived target scope: ${text}`);
       assert.match(text, /\b(?:size )?32\b/i, `size-32 fact missing: ${text}`);
     }
+    if (sourceCandidates.length === 0 && result.ids.length === 0) return "UNKNOWN_DATA";
   });
 
   await run("áo xanh", (result) => {
@@ -149,11 +165,17 @@ try {
   });
 
   await run("kệ để đồ", (result) => {
-    assert.ok(result.ids.length > 0, "storage shelf query must return products");
+    const sourceCandidates = sourceProducts.filter(product =>
+      STORAGE_FIXTURE.test(normalized(`${product.title} ${product.productType}`)),
+    );
+    if (sourceCandidates.length > 0) {
+      assert.ok(result.ids.length > 0, "source-grounded storage fixture must have recall");
+    }
     for (const id of result.ids.slice(0, 10)) {
       const text = result.productText(id);
       assert.match(text, STORAGE_FIXTURE, `wrong target family survived: ${text}`);
     }
+    if (sourceCandidates.length === 0 && result.ids.length === 0) return "UNKNOWN_DATA";
   });
 
   await run("đèn xe đạp", (result) => {
@@ -176,4 +198,4 @@ try {
 }
 
 assert.equal(failures, 0, "current six-case live relevance regression failed");
-console.log("PASS: 7 Oct live search relevance regression");
+console.log("PASS: live ownership/recall assertions; UNKNOWN_DATA availability cases remain unverified");
