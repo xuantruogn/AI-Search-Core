@@ -117,10 +117,12 @@ export async function prepareParallelQueryPipeline(args: {
       rawPlan,
       profile,
       rawProof,
-      finalProof: safeProveNoResult({
-        shop: args.shop,
-        plan: rawPlan,
-        phase: "FINAL",
+      // No LLM/pass-2 mutation occurred. The FINAL constraints are literally
+      // the RAW plan, so a second catalog proof would repeat the same Qdrant
+      // counts/profile scan with no possibility of changing the answer.
+      finalProof: Promise.resolve({
+        ...rawProof,
+        phase: "FINAL" as const,
       }),
       earlyNoResult: false,
       timing: {
