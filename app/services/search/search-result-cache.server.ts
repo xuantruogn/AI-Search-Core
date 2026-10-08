@@ -29,6 +29,7 @@ export interface CachedRankedProduct {
   score: number;
   vectorSimilarity?: number;
   primaryVectorSimilarity?: number;
+  matchedVariantId?: string;
 }
 
 export interface CachedSearchResult {
@@ -56,7 +57,7 @@ const MIN_TTL_MS = 60 * 1000;
 const DEFAULT_QUERY_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const MAX_RECEIPT_TTL_MS = 24 * 60 * 60 * 1000;
 const FULL_SEARCH_CACHE_PIPELINE_VERSION =
-  "full-search-cache-v90-complete-family-coverage-2026-10-08";
+  "full-search-cache-v91-variant-color-conjunction-2026-10-08";
 
 export type CachedSearchSortIntent =
   | "RELEVANCE"
@@ -127,6 +128,11 @@ export function normalizeRankedProducts(products: CachedRankedProduct[]) {
         typeof product.primaryVectorSimilarity === "number" &&
         Number.isFinite(product.primaryVectorSimilarity)
           ? product.primaryVectorSimilarity
+          : undefined,
+      matchedVariantId:
+        typeof product.matchedVariantId === "string" &&
+        /^gid:\/\/shopify\/ProductVariant\/\d+$/.test(product.matchedVariantId)
+          ? product.matchedVariantId
           : undefined,
     });
   }
@@ -402,12 +408,18 @@ export function parseProducts(value: string): CachedRankedProduct[] | null {
         Number.isFinite(row.primaryVectorSimilarity)
           ? row.primaryVectorSimilarity
           : undefined;
+      const matchedVariantId =
+        typeof row.matchedVariantId === "string" &&
+        /^gid:\/\/shopify\/ProductVariant\/\d+$/.test(row.matchedVariantId)
+          ? row.matchedVariantId
+          : undefined;
       products.push({
         productId: row.productId,
         handle: row.handle,
         score: row.score,
         ...(vectorSimilarity !== undefined ? { vectorSimilarity } : {}),
         ...(primaryVectorSimilarity !== undefined ? { primaryVectorSimilarity } : {}),
+        ...(matchedVariantId ? { matchedVariantId } : {}),
       });
     }
     return products;
