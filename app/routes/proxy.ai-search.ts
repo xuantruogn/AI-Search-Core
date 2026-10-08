@@ -2751,7 +2751,7 @@ let resultCacheStatus: "HIT" | "MISS" = "MISS";
         ? await finalAbsenceProofPromise
         : null;
       const proofBasedNoResult =
-        finalProof?.status === "CERTAIN_NO_RESULT";
+        finalProof?.status === "CERTAIN_NO_RESULT" && !completeFamilyLookup;
 
       let rawSearchResults: Awaited<ReturnType<typeof semanticSearch>>;
 
