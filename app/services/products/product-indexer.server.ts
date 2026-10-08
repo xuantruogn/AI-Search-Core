@@ -1181,6 +1181,7 @@ export async function indexProduct({
       productId: product.id,
       analysis: embeddingInput.analysis,
       terms: preparedSemanticTerms,
+      variants: product.variants,
     });
 
     await updateIndexedProductEnrichmentState({
