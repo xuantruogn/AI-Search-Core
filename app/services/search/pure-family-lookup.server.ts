@@ -68,9 +68,13 @@ export function classifyPureFamilyLookup(
 
   const target = targets[0];
   if (plan.retrievalMode === "DISCOVERY" && !BROAD_CATEGORY_IDENTITIES.has(target)) return null;
+  // The merged two-pass plan may contain a canonical translated identity
+  // span as well as the source span. Permit that ONE source-aligned translation,
+  // but never permit an extra attribute/context or sibling class.
   const permittedRawSegments = plan.resolvedSegments.every((span) =>
     ["PRODUCT_TYPE", "ALIAS", "CATEGORY"].includes(span.field) &&
-    normalizeQueryText(span.text) === source
+    (normalizeQueryText(span.text) === source ||
+      (sourceAligned.length === 1 && normalizeQueryText(span.canonicalValue) === target))
   );
   if (!permittedRawSegments) return null;
   // An unresolved source remainder is valid only if the LLM explicitly
