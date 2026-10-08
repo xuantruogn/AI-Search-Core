@@ -232,4 +232,54 @@ assert.equal(actual.scannedProfiles, 1200);
 assert.equal(actual.categoryMatches, 800);
 assert.equal(new Set(actual.results.map((x) => x.productId)).size, 800);
 
-console.log("PASS: source-owned family taxonomy, cross-language Dress/Skirt union, Shopify category and >500 coverage");
+// Generic catalog family must also bypass Top-K and reject accessory descendants.
+const shoePlan = plan("shoes", "shoes");
+shoePlan.resolvedSegments = [{
+  text: "shoes", canonicalValue: "Shoes", field: "PRODUCT_TYPE", confidence: 0.97,
+}];
+const shoeRows = [
+  ...Array.from({ length: 700 }, (_, i) => ({
+    productId: "shoe-" + i,
+    terms: [{
+      kind: "SHOPIFY_CATEGORY_PATH",
+      value: i % 2
+        ? "Apparel & Accessories > Shoes > Athletic Shoes"
+        : "Apparel & Accessories > Shoes > Boots",
+    }],
+  })),
+  ...Array.from({ length: 160 }, (_, i) => ({
+    productId: "shoe-accessory-" + i,
+    terms: [{
+      kind: "SHOPIFY_CATEGORY_PATH",
+      value: "Apparel & Accessories > Clothing Accessories > Shoe Accessories",
+    }],
+  })),
+];
+const genericComplete = await retrieveCompleteFamilyCandidates({
+  shop: "fixture.myshopify.com",
+  plan: shoePlan,
+  rewrite: noisyRewrite,
+}, {
+  scanProfiles: async (_shop, visit) => {
+    for (const row of shoeRows) {
+      await visit({
+        productId: row.productId,
+        terms: row.terms.map((term) => ({
+          ...term, normalizedValue: term.value.toLowerCase(),
+        })),
+        updatedAt: new Date(),
+      });
+    }
+    return shoeRows.length;
+  },
+  findRegistry: async (_shop, ids) => ids.map((productId) => ({
+    productId, handle: productId, title: productId,
+  })),
+});
+assert.ok(genericComplete);
+assert.equal(genericComplete.scannedProfiles, 860);
+assert.equal(genericComplete.matchedProfiles, 700);
+assert.equal(genericComplete.searchableProducts, 700);
+assert.equal(genericComplete.results.some((x) => x.productId.startsWith("shoe-accessory-")), false);
+
+console.log("PASS: source-owned and catalog-wide family taxonomy, >500 coverage, accessory exclusion");
