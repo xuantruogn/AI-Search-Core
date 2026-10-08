@@ -222,7 +222,7 @@ export function buildShopContextLookupIndex(terms: ContextTerm[]): ShopContextLo
 
   for (const term of terms) {
     if (term.kind === "ATTRIBUTE" || term.kind === "VARIANT_OPTION") {
-      const typedColor = term.value.match(/^\s*colou?r\s*[=:]\s*(.+?)\s*$/i);
+      const typedColor = term.value.match(/^\s*(?:colou?r|màu|mau|couleur|farbe|shade)\s*[=:]\s*(.+?)\s*$/i);
       if (typedColor) typedColorVocabulary.add(normalizeContextTerm(typedColor[1]));
     }
     const kindList = byKind.get(term.kind) ?? [];
@@ -2963,7 +2963,7 @@ export async function filterResultsByExplicitGender<
     ? new Set(indexedColors)
     : new Set(
         catalogRows.flatMap((row) => {
-          const match = row.value.match(/^\s*colou?r\s*[=:]\s*(.+?)\s*$/i);
+          const match = row.value.match(/^\s*(?:colou?r|màu|mau|couleur|farbe|shade)\s*[=:]\s*(.+?)\s*$/i);
           return match ? [normalizeContextTerm(match[1])] : [];
         }),
       );
@@ -2975,7 +2975,7 @@ export async function filterResultsByExplicitGender<
   const colorsByProduct = new Map<string, string[]>();
   for (const row of rows) {
     if (!["ATTRIBUTE", "VARIANT_OPTION"].includes(row.kind)) continue;
-    const match = row.value.match(/^\s*colou?r\s*[=:]\s*(.+?)\s*$/i);
+    const match = row.value.match(/^\s*(?:colou?r|màu|mau|couleur|farbe|shade)\s*[=:]\s*(.+?)\s*$/i);
     if (!match) continue;
     colorsByProduct.set(row.productId, [
       ...(colorsByProduct.get(row.productId) ?? []),
