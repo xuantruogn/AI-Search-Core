@@ -96,9 +96,11 @@ export function classifyVerifiedFamilyMember(
   terms: FamilyTerm[],
   target: PureFamilyTarget,
 ): "EXACT" | "SUBTYPE" | "CATEGORY" | null {
-  const typed = terms.filter((term) =>
-    ["CANONICAL_PRODUCT_TYPE", "PRODUCT_TYPE"].includes(term.kind)
-  );
+  // The exact sold-item canonical type outranks a loose merchant productType.
+  // A helmet with productType=Bicycle is still a helmet, not a bicycle.
+  const canonical = terms.filter((term) => term.kind === "CANONICAL_PRODUCT_TYPE");
+  const typed = canonical.length > 0 ? canonical
+    : terms.filter((term) => term.kind === "PRODUCT_TYPE");
   if (!typed.length) return null;
   const exact = typed.some((term) =>
     normalizeQueryText(term.value) === normalizeQueryText(target.canonical)
@@ -127,12 +129,15 @@ export async function retrieveCompleteFamilyCandidates(args: {
   shop: string;
   plan: QueryPlan | null;
   rewrite: QueryRewriteResult;
-}): Promise<FamilyCoverage | null> {
+}, dependencies: {
+  scanProfiles?: typeof scanShopSemanticProfiles;
+  findRegistry?: typeof listSearchableIndexedProducts;
+} = {}): Promise<FamilyCoverage | null> {
   const target = classifyPureFamilyLookup(args.plan, args.rewrite);
   if (!target) return null;
   const matched: Array<{ productId: string; grade: "EXACT" | "SUBTYPE" | "CATEGORY" }> = [];
   let scannedProfiles = 0;
-  await scanShopSemanticProfiles(args.shop, ({ productId, terms }) => {
+  await (dependencies.scanProfiles ?? scanShopSemanticProfiles)(args.shop, ({ productId, terms }) => {
     scannedProfiles += 1;
     const grade = classifyVerifiedFamilyMember(terms, target);
     if (grade) matched.push({ productId, grade });
@@ -143,7 +148,7 @@ export async function retrieveCompleteFamilyCandidates(args: {
 
   const registry = new Map<string, { productId: string; title: string; handle: string }>();
   for (let offset = 0; offset < matched.length; offset += 300) {
-    const batch = await listSearchableIndexedProducts(
+    const batch = await (dependencies.findRegistry ?? listSearchableIndexedProducts)(
       args.shop, matched.slice(offset, offset + 300).map((row) => row.productId),
     );
     for (const row of batch) registry.set(row.productId, row);
