@@ -121,6 +121,8 @@ function getCommercialStatus(
   if (status === "ACTIVE") return trialStatus === "ACTIVE" ? "TRIAL" : "PAID";
   if (
     status === "CANCELLED" &&
+    trialStatus !== "ACTIVE" &&
+    trialStatus !== "CANCELLED" &&
     currentPeriodEndsAt &&
     currentPeriodEndsAt > new Date()
   ) {
@@ -134,12 +136,14 @@ function getAccessStatus(
   plan: AiSearchPlan,
   cancellationStatus: BillingCancellationStatus = "NONE",
   currentPeriodEndsAt: Date | null = null,
+  trialStatus: BillingTrialStatus = "NONE",
 ): BillingAccessStatus {
   if (status === "FROZEN") return "SUSPENDED";
   const accessWindowActive =
     status === "ACTIVE" ||
     (
       status === "CANCELLED" &&
+      cancellationStatus !== "NONE" &&
       currentPeriodEndsAt &&
       currentPeriodEndsAt > new Date()
     );
