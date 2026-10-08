@@ -157,7 +157,7 @@ function enforceCacheBudget() {
 
 function mapKind(kind: string): DictionaryField | null {
   if (["PRODUCT_TYPE", "CANONICAL_PRODUCT_TYPE"].includes(kind)) return "PRODUCT_TYPE";
-  if (kind === "CATEGORY") return "CATEGORY";
+  if (kind === "CATEGORY" || kind === "SHOPIFY_CATEGORY_PATH") return "CATEGORY";
   if (["VENDOR", "BRAND"].includes(kind)) return "BRAND";
   if (kind === "MODEL") return "MODEL";
   if (["SKU", "BARCODE", "IDENTIFIER"].includes(kind)) return "IDENTIFIER";
@@ -207,21 +207,16 @@ async function loadShopSearchDictionaryUncached(
   // between the dictionary and Shop Context modules.
   const { getShopContextCatalogTerms } = await import("./shop-context-index.server");
   const catalogSnapshot = await getShopContextCatalogTerms(shop);
-  for (const row of catalogSnapshot.terms) {
-    const field = mapKind(row.kind);
-    if (!field) continue;
-    const normalized = normalizeQueryText(row.normalizedValue || row.value);
-    if (!normalized) continue;
-
-    const canonical = row.value;
+  const addDictionaryValue = (row: typeof catalogSnapshot.terms[number], field: DictionaryField, canonical: string) => {
+    const normalized = normalizeQueryText(canonical);
+    if (!normalized) return;
     const canonicalNormalized = normalizeQueryText(canonical);
     const key = `${field}\u0000${normalized}\u0000${canonicalNormalized}`;
     const existing = grouped.get(key);
     if (existing) {
       for (const productId of row.productIds) existing.productIds.add(productId);
-      continue;
+      return;
     }
-
     grouped.set(key, {
       normalized,
       canonical,
@@ -234,19 +229,24 @@ async function loadShopSearchDictionaryUncached(
         .digest("hex")
         .slice(0, 24),
       aliasLanguage: null,
-      source: [
-        "PRODUCT_TYPE",
-        "VENDOR",
-        "SKU",
-        "BARCODE",
-        "TAG",
-        "VARIANT",
-        "VARIANT_OPTION",
-      ].includes(row.kind)
-        ? "SHOPIFY"
-        : "ENRICHMENT",
+      source: row.kind === "SHOPIFY_CATEGORY_PATH" || [
+        "PRODUCT_TYPE", "VENDOR", "SKU", "BARCODE", "TAG", "VARIANT", "VARIANT_OPTION",
+      ].includes(row.kind) ? "SHOPIFY" : "ENRICHMENT",
       confidence: confidenceForKind(row.kind, normalized),
     });
+  };
+
+  for (const row of catalogSnapshot.terms) {
+    const field = mapKind(row.kind);
+    if (!field) continue;
+    if (row.kind === "SHOPIFY_CATEGORY_PATH") {
+      // Make every typed taxonomy node searchable independently: a product in
+      // Jewelry > Rings must contribute to both "Jewelry" and "Rings".
+      const segments = row.value.split(/\s*(?:>|»)\s*/).map((v) => v.trim()).filter(Boolean);
+      for (const segment of segments) addDictionaryValue(row, field, segment);
+      continue;
+    }
+    addDictionaryValue(row, field, row.value);
   }
 
   const entries = [...grouped.values()].map(({ productIds, ...entry }) => ({
