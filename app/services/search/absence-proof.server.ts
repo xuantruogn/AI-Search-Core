@@ -172,14 +172,14 @@ async function enrichmentCoverage(
  * Shopify identifiers/vendor can prove absence only with typed field coverage.
  */
 async function closedWorldSourceCoverage(
-  shop: string,
   item: ProofConstraint,
   productIds: string[] | null,
   searchableCount: number,
+  loadRows: () => ReturnType<typeof loadShopSemanticRows>,
 ) {
   if (item.requiresEnrichment) return false;
   if (!["CODE", "DICTIONARY"].includes(item.constraint.source)) return false;
-  const rows = await loadShopSemanticRows(shop);
+  const rows = await loadRows();
   const scope = productIds ? new Set(productIds) : null;
   const covered = new Set(rows.filter((row) =>
     item.kinds.includes(row.kind) && (!scope || scope.has(row.productId)),
@@ -247,6 +247,13 @@ export async function proveNoResult(args: {
   }
 
   const evidence: string[] = [];
+  // Typed source coverage may be checked repeatedly within one proof.
+  // Reuse the same profile load even when the catalog exceeds cache limits.
+  let coverageRowsPromise: ReturnType<typeof loadShopSemanticRows> | null = null;
+  const getCoverageRows = () => {
+    coverageRowsPromise ??= loadShopSemanticRows(args.shop);
+    return coverageRowsPromise;
+  };
 
   let semanticPayloadCoverageComplete = false;
   try {
@@ -316,7 +323,7 @@ export async function proveNoResult(args: {
 
       for (const item of closedWorldConstraints) {
         const coverageComplete = await closedWorldSourceCoverage(
-          args.shop, item, null, searchableCount,
+          item, null, searchableCount, getCoverageRows,
         );
 
         cumulativeProofComplete =
@@ -401,7 +408,7 @@ export async function proveNoResult(args: {
   for (const item of closedWorldConstraints) {
     const candidateIds = candidates ? [...candidates] : null;
     const coverageComplete = await closedWorldSourceCoverage(
-      args.shop, item, candidateIds, searchableCount,
+      item, candidateIds, searchableCount, getCoverageRows,
     );
     cumulativeProofComplete =
       cumulativeProofComplete &&
