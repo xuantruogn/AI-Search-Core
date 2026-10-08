@@ -196,7 +196,7 @@ function meaningfulTokens(value: string) {
     .filter((token) => token.length >= 2 && !VI_STOP_WORDS.has(token));
 }
 
-function buildShopContextLookupIndex(terms: ContextTerm[]): ShopContextLookupIndex {
+export function buildShopContextLookupIndex(terms: ContextTerm[]): ShopContextLookupIndex {
   const byToken = new Map<string, ContextTerm[]>();
   const byKind = new Map<string, ContextTerm[]>();
   const byNormalized = new Map<string, ContextTerm[]>();
@@ -299,6 +299,29 @@ function candidateIdentityContextTerms(
     }
   }
   return [...candidates];
+}
+
+/**
+ * All terms capable of scoring in the shop-context pass. Exact matches,
+ * direct source/signal token overlap, source-owned semantic MUST values and
+ * expansion leaf morphology are captured by the prebuilt inverted index.
+ * Unrelated terms have score zero and need no per-query scoring/filter work.
+ */
+export function selectContextScoreCandidates(
+  index: ShopContextLookupIndex,
+  signalValues: string[],
+  semanticMustFacetTokens: Iterable<string>,
+  discoveryExpansionValues: string[],
+) {
+  return [...new Set([
+    ...candidateContextTerms(index, signalValues),
+    ...[...semanticMustFacetTokens].flatMap((token) =>
+      index.byNormalized.get(token) ?? [],
+    ),
+    ...(discoveryExpansionValues.length > 0
+      ? candidateIdentityContextTerms(index, discoveryExpansionValues)
+      : []),
+  ])];
 }
 
 const GENERIC_DISCOVERY_LEAF_TOKENS = new Set([
@@ -1510,15 +1533,14 @@ export async function applyShopContextToQuery({
   // or an expansion-grounded discovery leaf (including plural morphology).
   // Scanning every catalog term here was O(shop vocabulary × query signals)
   // even on warm cache hits.
-  const contextTermCandidates = skipContextEnrichment ? [] : [...new Set([
-    ...candidateContextTerms(contextIndex, signals.map((signal) => signal.normalized)),
-    ...[...semanticMustFacetTokens].flatMap(
-      (token) => contextIndex.byNormalized.get(token) ?? [],
-    ),
-    ...(currentContextRetrievalMode === "DISCOVERY"
-      ? candidateIdentityContextTerms(contextIndex, discoveryExpansionValues)
-      : []),
-  ])];
+  const contextTermCandidates = skipContextEnrichment
+    ? []
+    : selectContextScoreCandidates(
+        contextIndex,
+        signals.map((signal) => signal.normalized),
+        semanticMustFacetTokens,
+        currentContextRetrievalMode === "DISCOVERY" ? discoveryExpansionValues : [],
+      );
   const scoredTerms = skipContextEnrichment
     ? []
     : contextTermCandidates
