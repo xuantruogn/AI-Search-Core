@@ -93,8 +93,8 @@ assert.deepEqual(
     ],
     exactConstraints: ["white"],
   }),
-  ["shirt"],
-  "exact modifier may wrap, but must not replace, the source-owned target noun",
+  ["upper body clothing"],
+  "exact modifier must preserve the breadth of the source-owned áo noun, not narrow it to shirt",
 );
 
 assert.deepEqual(

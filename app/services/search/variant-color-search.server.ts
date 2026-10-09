@@ -3,6 +3,7 @@ import { normalizeSemanticValue } from "./semantic-normalization.server";
 import { currentTargetColors } from "./shop-context-index.server";
 import {
   loadProductVariantSelections,
+  loadProductSemanticRows,
   type IndexedVariantSelection,
 } from "./product-semantic-profile.server";
 import { parseDeterministicQuery } from "./deterministic-query-parser.server";
@@ -25,6 +26,44 @@ function canonicalColor(raw: string): string {
   const key = normalizeSemanticValue(raw);
   const mapped = TRANSLATED_COLORS[key] ?? key;
   return mapped === "grey" ? "gray" : mapped;
+}
+
+// Base-color requests can include explicit shades/patterns, not arbitrary
+// merchant shade names. Specific shades remain exact (navy != sky blue).
+const BASE_COLORS = new Set(['red', 'blue', 'green', 'black', 'white', 'yellow', 'pink', 'purple', 'orange', 'brown', 'gray']);
+const SHADE_FAMILIES: Record<string, string> = {
+  navy: 'blue', maroon: 'red', burgundy: 'red', olive: 'green', charcoal: 'gray',
+  cream: 'white', ivory: 'white', rose: 'pink', tan: 'brown', beige: 'brown', khaki: 'brown',
+};
+export function compareTypedColor(actual: string, requested: string): 'MATCH' | 'MISMATCH' | 'UNKNOWN' {
+  const value = canonicalColor(actual), target = canonicalColor(requested);
+  if (value === target) return 'MATCH';
+  const tokens = value.split(' ');
+  // Preserve a named shade inside a pattern/composite without equating it
+  // with another shade (Navy/White contains Navy, Sky Blue does not).
+  if (!BASE_COLORS.has(target)) return (` ${value} `.includes(` ${target} `)) ? 'MATCH' : 'MISMATCH';
+  const families = tokens.map(token => SHADE_FAMILIES[token] ?? token).filter(token => BASE_COLORS.has(token));
+  if (families.includes(target)) return 'MATCH';
+  return families.length ? 'MISMATCH' : 'UNKNOWN';
+}
+
+export function verifyTypedProductColor(
+  terms: Array<{ kind: string; value: string }>, request: VariantRequest,
+): VariantProductVerdict {
+  const readColors = (kind: string) => terms.filter(t => t.kind === kind).flatMap(t => {
+    const match = t.value.match(/^\s*(.+?)\s*[=:]\s*(.+?)\s*$/);
+    return match && COLOR_OPTION_NAME.test(normalizeSemanticValue(match[1])) ? [match[2]] : [];
+  });
+  const optionColors = readColors('VARIANT_OPTION');
+  // Raw Shopify options outrank possibly stale/enriched ATTRIBUTE colors.
+  const colors = optionColors.length ? optionColors : readColors('ATTRIBUTE');
+  if (!colors.length) return { state: 'UNKNOWN' };
+  const verdicts = colors.map(value => compareTypedColor(value, request.color));
+  if (verdicts.includes('MATCH')) {
+    // Product-level facets cannot prove color+size share one variant.
+    return request.size === null ? { state: 'COLOR_MATCH' } : { state: 'UNKNOWN' };
+  }
+  return verdicts.includes('UNKNOWN') ? { state: 'UNKNOWN' } : { state: 'MISMATCH' };
 }
 function canonicalSize(raw: string): string {
   const value = normalizeSemanticValue(raw)
@@ -52,6 +91,7 @@ export function requestedVariantFacets(
   const vocabulary = new Set([
     ...typedColors.map(normalizeSemanticValue),
     ...typedColors.map(canonicalColor),
+    ...typedColors.flatMap(v => canonicalColor(v).split(' ').filter(t => BASE_COLORS.has(t) || Boolean(SHADE_FAMILIES[t]))),
   ]);
   if (!vocabulary.size) return null;
   // Trust only source-owned catalog color signals. The palette is built
@@ -95,6 +135,7 @@ function valueOfOption(variant: IndexedVariantSelection, name: RegExp) {
 
 export type VariantProductVerdict =
   | { state: "MATCH"; variantId: string }
+  | { state: "COLOR_MATCH" }
   | { state: "MISMATCH" }
   | { state: "UNKNOWN" };
 
@@ -105,23 +146,30 @@ export function verifyVariantColorAndSize(
 ): VariantProductVerdict {
   if (!variants.length) return { state: "UNKNOWN" };
   let hasTypedColor = false;
+  let unknownMatch = false;
   for (const variant of variants) {
     const colors = valueOfOption(variant, COLOR_OPTION_NAME);
     if (colors.length) hasTypedColor = true;
-    if (!colors.some((v) => canonicalColor(v) === request.color)) continue;
+    if (!colors.length) { unknownMatch = true; continue; }
+    const verdicts = colors.map(v => compareTypedColor(v, request.color));
+    if (!verdicts.includes('MATCH')) {
+      if (verdicts.includes('UNKNOWN')) unknownMatch = true;
+      continue;
+    }
     if (request.size !== null) {
       const sizes = valueOfOption(variant, SIZE_OPTION_NAME);
-      if (!sizes.length) continue;
+      if (!sizes.length) { unknownMatch = true; continue; }
       if (!sizes.some((v) => canonicalSize(v) === request.size)) continue;
     }
     return { state: "MATCH", variantId: variant.id };
   }
-  return { state: hasTypedColor ? "MISMATCH" : "UNKNOWN" };
+  return { state: hasTypedColor && !unknownMatch ? "MISMATCH" : "UNKNOWN" };
 }
 
 export type VariantColorDiagnostics = {
   request: VariantRequest | null;
   verifiedMatches: number;
+  typedColorMatches: number;
   incompatible: number;
   unknown: number;
   removed: number;
@@ -138,11 +186,12 @@ export async function rankByVerifiedVariantColor<
     onDiagnostics?: (value: VariantColorDiagnostics) => void;
   },
   loadSelections: typeof loadProductVariantSelections = loadProductVariantSelections,
+  loadFacts: typeof loadProductSemanticRows = loadProductSemanticRows,
 ): Promise<Array<T & { matchedVariantId?: string }>> {
   const request = requestedVariantFacets(args.query, args.rewrite);
   if (!request || !args.results.length) {
     args.onDiagnostics?.({
-      request, verifiedMatches: 0, incompatible: 0,
+      request, verifiedMatches: 0, typedColorMatches: 0, incompatible: 0,
       unknown: args.results.length, removed: 0,
     });
     return args.results;
@@ -150,16 +199,26 @@ export async function rankByVerifiedVariantColor<
   const selections = await loadSelections(
     args.shop, args.results.map((result) => result.productId),
   );
+  const legacyIds = args.results.filter(r => !(selections.get(r.productId)?.length)).map(r => r.productId);
+  const facts = legacyIds.length ? await loadFacts(args.shop, legacyIds) : [];
+  const factsByProduct = new Map<string, typeof facts>();
+  for (const fact of facts) {
+    const rows = factsByProduct.get(fact.productId) ?? [];
+    rows.push(fact); factsByProduct.set(fact.productId, rows);
+  }
   const verified: Array<T & { matchedVariantId?: string }> = [];
   const unknown: T[] = [];
   let incompatible = 0;
+  let typedColorMatches = 0;
   for (const result of args.results) {
-    const verdict = verifyVariantColorAndSize(
-      selections.get(result.productId) ?? [],
-      request,
-    );
+    const variants = selections.get(result.productId) ?? [];
+    const verdict = variants.length ? verifyVariantColorAndSize(variants, request)
+      : verifyTypedProductColor(factsByProduct.get(result.productId) ?? [], request);
     if (verdict.state === "MATCH") {
       verified.push({ ...result, matchedVariantId: verdict.variantId });
+    } else if (verdict.state === 'COLOR_MATCH') {
+      typedColorMatches += 1;
+      verified.push(result);
     } else if (verdict.state === "UNKNOWN") {
       unknown.push(result);
     } else {
@@ -170,7 +229,8 @@ export async function rankByVerifiedVariantColor<
   // can be retained for recall but always rank below verified matches.
   args.onDiagnostics?.({
     request,
-    verifiedMatches: verified.length,
+    verifiedMatches: verified.length - typedColorMatches,
+    typedColorMatches,
     incompatible,
     unknown: unknown.length,
     removed: incompatible,

@@ -9,6 +9,7 @@ import {
   preferTypedContextEvidence,
   semanticMustSignalMatch,
   sourceContextCatalogValueMatch,
+  hasOpposingClimateEvidence,
   shouldEnforceDirectIdentity,
 } from "../app/services/search/shop-context-index.server";
 const selected = preferTypedContextEvidence([
@@ -17,6 +18,13 @@ const selected = preferTypedContextEvidence([
   { kind: "ALIAS", normalizedValue: "sun glasses", score: 30 },
   { kind: "TAG", normalizedValue: "summer", score: 20 },
 ]);
+assert.equal(hasOpposingClimateEvidence("hot weather", ["Cold Weather Riding Gloves"]), true);
+assert.equal(hasOpposingClimateEvidence("winter", ["Summer Dress"]), true);
+assert.equal(hasOpposingClimateEvidence("hot weather", ["Lightweight Jacket"]), false,
+  "Missing climate evidence remains unknown, not a conflict");
+assert.equal(hasOpposingClimateEvidence("hot weather", ["Summer and Winter Wear"]), false,
+  "Dual-context supply is not contradictory");
+assert.equal(hasOpposingClimateEvidence("not for cold weather", ["Summer Dress"]), false);
 assert.equal(selected.find(t => t.normalizedValue === "sunglasses")?.kind, "CANONICAL_PRODUCT_TYPE");
 assert.ok(selected.some(t => t.normalizedValue === "summer"));
 assert.ok(discoveryExpansionTypeMatch(["headlamp"], ["headlamp"]));
