@@ -515,6 +515,8 @@ model AiSearchSubscription {
 }
 
 model AiSearchShopSettings {
+  pendingCatalogLanguage    String?   @db.VarChar(32)
+  catalogLanguageVerifiedAt DateTime?
   searchLanguage            String?   @db.VarChar(32)
   shop                      String    @id @db.VarChar(191)
   aiSearchEnabled           Boolean   @default(true)
@@ -655,6 +657,7 @@ model AiSearchUsageReservation {
 }
 
 model AiSearchIndexedProduct {
+  catalogLanguage           String?   @db.VarChar(32)
   id                       Int       @id @default(autoincrement())
   shop                     String    @db.VarChar(191)
   productId                String    @db.VarChar(64)
@@ -698,6 +701,7 @@ model AiSearchIndexedProduct {
 // Background catalog sync. One shop keeps history and may have at most one
 // active PROCESSING scan plus one coalesced PENDING follow-up refresh.
 model AiSearchCatalogSyncJob {
+  languageAtStart   String?   @db.VarChar(32)
   id                Int       @id @default(autoincrement())
   shop              String    @db.VarChar(191)
   reason            String    @default("INITIAL") @db.VarChar(64)

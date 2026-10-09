@@ -6,6 +6,7 @@ import {
 import { ensureProductCollection } from "../search/qdrant.server";
 import { getShopEntitlement } from "../commerce/entitlement.server";
 import { touchIndexedProductCatalogSeen } from "../commerce/indexed-products.server";
+import { readCatalogLanguageState, resolveCatalogIndexLanguage } from "../catalog/catalog-language.server";
 
 function readPositiveInteger(name: string, fallback: number) {
   const value = Number.parseInt(process.env[name] || "", 10);
@@ -40,6 +41,7 @@ export type CatalogSyncProgress = {
 };
 
 export type SyncEntireCatalogInput = {
+  catalogLanguage?: string | null;
   admin: AdminGraphqlClient;
   shop: string;
   pageSize?: number;
@@ -68,6 +70,7 @@ export async function syncEntireCatalog({
   after: initialCursor = null,
   initialProgress,
   indexReason = "INITIAL_SYNC",
+  catalogLanguage,
   stopWhenProductLimitReached = indexReason === "INITIAL_SYNC",
   onPageCompleted,
   onProgress,
@@ -75,6 +78,8 @@ export async function syncEntireCatalog({
 }: SyncEntireCatalogInput): Promise<CatalogSyncProgress> {
   console.log("[AI Search] Catalog sync started:", { shop, initialCursor });
   await ensureProductCollection();
+  const languageState = await readCatalogLanguageState(shop);
+  const languageAtStart = resolveCatalogIndexLanguage(catalogLanguage, languageState);
 
   const progress: CatalogSyncProgress = {
     shop,
@@ -138,6 +143,7 @@ export async function syncEntireCatalog({
               shop,
               product,
               reason: indexReason,
+              catalogLanguage: languageAtStart,
             });
             return { product, result, failure: null };
           } catch (error) {

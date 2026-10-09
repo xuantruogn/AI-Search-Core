@@ -1,4 +1,5 @@
 import db from "../../db.server";
+import { activateCompletedCatalogLanguage } from "./catalog-language.server";
 import { getShopEntitlement } from "../commerce/entitlement.server";
 import { withDistributedLease } from "../commerce/lease-lock.server";
 
@@ -24,6 +25,7 @@ export function isCatalogAuthBlockedError(
 }
 
 export type CatalogJobRow = {
+  languageAtStart: string | null;
   id: number;
   shop: string;
   reason: string;
@@ -354,6 +356,7 @@ export async function claimNextCatalogSyncJob() {
       UPDATE \`AiSearchCatalogSyncJob\`
       SET
         \`status\` = 'PROCESSING',
+        \`languageAtStart\` = COALESCE(\`languageAtStart\`, (SELECT COALESCE(pendingCatalogLanguage, searchLanguage) FROM AiSearchShopSettings WHERE shop = ${candidate.shop})),
         \`attempts\` = \`attempts\` + 1,
         \`scanStartedAt\` = COALESCE(\`scanStartedAt\`, UTC_TIMESTAMP(3)),
         \`startedAt\` = UTC_TIMESTAMP(3),
@@ -507,6 +510,7 @@ export async function markCatalogSyncDone(
     );
   }
 
+  if (updated === 1) await activateCompletedCatalogLanguage(jobId);
   return updated === 1;
 }
 

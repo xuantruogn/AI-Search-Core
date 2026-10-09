@@ -1,4 +1,5 @@
 import db from "../../db.server";
+import { catalogLanguageProofCompatible } from "../catalog/catalog-language.server";
 import { PRODUCT_ENRICHMENT_VERSION } from "../products/product-embedding-input.server";
 import type { QueryConstraint, QueryPlan } from "./query-plan.server";
 import { normalizeQueryText } from "./deterministic-query-parser.server";
@@ -211,6 +212,10 @@ export async function proveNoResult(args: {
     };
   }
 
+  if (!await catalogLanguageProofCompatible(args.shop)) {
+    return { status: "UNKNOWN", phase: args.phase, reason: "INDEX_LANGUAGE_OR_VERSION_UNVERIFIED",
+      durationMs: Date.now() - startedAt, candidateCount: null, coverageComplete: false, evidence: [] };
+  }
   const searchableCount = await db.aiSearchIndexedProduct.count({
     where: { shop: args.shop, searchable: true, hasVector: true },
   });

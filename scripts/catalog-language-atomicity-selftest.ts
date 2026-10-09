@@ -1,0 +1,54 @@
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import db from "../app/db.server";
+import { activateCompletedCatalogLanguage, readCatalogLanguageState, catalogLanguageProofCompatible, catalogLanguageSearchReady, resolveCatalogIndexLanguage, requestCatalogLanguageChange } from "../app/services/catalog/catalog-language.server";
+import { PRODUCT_ENRICHMENT_VERSION } from "../app/services/products/product-embedding-input.server";
+import { PRODUCT_EMBEDDING_PIPELINE_VERSION } from "../app/services/products/product-index-version.server";
+
+const shop = `language-regression-${Date.now()}.myshopify.com`;
+try {
+  await db.$executeRaw`INSERT INTO AiSearchShop (shop, createdAt, updatedAt) VALUES (${shop}, UTC_TIMESTAMP(3), UTC_TIMESTAMP(3))`;
+  await db.$executeRaw`INSERT INTO AiSearchShopSettings (shop, searchLanguage, pendingCatalogLanguage, createdAt, updatedAt) VALUES (${shop}, 'en', 'vi', UTC_TIMESTAMP(3), UTC_TIMESTAMP(3))`;
+  await db.$executeRaw`INSERT INTO AiSearchCatalogSyncJob (shop, reason, languageAtStart, status, createdAt, updatedAt) VALUES (${shop}, 'LANGUAGE_CHANGE', 'vi', 'DONE', UTC_TIMESTAMP(3), UTC_TIMESTAMP(3))`;
+  const jobs = await db.$queryRaw<Array<{id: number}>>`SELECT id FROM AiSearchCatalogSyncJob WHERE shop = ${shop}`;
+  const id = jobs[0].id;
+  await db.$executeRaw`INSERT INTO AiSearchIndexedProduct (shop, productId, handle, title, searchable, hasVector, catalogLanguage, enrichmentVersion, embeddingPipelineVersion, createdAt, updatedAt) VALUES (${shop}, 'gid://shopify/Product/1', 'fixture', 'Fixture', true, true, 'en', ${PRODUCT_ENRICHMENT_VERSION}, ${PRODUCT_EMBEDDING_PIPELINE_VERSION}, UTC_TIMESTAMP(3), UTC_TIMESTAMP(3))`;
+  assert.equal(await activateCompletedCatalogLanguage(id), false, "mixed index cannot activate");
+  assert.equal((await readCatalogLanguageState(shop)).searchLanguage, "en");
+  assert.equal(await catalogLanguageSearchReady(shop), false);
+  assert.equal(resolveCatalogIndexLanguage("en", {searchLanguage:"en",pendingCatalogLanguage:null}), "en");
+  assert.equal(resolveCatalogIndexLanguage("en", {searchLanguage:"vi",pendingCatalogLanguage:"vi"}), "en", "job snapshot survives live setting changes");
+  assert.equal(resolveCatalogIndexLanguage(null, {searchLanguage:"vi",pendingCatalogLanguage:null}), null, "null snapshot must not reread current language");
+  await assert.rejects(requestCatalogLanguageChange(shop, "fr"), /subscription/, "inactive entitlement must not silently schedule or change language");
+  assert.equal(await catalogLanguageProofCompatible(shop), false, "pending index cannot prove absence");
+  await db.$executeRaw`UPDATE AiSearchIndexedProduct SET catalogLanguage = 'vi' WHERE shop = ${shop}`;
+  await db.$executeRaw`UPDATE AiSearchCatalogSyncJob SET productsFailed = 1 WHERE id = ${id}`;
+  assert.equal(await activateCompletedCatalogLanguage(id), false, "failed scan cannot activate");
+  await db.$executeRaw`UPDATE AiSearchCatalogSyncJob SET productsFailed = 0, productsBlocked = 1 WHERE id = ${id}`;
+  await db.$executeRaw`UPDATE AiSearchIndexedProduct SET blockedReason = 'VECTOR_UPDATE_LIMIT' WHERE shop = ${shop}`;
+  assert.equal(await activateCompletedCatalogLanguage(id), false, "blocked scan cannot activate");
+  await db.$executeRaw`UPDATE AiSearchIndexedProduct SET blockedReason = NULL WHERE shop = ${shop}`;
+  await db.$executeRaw`UPDATE AiSearchCatalogSyncJob SET productsBlocked = 0 WHERE id = ${id}`;
+  assert.equal(await activateCompletedCatalogLanguage(id), true);
+  const activated = await readCatalogLanguageState(shop);
+  assert.equal(activated.searchLanguage, "vi");
+  assert.equal(activated.pendingCatalogLanguage, null);
+  assert.ok(activated.catalogLanguageVerifiedAt);
+  assert.equal(await catalogLanguageProofCompatible(shop), true);
+  assert.equal(await catalogLanguageSearchReady(shop), true);
+  await db.$executeRaw`UPDATE AiSearchIndexedProduct SET catalogLanguage = NULL WHERE shop = ${shop}`;
+  assert.equal(await catalogLanguageProofCompatible(shop), false, "legacy metadata cannot prove absence");
+  assert.equal(await catalogLanguageSearchReady(shop), false, "stale retained vector recovery fails open after activation");
+  await db.$executeRaw`UPDATE AiSearchIndexedProduct SET catalogLanguage = 'vi', enrichmentVersion = 'obsolete' WHERE shop = ${shop}`;
+  assert.equal(await catalogLanguageProofCompatible(shop), false, "obsolete version cannot prove absence");
+  await db.$executeRaw`UPDATE AiSearchIndexedProduct SET searchable = false, blockedReason = 'PRODUCT_LIMIT' WHERE shop = ${shop}`;
+  assert.equal(await catalogLanguageProofCompatible(shop), true, "retained over-limit vectors are not search-eligible");
+  const pipeline = readFileSync("app/services/search/parallel-query-pipeline.server.ts", "utf8");
+  assert.ok(!pipeline.includes("earlyNoResult: true"), "RAW proof must not terminate before family recovery");
+  const proxy = readFileSync("app/routes/proxy.ai-search.ts", "utf8");
+  assert.ok(proxy.indexOf("const completeFamilyLookup = await retrieveCompleteFamilyCandidates") < proxy.indexOf('finalProof?.status === "CERTAIN_NO_RESULT"'));
+  console.log("Catalog language activation / absence version / zero-result ordering regressions PASS");
+} finally {
+  await db.$executeRaw`DELETE FROM AiSearchShop WHERE shop = ${shop}`;
+  await db.$disconnect();
+}

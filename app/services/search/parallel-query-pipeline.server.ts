@@ -101,22 +101,8 @@ export async function prepareParallelQueryPipeline(args: {
   const rawProof = await rawProofPromise;
   const waitForRawProofMs = Date.now() - rawProofWaitStartedAt;
 
-  if (rawProof.status === "CERTAIN_NO_RESULT") {
-    void llmPromise?.catch(() => undefined);
-    return {
-      rawPlan,
-      profile: null,
-      rawProof,
-      finalProof: null,
-      earlyNoResult: true,
-      timing: {
-        rawPlanMs,
-        waitForRawProofMs,
-        llmAndPass2Ms: 0,
-        totalMs: Date.now() - startedAt,
-      },
-    };
-  }
+  // RAW absence is diagnostic only. Complete family recovery in the proxy
+  // must run before FINAL proof is allowed to terminate retrieval.
 
   if (!requiresLlm) {
     const rewrite = queryPlanToLegacyRewrite(rawPlan, args.query);

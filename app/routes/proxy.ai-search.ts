@@ -68,6 +68,7 @@ import {
 } from "../services/commerce/usage.server";
 
 import { getShopSettings } from "../services/commerce/shop-registry.server";
+import { catalogLanguageSearchReady, readCatalogLanguageState } from "../services/catalog/catalog-language.server";
 import {
   getEmbeddingDimensions,
   getEmbeddingModel,
@@ -749,6 +750,11 @@ let resultCacheStatus: "HIT" | "MISS" = "MISS";
       requestUrl.searchParams.get(
         "mode",
       );
+
+    if (!await catalogLanguageSearchReady(session.shop)) {
+      if (wantsJson || requestMode) return Response.json({ status: "fallback", engine: "native", reason: "CATALOG_LANGUAGE_REBUILD_PENDING" }, { headers: { "Cache-Control": "no-store" } });
+      return nativeRedirect(query, nativeSearchTarget, "CATALOG_LANGUAGE_REBUILD_PENDING");
+    }
 
     if (requestMode === "runtime-config") {
       // Runtime bootstrap happens before a shopper submits a query. Warm once
@@ -3873,6 +3879,13 @@ let resultCacheStatus: "HIT" | "MISS" = "MISS";
         registryValidated = true;
       }
 
+      const verifyInFlightCatalogLanguage = async () => {
+        const current = await readCatalogLanguageState(session.shop);
+        if (current.pendingCatalogLanguage || current.searchLanguage !== shopSettings.searchLanguage) {
+          throw new Error("CATALOG_LANGUAGE_CHANGED_DURING_SEARCH");
+        }
+      };
+      await verifyInFlightCatalogLanguage();
       if (isCustomDataMode) {
         const allIds =
           allProducts.map(
@@ -4221,6 +4234,8 @@ let resultCacheStatus: "HIT" | "MISS" = "MISS";
 
       executionPhase =
         "responseBuild";
+
+      await verifyInFlightCatalogLanguage();
 
       const responseBuildStartedAt =
         Date.now();
