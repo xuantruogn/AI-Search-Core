@@ -283,7 +283,7 @@ async function loadShopSearchDictionaryUncached(
   const value: ShopSearchDictionary = {
     shop,
     entries,
-    version: `context-v4-shared-revision:${catalogSnapshot.catalogRevision}:${entries.length}`,
+    version: `context-v5-taxonomy-segments:${catalogSnapshot.catalogRevision}:${entries.length}`,
     loadedAt: Date.now(),
     matchIndex: buildMatchIndex(entries),
   };
