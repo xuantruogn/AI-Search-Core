@@ -240,6 +240,35 @@ assert.equal(shopifyCategoryMatchesFamily(
   "Hardware > Tools > Hand Tools",
   "hand tools"), true);
 assert.equal(shopifyCategoryMatchesFamily(
+  "Electronics > Computers > Computer Accessories > Computer Mice",
+  "computer mouse"), true,
+  "A concrete accessory descendant remains a valid product family");
+assert.equal(shopifyCategoryMatchesFamily(
+  "Electronics > Computers > Computer Accessories > Computer Mice",
+  "computers"), false,
+  "Parent Computers must not inherit Computer Accessories");
+assert.equal(shopifyCategoryMatchesFamily(
+  "Electronics > Computers > Computer Accessories > Keyboards",
+  "keyboards"), true);
+assert.equal(shopifyCategoryMatchesFamily(
+  "Toys & Games > Toys > Play Vehicles > Toy Cars",
+  "cars"), false,
+  "Toy Cars must not satisfy Cars");
+assert.equal(shopifyCategoryMatchesFamily(
+  "Toys & Games > Toys > Play Vehicles > Toy Cars",
+  "toy cars"), true);
+assert.equal(shopifyCategoryMatchesFamily(
+  "Apparel & Accessories > Costumes & Accessories > Costumes > Costume Dresses",
+  "dresses"), false,
+  "Costume Dresses must not satisfy normal Dresses");
+assert.equal(shopifyCategoryMatchesFamily(
+  "Apparel & Accessories > Costumes & Accessories > Costumes > Costume Dresses",
+  "costume dresses"), true);
+assert.equal(shopifyCategoryMatchesFamily(
+  "Home & Garden > Decor > Seasonal & Holiday Decorations > Wreaths",
+  "wreaths"), true,
+  "Decoration ancestry must not block its concrete leaf family");
+assert.equal(shopifyCategoryMatchesFamily(
   "Sporting Goods > Fitness & General Exercise Equipment > Treadmills",
   "sporting goods"), true,
   "Equipment descendants remain valid members of Sporting Goods");
