@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import type { LoaderFunctionArgs } from "react-router";
-import { Link, useFetcher, useLoaderData } from "react-router";
+import { Link, useFetcher, useLoaderData, useSearchParams } from "react-router";
 
 import { authenticate } from "../shopify.server";
 import { getShopEntitlement } from "../services/commerce/entitlement.server";
@@ -130,6 +130,8 @@ function normalizeSettings(value: unknown) {
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { admin, session } = await authenticate.admin(request);
+  const requestedDays = Number(new URL(request.url).searchParams.get("days") ?? 7);
+  const days = [7, 30, 60, 90].includes(requestedDays) ? requestedDays : 7;
 
   const [entitlement, queue, catalogJob, themeIntegration, settings, searchImpact] =
     await Promise.all([
@@ -138,11 +140,12 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       getLatestCatalogSyncJob(session.shop),
       getThemeIntegrationStatus({ admin, shop: session.shop }),
       getShopSettings(session.shop),
-      getSearchImpactSnapshot(session.shop, { windowDays: 30 }),
+      getSearchImpactSnapshot(session.shop, { windowDays: days }),
     ]);
 
   return {
     shop: session.shop,
+    days,
     entitlement,
     queue,
     settings: normalizeSettings(settings),
@@ -313,7 +316,9 @@ function signedPct(value: number | null, suffix = "%") {
 
 function SearchPerformanceChart({
   series,
+  days,
 }: {
+  days: number;
   series: Array<{
     date: string;
     searches: number;
@@ -321,23 +326,37 @@ function SearchPerformanceChart({
     abnormalSearches: number;
   }>;
 }) {
-  const visible = series.slice(-7);
+  const daily = series.slice(-days);
+  const bucketDays = days <= 7 ? 1 : days <= 30 ? 3 : days <= 60 ? 5 : 7;
+  const visible: Array<(typeof daily)[number] & { endDate: string }> = [];
+  for (let offset = 0; offset < daily.length; offset += bucketDays) {
+    const bucket = daily.slice(offset, offset + bucketDays);
+    visible.push({
+      date: bucket[0].date,
+      endDate: bucket[bucket.length - 1].date,
+      searches: bucket.reduce((sum, item) => sum + item.searches, 0),
+      clickedSearches: bucket.reduce((sum, item) => sum + item.clickedSearches, 0),
+      abnormalSearches: bucket.reduce((sum, item) => sum + item.abnormalSearches, 0),
+    });
+  }
+  const periodLabel = (item: typeof visible[number]) => item.date === item.endDate
+    ? item.date : `${item.date} – ${item.endDate}`;
   const totalSearches = visible.reduce((sum, item) => sum + item.searches, 0);
 
   if (totalSearches === 0) {
     return (
       <div className="vip-chart-empty">
-        No search activity recorded in the last 7 days.
+        No search activity recorded in the last {days} days.
       </div>
     );
   }
 
   const width = 720;
-  const height = 220;
+  const height = 245;
   const padLeft = 38;
   const padRight = 18;
   const padTop = 20;
-  const padBottom = 18;
+  const padBottom = 34;
   const plotWidth = width - padLeft - padRight;
   const plotHeight = height - padTop - padBottom;
   const rawMax = Math.max(
@@ -360,6 +379,12 @@ function SearchPerformanceChart({
   const yFor = (value: number) =>
     padTop + plotHeight - (value / maxY) * plotHeight;
   const barWidth = Math.min(48, (plotWidth / Math.max(1, visible.length)) * 0.48);
+  // Keep date ticks in the same coordinate system as the data, not a
+  // seven-column HTML grid that wraps longer windows into multiple rows.
+  const tickIndexes = new Set(Array.from(
+    { length: Math.min(7, visible.length) },
+    (_, index) => Math.round(index * (visible.length - 1) / Math.max(1, Math.min(7, visible.length) - 1)),
+  ));
 
   const buildPoints = (
     valueOf: (item: (typeof visible)[number]) => number,
@@ -385,6 +410,7 @@ function SearchPerformanceChart({
         <div className="vip-chart-total">
           <strong>{totalSearches.toLocaleString("en-US")}</strong>
           <span>Total searches</span>
+          {bucketDays > 1 && <span>Grouped into {bucketDays}-day periods</span>}
         </div>
         <div className="vip-chart-legend" aria-label="Chart Legend">
           <span>
@@ -405,7 +431,7 @@ function SearchPerformanceChart({
       <svg
         viewBox={`0 0 ${width} ${height}`}
         role="img"
-        aria-label="Total searches, searches with clicks, and search anomalies over the last 7 days"
+        aria-label={`Total searches, searches with clicks, and search anomalies over the last ${days} days`}
         className="vip-chart"
       >
         {[0, 0.25, 0.5, 0.75, 1].map((ratio) => {
@@ -444,7 +470,7 @@ function SearchPerformanceChart({
                 rx="6"
                 fill="#dcd8fa"
               >
-                <title>{`${item.date} · Searches without click: ${Math.max(0, item.searches - item.clickedSearches)}`}</title>
+                <title>{`${periodLabel(item)} · Searches without click: ${Math.max(0, item.searches - item.clickedSearches)}`}</title>
               </rect>
               <rect
                 x={x}
@@ -454,16 +480,16 @@ function SearchPerformanceChart({
                 rx="5"
                 fill="#20a47a"
               >
-                <title>{`${item.date} · Searches with product click: ${item.clickedSearches}`}</title>
+                <title>{`${periodLabel(item)} · Searches with product click: ${item.clickedSearches}`}</title>
               </rect>
-              <text
+              {visible.length <= 7 && <text
                 x={xFor(index)}
                 y={Math.max(13, totalY - 7)}
                 textAnchor="middle"
                 className="vip-chart-value"
               >
                 {item.searches}
-              </text>
+              </text>}
             </g>
           );
         })}
@@ -477,7 +503,7 @@ function SearchPerformanceChart({
           strokeLinejoin="round"
         />
 
-        {visible.map((item, index) => (
+        {visible.map((item, index) => (visible.length <= 7 || item.abnormalSearches > 0) && (
           <g key={`markers-${item.date}`}>
             <circle
               cx={xFor(index)}
@@ -487,17 +513,18 @@ function SearchPerformanceChart({
               stroke="#c2413b"
               strokeWidth="2"
             >
-              <title>{`${item.date} · Search anomalies: ${item.abnormalSearches}`}</title>
+              <title>{`${periodLabel(item)} · Search anomalies: ${item.abnormalSearches}`}</title>
             </circle>
           </g>
         ))}
-      </svg>
-
-      <div className="vip-chart-axis vip-chart-axis--7">
-        {visible.map((item) => (
-          <span key={item.date}>{item.date.slice(5).replace("-", "/")}</span>
+        {visible.map((item, index) => tickIndexes.has(index) && (
+          <text key={`date-${item.date}`} x={xFor(index)} y={height - 10}
+            textAnchor={index === 0 ? "start" : index === visible.length - 1 ? "end" : "middle"}
+            className="vip-chart-label">
+            {item.date.slice(5).replace("-", "/")}
+          </text>
         ))}
-      </div>
+      </svg>
     </div>
   );
 }
@@ -1334,13 +1361,16 @@ const dashboardCss = `
   }
 
   .vip-metrics {
-    gap: 14px;
+    gap: 16px;
+    grid-template-columns: minmax(0, 1.65fr) minmax(320px, .72fr);
   }
 
+  .vip-metrics-primary { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+
   .vip-metric {
-    min-height: 142px;
+    min-height: 0;
     border-radius: 16px;
-    padding: 20px;
+    padding: 16px 20px;
     box-shadow: var(--vip-shadow);
   }
 
@@ -1369,13 +1399,13 @@ const dashboardCss = `
   }
 
   .vip-metric__value {
-    margin-top: 17px;
+    margin-top: 10px;
     color: #202223;
-    font-size: clamp(27px, 2.2vw, 34px);
+    font-size: clamp(23px, 1.8vw, 29px);
   }
 
   .vip-metric__detail {
-    min-height: 39px;
+    min-height: 0;
     margin-top: 7px;
     font-size: 12px;
   }
@@ -1430,7 +1460,8 @@ const dashboardCss = `
 
   @media (max-width: 980px) {
     .vip-hero__content, .vip-grid, .vip-analytics-grid { grid-template-columns: 1fr; }
-    .vip-metrics { grid-template-columns: repeat(2, minmax(0,1fr)); }
+    .vip-metrics { grid-template-columns: 1fr; }
+    .vip-metrics > :last-child { grid-column: 1 / -1; }
     .vip-impact-kpis { grid-template-columns: repeat(2, minmax(0,1fr)); }
     .vip-quick-grid { grid-template-columns: 1fr; }
   }
@@ -1442,7 +1473,7 @@ const dashboardCss = `
     .vip-chart-toolbar { align-items: flex-start; flex-direction: column; }
     .vip-chart-legend { gap: 10px 14px; }
     .vip-hero { padding: 24px; border-radius: 20px; }
-    .vip-metrics, .vip-impact-kpis { grid-template-columns: 1fr; }
+    .vip-metrics, .vip-metrics-primary, .vip-impact-kpis { grid-template-columns: 1fr; }
     .vip-check-row { grid-template-columns: 36px minmax(0,1fr); }
     .vip-check-action { grid-column: 2; }
   }
@@ -1594,13 +1625,10 @@ export default function Dashboard() {
   );
 
   const impact = data.searchImpact;
-  const current7dSeries = impact.series.slice(-7);
-  const previous7dSeries = impact.series.slice(-14, -7);
+  const days = data.days;
+  const [searchParams, setSearchParams] = useSearchParams();
+  const current7dSeries = impact.series.slice(-days);
   const current7dSearches = current7dSeries.reduce(
-    (sum, item) => sum + item.searches,
-    0,
-  );
-  const previous7dSearches = previous7dSeries.reduce(
     (sum, item) => sum + item.searches,
     0,
   );
@@ -1612,12 +1640,7 @@ export default function Dashboard() {
     (sum, item) => sum + item.abnormalSearches,
     0,
   );
-  const current7dCtr = impact.comparison.current7dCtr;
-  const previous7dCtr = impact.comparison.previous7dCtr;
-  const searchVolumeDeltaPercent =
-    previous7dSearches > 0
-      ? ((current7dSearches - previous7dSearches) / previous7dSearches) * 100
-      : null;
+  const current7dCtr = current7dSearches > 0 ? current7dClickedSearches / current7dSearches * 100 : null;
 
   return (
     <div className="vip-page">
@@ -1633,7 +1656,14 @@ export default function Dashboard() {
             </p>
           </div>
           <div className="vip-overview-head__meta" aria-label="Dashboard context">
-            <span className="vip-overview-chip">Last 7 days</span>
+            <select className="vip-overview-chip" aria-label="Dashboard date range" value={days}
+              onChange={(event) => {
+                const params = new URLSearchParams(searchParams);
+                params.set("days", event.target.value);
+                setSearchParams(params, { preventScrollReset: true });
+              }}>
+              {[7, 30, 60, 90].map((value) => <option key={value} value={value}>Last {value} days</option>)}
+            </select>
             <span className="vip-overview-chip">{entitlement.planLabel}</span>
             <span className="vip-overview-chip">{data.shop}</span>
           </div>
@@ -1795,6 +1825,7 @@ export default function Dashboard() {
         ) : null}
 
         <section className="vip-metrics">
+          <div className="vip-metrics-primary">
           <MetricCard
             eyebrow="Active products"
             value={formatUsage(entitlement.activeProductSlotsUsed, displayProductLimit)}
@@ -1820,13 +1851,14 @@ export default function Dashboard() {
             progress={searchProgress}
             accent="cyan"
           />
+          </div>
           <MetricCard
-            eyebrow="Product click rate · 7 days"
+            eyebrow={`Product click rate · ${days} days`}
             value={fmtPct(current7dCtr)}
             detail={
               current7dSearches > 0
                 ? `${current7dClickedSearches.toLocaleString("en-US")} of ${current7dSearches.toLocaleString("en-US")} searches produced a product click.`
-                : "No search sessions recorded in the last 7 days."
+                : `No search sessions recorded in the last ${days} days.`
             }
             accent="green"
           />
@@ -1838,22 +1870,20 @@ export default function Dashboard() {
               <div>
                 <h3>Search performance</h3>
                 <p>
-                  Compare total searches, clicked searches, and anomalies over the last 7 days.
+                  Compare total searches, clicked searches, and anomalies over the last {days} days.
                 </p>
               </div>
               <StatusPill state={current7dSearches > 0 ? "success" : "neutral"}>
-                {`${current7dSearches.toLocaleString("en-US")} searches · 7 days`}
+                {`${current7dSearches.toLocaleString("en-US")} searches · ${days} days`}
               </StatusPill>
             </div>
 
             <div className="vip-impact-kpis">
               <div className="vip-impact-kpi">
-                <span>Searches · 7 days</span>
+                <span>Searches · {days} days</span>
                 <strong>{current7dSearches.toLocaleString("en-US")}</strong>
                 <small>
-                  {previous7dSearches > 0
-                    ? `${signedPct(searchVolumeDeltaPercent)} vs previous 7 days`
-                    : `7 days prior: ${previous7dSearches.toLocaleString("en-US")}`}
+                  Total in selected {days}-day period
                 </small>
               </div>
 
@@ -1863,27 +1893,27 @@ export default function Dashboard() {
                 <small>
                   {current7dSearches > 0
                     ? `${Math.max(0, current7dSearches - current7dClickedSearches).toLocaleString("en-US")} searches without clicks`
-                    : "No searches recorded in last 7 days"}
+                    : `No searches recorded in last ${days} days`}
                 </small>
               </div>
 
               <div className="vip-impact-kpi">
-                <span>CTR · 7 days</span>
+                <span>CTR · {days} days</span>
                 <strong>{fmtPct(current7dCtr)}</strong>
-                <small>7 days prior: {fmtPct(previous7dCtr)}</small>
+                <small>Clicked searches / total searches</small>
               </div>
 
               <div className="vip-impact-kpi">
-                <span>Search anomalies · 7 days</span>
+                <span>Search anomalies · {days} days</span>
                 <strong>{current7dAbnormalSearches.toLocaleString("en-US")}</strong>
                 <small>Query class &gt;20 searches with CTR &lt;5%, or valid semantic facets with no results</small>
               </div>
             </div>
 
-            <SearchPerformanceChart series={impact.series} />
+            <SearchPerformanceChart series={impact.series} days={days} />
 
             <div className="vip-baseline-note">
-              <strong>7-day view:</strong>
+              <strong>{days}-day view:</strong>
               <span>
                 All three trend lines use the same daily SearchLog. Search anomalies
                 are counted only when a query class has more than 20 searches with CTR below 5%,

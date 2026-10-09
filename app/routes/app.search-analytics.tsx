@@ -7,10 +7,22 @@ import { authenticate } from "../shopify.server";
 import { getShopEntitlement } from "../services/commerce/entitlement.server";
 import {
   classifyAbnormalSearchClass,
-  hasReasonableProductSemanticFacets,
 } from "../services/search/search-analytics.server";
 
 export type FilterMode = "all" | "total" | "good" | "abnormal";
+
+const SORT_COLUMNS = [
+  { key: "cluster", label: "Keyword / Cluster", width: "14%" },
+  { key: "variants", label: "User Query Variants", width: "15%" },
+  { key: "searches", label: "Searches", width: "6%" },
+  { key: "avgResults", label: "Avg. Results", width: "7%" },
+  { key: "clicks", label: "Clicks", width: "5%" },
+  { key: "ctr", label: "CTR", width: "6%" },
+  { key: "statusText", label: "Status", width: "8%" },
+  { key: "abnormalReason", label: "Abnormal Reason", width: "18%" },
+  { key: "products", label: "Top Clicked Products", width: "21%" },
+] as const;
+type SortColumn = typeof SORT_COLUMNS[number]["key"];
 
 const MAX_ANALYTICS_EVENTS = (() => {
   const raw = Number.parseInt(
@@ -131,7 +143,7 @@ async function getShopAnalyticsData(shop: string, requestedDays: number = 30) {
     searches: number;
     clicks: number;
     clickedSearches: number;
-    semanticFacetNoResultCount: number;
+    noResultCount: number;
     totalResultCount: number;
     productsClicked: Map<string, number>;
     logs: typeof queryLogs;
@@ -145,7 +157,7 @@ async function getShopAnalyticsData(shop: string, requestedDays: number = 30) {
       searches: 0,
       clicks: 0,
       clickedSearches: 0,
-      semanticFacetNoResultCount: 0,
+      noResultCount: 0,
       totalResultCount: 0,
       productsClicked: new Map<string, number>(),
       logs: [],
@@ -156,11 +168,7 @@ async function getShopAnalyticsData(shop: string, requestedDays: number = 30) {
     existing.totalResultCount += Math.max(0, log.resultCount);
     existing.clicks += log.clicks.length;
     existing.clickedSearches += log.clicks.length > 0 ? 1 : 0;
-    existing.semanticFacetNoResultCount +=
-      log.resultCount === 0 &&
-      hasReasonableProductSemanticFacets(log.llmAnalysisJson, log.llmStatus)
-        ? 1
-        : 0;
+    existing.noResultCount += log.resultCount === 0 ? 1 : 0;
     existing.logs.push(log);
 
     log.clicks.forEach((c) => {
@@ -181,7 +189,9 @@ async function getShopAnalyticsData(shop: string, requestedDays: number = 30) {
     const classification = classifyAbnormalSearchClass({
       searchCount: cluster.searches,
       clickedSearches: cluster.clickedSearches,
-      semanticFacetNoResultCount: cluster.semanticFacetNoResultCount,
+      // Zero-result searches require attention regardless of analysis source.
+      // The minimum-volume rule applies only to CTR anomalies.
+      semanticFacetNoResultCount: cluster.noResultCount,
     });
     
     const isAbnormal = classification !== "HEALTHY";
@@ -190,7 +200,7 @@ async function getShopAnalyticsData(shop: string, requestedDays: number = 30) {
     const statusColor = isAbnormal ? "#d32f2f" : "#008060";
     const abnormalReason =
       classification === "SEMANTIC_NO_RESULTS"
-        ? "No sufficiently relevant products found"
+        ? `${cluster.noResultCount} of ${cluster.searches} searches returned no products`
         : classification === "LOW_CTR"
           ? "Query class >20 searches with CTR <5%"
           : cluster.searches <= 20
@@ -203,8 +213,7 @@ async function getShopAnalyticsData(shop: string, requestedDays: number = 30) {
     } else if (classification === "SEMANTIC_NO_RESULTS") {
       const abnormalLogs = cluster.logs.filter(
         (log) =>
-          log.resultCount === 0 &&
-          hasReasonableProductSemanticFacets(log.llmAnalysisJson, log.llmStatus),
+          log.resultCount === 0,
       );
       abnormalSearchesCount += abnormalLogs.length;
       abnormalLogs.forEach((log) => abnormalLogIds.add(log.id));
@@ -247,7 +256,9 @@ async function getShopAnalyticsData(shop: string, requestedDays: number = 30) {
     };
   });
 
-  const abnormalRate = totalSearches > 0 
+  tableRows.sort((a, b) => b.searches - a.searches || a.cluster.localeCompare(b.cluster));
+
+  const abnormalRate = totalSearches > 0
     ? ((abnormalSearchesCount / totalSearches) * 100).toFixed(1) + "%" 
     : "0.0%";
 
@@ -442,6 +453,13 @@ export default function SearchAnalyticsPage() {
   const clickPolyline = points.map((p) => `${p.x},${p.yClick}`).join(" ");
   const abnormalPolyline = points.map((p) => `${p.x},${p.yAbnormal}`).join(" ");
 
+  const [sortColumn, setSortColumn] = useState<SortColumn>("searches");
+  const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc");
+  const changeSort = (column: SortColumn) => {
+    setSortDirection(column === sortColumn && sortDirection === "asc" ? "desc" : "asc");
+    setSortColumn(column);
+    setTableVisibleCount(20);
+  };
   const allRows = loaderData.tableRows || [];
   const filteredRows = allRows.filter((row) => {
     if (activeFilter === "all" || activeFilter === "total") return true;
@@ -450,6 +468,19 @@ export default function SearchAnalyticsPage() {
     return true;
   });
 
+  const sortValue = (row: typeof allRows[number]): string | number => {
+    if (sortColumn === "ctr") return Number.parseFloat(row.ctr) || 0;
+    if (sortColumn === "products") return row.products[0]?.title || "";
+    return row[sortColumn];
+  };
+  filteredRows.sort((a, b) => {
+    const left = sortValue(a);
+    const right = sortValue(b);
+    const comparison = typeof left === "number" && typeof right === "number"
+      ? left - right
+      : String(left).localeCompare(String(right), undefined, { numeric: true, sensitivity: "base" });
+    return (sortDirection === "asc" ? comparison : -comparison) || a.cluster.localeCompare(b.cluster);
+  });
   const visibleTableRows = filteredRows.slice(0, tableVisibleCount);
 
   if (loaderData.featureDisabled) {
@@ -736,23 +767,25 @@ export default function SearchAnalyticsPage() {
         <table style={{ width: "100%", tableLayout: "fixed", borderCollapse: "collapse", fontSize: 13, textAlign: "left" }}>
           <thead>
             <tr style={{ background: "#f6f6f7", borderBottom: "1px solid #e1e3e5", color: "#4a4a4a" }}>
-              <th style={{ padding: "14px 12px", width: "14%" }}>Keyword / Cluster</th>
-              <th style={{ padding: "14px 12px", width: "15%" }}>User Query Variants</th>
-              <th style={{ padding: "14px 8px", textAlign: "center", width: "6%" }}>Searches</th>
-              <th style={{ padding: "14px 8px", textAlign: "center", width: "7%" }}>Avg. Results</th>
-              <th style={{ padding: "14px 8px", textAlign: "center", width: "5%" }}>Clicks</th>
-              <th style={{ padding: "14px 8px", textAlign: "center", width: "6%" }}>CTR</th>
-              <th style={{ padding: "14px 8px", textAlign: "center", width: "8%" }}>Status</th>
-              <th style={{ padding: "14px 12px", width: "18%" }}>Abnormal Reason</th>
-              <th style={{ padding: "14px 12px", width: "21%" }}>Top Clicked Products</th>
+              {SORT_COLUMNS.map((column) => (
+                <th key={column.key} scope="col"
+                  aria-sort={sortColumn === column.key ? (sortDirection === "asc" ? "ascending" : "descending") : "none"}
+                  style={{ padding: "14px 8px", width: column.width }}>
+                  <button type="button" onClick={() => changeSort(column.key)}
+                    title={`Sort ${column.label} ${sortColumn === column.key && sortDirection === "asc" ? "descending" : "ascending"}`}
+                    style={{ border: 0, background: "transparent", color: "inherit", font: "inherit", fontWeight: 700, cursor: "pointer", textAlign: "inherit", padding: 0 }}>
+                    {column.label} <span aria-hidden="true">{sortColumn === column.key ? (sortDirection === "asc" ? "↑" : "↓") : "↕"}</span>
+                  </button>
+                </th>
+              ))}
             </tr>
           </thead>
           <tbody>
-            {visibleTableRows.map((row, index) => {
+            {visibleTableRows.map((row) => {
               const topProduct = row.products[0];
 
               return (
-                <tr key={index} style={{ borderBottom: "1px solid #f1f2f3" }}>
+                <tr key={row.cluster} style={{ borderBottom: "1px solid #f1f2f3" }}>
                   <td style={{ padding: "16px 18px", fontWeight: 700, color: "#1a1a1a", wordBreak: "break-word" }}>{row.cluster}</td>
                   <td style={{ padding: "16px 18px", color: "#616161", wordBreak: "break-word" }}>{row.variants}</td>
                   <td style={{ padding: "16px 18px", textAlign: "center", fontWeight: 600 }}>{row.searches}</td>

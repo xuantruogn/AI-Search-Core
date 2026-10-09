@@ -99,7 +99,7 @@ export async function getSearchImpactSnapshot(
   shop: string,
   options: { windowDays?: number } = {},
 ): Promise<SearchImpactSnapshot> {
-  const windowDays = Math.max(14, Math.min(90, options.windowDays ?? 30));
+  const windowDays = Math.max(7, Math.min(90, options.windowDays ?? 30));
   const now = new Date();
   const windowStart = new Date(now);
   windowStart.setUTCDate(windowStart.getUTCDate() - (windowDays - 1));

@@ -8,7 +8,7 @@ import {
 } from "../services/commerce/shop-registry.server";
 import { rebuildActiveThemeMapV4 } from "../services/theme/theme-map-v4-lifecycle.server";
 import {
-  getShopLocalesWithFallback,
+  FALLBACK_SEARCH_LOCALES,
   isSupportedFallbackLocale,
 } from "../services/commerce/shop-locales.server";
 import { enqueueCatalogRefresh } from "../services/catalog/catalog-sync-job.server";
@@ -16,11 +16,10 @@ import { kickCatalogSyncQueue } from "../services/catalog/catalog-sync-queue.ser
 import { invalidateSearchCatalogRevisionCache } from "../services/search/search-catalog-revision.server";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  const { admin, session } = await authenticate.admin(request);
+  const { session } = await authenticate.admin(request);
   const settings = await getShopSettings(session.shop);
 
-  const localeState = await getShopLocalesWithFallback(admin);
-  let localeOptions = localeState.options;
+  let localeOptions = [...FALLBACK_SEARCH_LOCALES];
 
   if (
     settings.searchLanguage &&
@@ -44,8 +43,6 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   return {
     ...settings,
     localeOptions,
-    localeError: localeState.error,
-    usingLocaleFallback: localeState.usingFallback,
     onboardingRequired: !settings.searchLanguage?.trim(),
   };
 };
@@ -121,22 +118,15 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     if (!rawSearchLanguage || canonical.length !== 1) throw new Error();
     searchLanguage = canonical[0];
   } catch {
-    return { success: false, message: "Please select a valid shop language." };
+    return { success: false, message: "Please select a valid product catalog language." };
   }
 
-  const localeState = await getShopLocalesWithFallback(admin);
-  const selectedIsAvailable = localeState.usingFallback
-    ? isSupportedFallbackLocale(searchLanguage)
-    : localeState.options.some(
-        (item) => item.locale.toLowerCase() === searchLanguage.toLowerCase(),
-      );
+  const selectedIsAvailable = isSupportedFallbackLocale(searchLanguage);
 
   if (!selectedIsAvailable) {
     return {
       success: false,
-      message: localeState.usingFallback
-        ? "Please choose one of the supported search languages."
-        : "Please choose one of the languages enabled on this Shopify store.",
+      message: "Please choose one of the supported product catalog languages.",
     };
   }
 
@@ -277,7 +267,7 @@ export default function SettingsPage() {
                     marginBottom: 6,
                   }}
                 >
-                  Primary Catalog & Search Language
+                  Product Catalog Language
                 </label>
 
                 <select
@@ -298,32 +288,21 @@ export default function SettingsPage() {
                   }}
                 >
                   <option value="" disabled>
-                    Select a supported catalog & search language
+                    Select your product catalog language
                   </option>
                   {data.localeOptions.map((item) => (
                     <option key={item.locale} value={item.locale}>
                       {item.name} ({item.locale})
-                      {item.primary ? " · Shopify primary" : ""}
-                      {item.published ? " · Published" : ""}
-                      {item.source === "SHOPIFY" && !item.primary && !item.published
-                        ? " · Enabled on Shopify"
-                        : ""}
                     </option>
                   ))}
                 </select>
 
                 <p style={{ margin: "7px 0 0 0", fontSize: 12, color: "#616161" }}>
-                  This is the canonical language used for product enrichment and semantic retrieval.
-                  Customers can search in other languages; Gemini detects and translates queries automatically.
+                  Select the language used in your product titles and descriptions. This is the
+                  catalog language used for product enrichment and semantic retrieval, not your
+                  storefront or Shopify admin language. Customers can search in other languages;
+                  queries are normalized automatically.
                 </p>
-
-                {data.usingLocaleFallback ? (
-                  <p style={{ margin: "7px 0 0 0", fontSize: 12, color: "#8a6116" }}>
-                    Shopify locale access is not active yet, so all supported search languages
-                    are shown. You can select and save a language now. Once locale access is granted,
-                    this list will automatically use the languages enabled on the store.
-                  </p>
-                ) : null}
 
                 <p style={{ margin: "6px 0 0 0", fontSize: 12, color: "#616161" }}>
                   💡 <i>Note:</i> After changing this language, re-run <b>Catalog Sync</b> so existing
