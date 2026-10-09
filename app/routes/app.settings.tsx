@@ -1,4 +1,5 @@
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
+import { useEffect, useState } from "react";
 import { redirect, useFetcher, useLoaderData } from "react-router";
 
 import { authenticate } from "../shopify.server";
@@ -140,6 +141,16 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const languageChanged =
     previousLanguage?.toLowerCase() !== searchLanguage.toLowerCase();
 
+  if (languageChanged && (
+    form.get("catalogLanguageConfirmed") !== "on" ||
+    String(form.get("confirmedCatalogLanguage") ?? "").toLowerCase() !== searchLanguage.toLowerCase()
+  )) {
+    return {
+      success: false,
+      message: "Confirm that this is the language of your product titles and descriptions and that the catalog must be rescanned before saving.",
+    };
+  }
+
   await updateShopSettings({
     shop: session.shop,
     aiSearchEnabled,
@@ -168,13 +179,22 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
   return {
     success: true,
-    message: "Settings saved successfully!",
+    message: languageChanged
+      ? "Settings saved. A catalog rescan has been requested for the new product catalog language."
+      : "Settings saved successfully!",
   };
 };
 
 export default function SettingsPage() {
   const data = useLoaderData<typeof loader>();
   const fetcher = useFetcher<typeof action>();
+  const [selectedLanguage, setSelectedLanguage] = useState(data.searchLanguage ?? "");
+  const [languageConfirmed, setLanguageConfirmed] = useState(false);
+  useEffect(() => {
+    setSelectedLanguage(data.searchLanguage ?? "");
+    setLanguageConfirmed(false);
+  }, [data.searchLanguage]);
+  const languageChanged = selectedLanguage.toLowerCase() !== (data.searchLanguage ?? "").toLowerCase();
 
   const isSavingSettings = fetcher.state !== "idle";
 
@@ -274,8 +294,12 @@ export default function SettingsPage() {
                   id="searchLanguage"
                   name="searchLanguage"
                   required
-                  defaultValue={data.searchLanguage ?? ""}
-                  disabled={false}
+                  value={selectedLanguage}
+                  disabled={isSavingSettings}
+                  onChange={(event) => {
+                    setSelectedLanguage(event.target.value);
+                    setLanguageConfirmed(false);
+                  }}
                   style={{
                     width: "100%",
                     maxWidth: 420,
@@ -305,9 +329,28 @@ export default function SettingsPage() {
                 </p>
 
                 <p style={{ margin: "6px 0 0 0", fontSize: 12, color: "#616161" }}>
-                  💡 <i>Note:</i> After changing this language, re-run <b>Catalog Sync</b> so existing
-                  product semantic facets are rebuilt in the selected canonical language.
+                  💡 <i>Note:</i> Changing this language requires a catalog rescan. Saving a
+                  confirmed language change requests <b>Catalog Sync</b> automatically to rebuild
+                  product semantic data in the selected language.
                 </p>
+                {languageChanged && selectedLanguage ? (
+                  <div role="note" style={{ marginTop: 12, padding: 16, borderRadius: 8, border: "1px solid #e9bb64", background: "#fff8e6", color: "#614500", fontSize: 13, lineHeight: 1.6 }}>
+                    <strong>Confirm product catalog language change</strong>
+                    <p style={{ margin: "6px 0 12px" }}>
+                      Choose the actual language of your product titles and descriptions, not the
+                      storefront language. Your products must be rescanned after this change;
+                      search quality may be affected until the rescan finishes.
+                    </p>
+                    <input type="hidden" name="confirmedCatalogLanguage" value={selectedLanguage} />
+                    <label style={{ display: "flex", alignItems: "flex-start", gap: 10, cursor: "pointer" }}>
+                      <input type="checkbox" name="catalogLanguageConfirmed" required
+                        checked={languageConfirmed} disabled={isSavingSettings}
+                        onChange={(event) => setLanguageConfirmed(event.target.checked)} />
+                      <span>I confirm that {data.localeOptions.find((item) => item.locale === selectedLanguage)?.name ?? selectedLanguage} is
+                        the language of my product catalog, and I understand that all products must be rescanned.</span>
+                    </label>
+                  </div>
+                ) : null}
               </div>
 
               {/* TOGGLE OPTIONS */}
@@ -367,7 +410,7 @@ export default function SettingsPage() {
               <div style={{ display: "flex", alignItems: "center", gap: 16, marginTop: 8 }}>
                 <button
                   type="submit"
-                  disabled={isSavingSettings}
+                  disabled={isSavingSettings || (languageChanged && !languageConfirmed)}
                   style={{
                     padding: "10px 24px",
                     borderRadius: 8,
