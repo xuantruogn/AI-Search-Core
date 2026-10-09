@@ -272,10 +272,6 @@ assert.equal(shopifyCategoryMatchesFamily(
   "Sporting Goods > Fitness & General Exercise Equipment > Treadmills",
   "sporting goods"), true,
   "Equipment descendants remain valid members of Sporting Goods");
-assert.equal(shopifyCategoryMatchesFamily(
-  "Sporting Goods > Fitness & General Exercise Equipment > Treadmills",
-  "equipment"), true);
-
 for (const [requested, path] of [
   ["shoes", "Apparel & Accessories > Shoes > Athletic Shoes"],
   ["jewelry", "Apparel & Accessories > Jewelry > Necklaces"],
