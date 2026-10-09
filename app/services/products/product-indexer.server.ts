@@ -212,8 +212,13 @@ export async function indexProduct(input: IndexProductInput): Promise<IndexedPro
   const result = await indexProductWithLanguage({ ...input, catalogLanguage: language });
   if (result.action !== "blocked") {
     await db.$executeRaw`
-      UPDATE AiSearchIndexedProduct SET catalogLanguage = ${language} WHERE shop = ${input.shop}
-        AND productId = ${input.product.id} AND hasVector = true AND documentHash = ${result.documentHash}
+      UPDATE AiSearchIndexedProduct
+      SET catalogLanguage = ${language}
+      WHERE shop = ${input.shop}
+        AND productId = ${input.product.id}
+        AND hasVector = true
+        AND vectorStatus = 'READY'
+        AND documentHash = ${result.documentHash}
     `;
   }
   return result;
