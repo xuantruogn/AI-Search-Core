@@ -140,17 +140,37 @@ async function classifyCatalogFailure({
     );
 
   if (phase === "AUTH") {
-    const session =
-      await db.session.findUnique({
-        where: {
-          id: `offline_${shop}`,
-        },
-        select: {
-          expires: true,
-          refreshToken: true,
-          refreshTokenExpires: true,
-        },
-      });
+    let session:
+      | {
+          expires: Date | null;
+          refreshToken: string | null;
+          refreshTokenExpires: Date | null;
+        }
+      | null;
+
+    try {
+      session =
+        await db.session.findUnique({
+          where: {
+            id: `offline_${shop}`,
+          },
+          select: {
+            expires: true,
+            refreshToken: true,
+            refreshTokenExpires: true,
+          },
+        });
+    } catch (diagnosticError) {
+      const diagnosticDetail =
+        await describeCatalogThrownValue(
+          diagnosticError,
+        );
+
+      return (
+        `${detail}; authDiagnosticsFailed=` +
+        diagnosticDetail
+      );
+    }
 
     if (!session) {
       return (
