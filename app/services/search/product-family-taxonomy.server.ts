@@ -14,29 +14,53 @@ import { normalizeQueryText, normalizeUnicodeQueryText } from "./deterministic-q
  */
 export type FamilyNode =
   | "dress" | "skirt" | "top" | "bicycle" | "car" | "motorcycle"
-  | "scooter" | "truck" | "bus" | "van";
+  | "scooter" | "truck" | "bus" | "van"
+  | "handbag" | "backpack" | "duffel_bag" | "tote_bag"
+  | "messenger_bag" | "crossbody_bag" | "shoulder_bag"
+  | "laptop_bag" | "briefcase" | "clutch" | "waist_bag";
 
 export type FamilyGroup =
-  | "dress_or_skirt" | "tops" | "vehicles"
+  | "dress_or_skirt" | "tops" | "vehicles" | "bags"
   | "dress" | "skirt" | "bicycle";
 
 const GROUP_MEMBERS: Record<FamilyGroup, readonly FamilyNode[]> = {
   dress_or_skirt: ["dress", "skirt"],
   tops: ["top"],
   vehicles: ["bicycle", "car", "motorcycle", "scooter", "truck", "bus", "van"],
+  bags: [
+    "handbag", "backpack", "duffel_bag", "tote_bag", "messenger_bag",
+    "crossbody_bag", "shoulder_bag", "laptop_bag", "briefcase", "clutch", "waist_bag",
+  ],
   dress: ["dress"],
   skirt: ["skirt"],
   bicycle: ["bicycle"],
 };
 
 /** Exact standalone source expressions. Phrases containing modifiers never match. */
+const QUERY_FAMILIES_UNICODE: Record<string, FamilyGroup> = {
+  "váy": "dress_or_skirt",
+  "áo": "tops",
+  "túi": "bags",
+};
+
 const QUERY_FAMILIES: Record<string, FamilyGroup> = {
-  "vay": "dress_or_skirt",       // Vietnamese broad "váy": dress OR skirt
   "dam": "dress",                // "đầm": dress, not skirt
   "chan vay": "skirt",           // "chân váy": skirt, not dress
-  "ao": "tops",                  // "áo": upper-body clothing
   "xe": "vehicles",              // vehicles, not spare parts or toy cars
   "xe dap": "bicycle",
+
+  // Same controlled semantics for common English standalone family nouns.
+  "dress": "dress",
+  "dresses": "dress",
+  "skirt": "skirt",
+  "skirts": "skirt",
+  "tops": "tops",
+  "bicycle": "bicycle",
+  "bicycles": "bicycle",
+  "vehicle": "vehicles",
+  "vehicles": "vehicles",
+  "bag": "bags",
+  "bags": "bags",
 };
 
 const ACCESSORY_OR_TOY =
@@ -65,14 +89,31 @@ const FAMILY_HEADS: Record<FamilyNode, readonly string[]> = {
   truck: ["truck", "trucks", "pickup truck", "pickup trucks", "xe tai"],
   bus: ["bus", "buses", "coach", "coaches", "xe buyt"],
   van: ["van", "vans", "minivan", "minivans", "xe van"],
+  handbag: ["handbag", "handbags", "purse", "purses", "tui xach"],
+  backpack: ["backpack", "backpacks", "rucksack", "rucksacks", "ba lo", "balo"],
+  duffel_bag: ["duffel bag", "duffel bags", "duffle bag", "duffle bags"],
+  tote_bag: ["tote bag", "tote bags"],
+  messenger_bag: ["messenger bag", "messenger bags"],
+  crossbody_bag: ["crossbody bag", "crossbody bags"],
+  shoulder_bag: ["shoulder bag", "shoulder bags"],
+  laptop_bag: ["laptop bag", "laptop bags"],
+  briefcase: ["briefcase", "briefcases"],
+  clutch: ["clutch", "clutches", "clutch bag", "clutch bags"],
+  waist_bag: ["waist bag", "waist bags", "belt bag", "belt bags", "fanny pack", "fanny packs"],
 };
 
 const APPAREL_CATEGORY_SEGMENTS = new Set(["clothing", "apparel", "quan ao"]);
 const CATEGORY_SUBGROUP_DENIAL =
-  /\b(?:accessor(?:y|ies)|costume|toy|toys|parts?|replacement|decorations?|equipment)\b/;
+  /\b(?:accessor(?:y|ies)|costume|toy|toys|parts?|replacement)\b/;
+const HARD_ALTERNATE_CATEGORY_BRANCH =
+  /\b(?:costume|toy|toys)\b/;
+const SUBORDINATE_CATEGORY_BRANCH =
+  /\b(?:accessor(?:y|ies)|parts?|replacement)\b/;
 
 export function queryFamilyFromSource(query: string): FamilyGroup | null {
-  return QUERY_FAMILIES[normalizeQueryText(query)] ?? null;
+  return QUERY_FAMILIES_UNICODE[normalizeUnicodeQueryText(query)] ??
+    QUERY_FAMILIES[normalizeQueryText(query)] ??
+    null;
 }
 
 /**
@@ -90,9 +131,6 @@ const SOURCE_CANONICAL_FAMILIES: Record<string, string> = {
   "quan dai": "pants",
   "quan short": "shorts",
   "quan dui": "shorts",
-  "giay": "shoes",
-  "dep": "sandals",
-  "tui": "bags",
   "tui xach": "handbags",
   "ba lo": "backpacks",
   "trang suc": "jewelry",
@@ -113,14 +151,41 @@ const SOURCE_CANONICAL_FAMILIES: Record<string, string> = {
   "tv": "televisions",
   "noi that": "furniture",
   "giuong": "beds",
-  "nem": "mattresses",
   "my pham": "cosmetics",
   "cham soc da": "skin care",
   "nuoc hoa": "fragrances",
-  "dau goi": "shampoo",
   "do choi": "toys",
-  "sach": "books",
   "balo": "backpacks",
+
+  // Common retail families: deterministic fast path only. Unknown family
+  // nouns still work through full-source translation + catalog taxonomy.
+  "thuc an cho": "dog food",
+  "thuc an meo": "cat food",
+  "do an cho": "dog food",
+  "do an meo": "cat food",
+  "xe day em be": "baby strollers",
+  "ta em be": "diapers",
+  "binh sua": "baby bottles",
+  "binh nuoc": "water bottles",
+  "may pha ca phe": "coffee makers",
+  "am dun nuoc": "kettles",
+  "may in": "printers",
+  "man hinh may tinh": "computer monitors",
+  "ban phim": "keyboards",
+  "chuot may tinh": "computer mice",
+  "sac dien thoai": "phone chargers",
+  "cap sac": "charging cables",
+  "mu bao hiem": "helmets",
+  "vo xe": "tires",
+  "lop xe": "tires",
+  "dung cu cam tay": "hand tools",
+  "dung cu dien": "power tools",
+  "ly uong nuoc": "drinkware",
+  "sua rua mat": "facial cleansers",
+  "kem chong nang": "sunscreen",
+  "bup be": "dolls",
+  "xep hinh": "building toys",
+  "vot tennis": "tennis rackets",
 };
 
 /** Accent-preserving aliases for short Vietnamese words that collide when folded. */
@@ -132,6 +197,17 @@ const SOURCE_CANONICAL_FAMILIES_UNICODE: Record<string, string> = {
   "bàn": "tables",
   "ghế": "chairs",
   "đèn": "lighting",
+  "nồi": "pots",
+  "chảo": "pans",
+  "cốc": "mugs",
+  "kem dưỡng": "moisturizers",
+  "giày": "shoes",
+  "dép": "sandals",
+  "nệm": "mattresses",
+  "đệm": "mattresses",
+  "dầu gội": "shampoo",
+  "sách": "books",
+  "son môi": "lipstick",
 };
 
 export function sourceCanonicalFamilyFromSource(query: string): string | null {
@@ -197,7 +273,23 @@ export function shopifyCategoryIsClothing(path: string) {
  * Membership then comes from the product's typed Shopify category path or
  * exact sold-item type. Dense/BM25 text is never used as membership proof.
  */
+const IRREGULAR_FAMILY_SINGULAR: Record<string, string> = {
+  mice: "mouse",
+  children: "child",
+  people: "person",
+  men: "man",
+  women: "woman",
+  feet: "foot",
+  teeth: "tooth",
+  knives: "knife",
+  shelves: "shelf",
+  scarves: "scarf",
+  loaves: "loaf",
+};
+
 function singularFamilyToken(token: string) {
+  const irregular = IRREGULAR_FAMILY_SINGULAR[token];
+  if (irregular) return irregular;
   if (token.length > 4 && token.endsWith("ies")) return token.slice(0, -3) + "y";
   if (token.length > 5 && token.endsWith("sses")) return token.slice(0, -2);
   if (token.length > 4 && /(?:ches|shes|xes|zes|ses)$/.test(token)) {
@@ -229,15 +321,54 @@ function genericFamilyPhraseMatches(actual: string, requested: string) {
  * (Jewelry, Shoes, Furniture, Computers...) automatically include descendants.
  */
 export function shopifyCategoryMatchesFamily(path: string, requested: string) {
-  const parts = shopifyCategoryParts(path);
+  const rawParts = path
+    .split(/\s*(?:>|»)\s*/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+  const parts = rawParts.map(normalizeQueryText).filter(Boolean);
   const target = normalizeFamilyPhrase(requested);
   if (!parts.length || !target) return false;
-  // Accessory/toy/equipment branches are forbidden only when the shopper is
-  // asking for the parent product. They are valid when that branch itself is
-  // the requested family (e.g. "toys", "accessories", "equipment").
-  const targetAllowsDeniedBranch = CATEGORY_SUBGROUP_DENIAL.test(target);
-  if (!targetAllowsDeniedBranch && forbiddenCategoryBranch(parts)) return false;
-  return parts.some((part) => genericFamilyPhraseMatches(part, target));
+  const matches = rawParts.flatMap((rawPart, index) => {
+    const normalizedPart = normalizeFamilyPhrase(rawPart);
+    if (!normalizedPart) return [];
+    // Shopify has combined structural parents such as "Luggage & Bags",
+    // "Health & Beauty" and "Food, Beverages & Tobacco". Matching only one
+    // conjunct must NOT claim every sibling below that parent.
+    const matched = /[&,]/.test(rawPart)
+      ? normalizedPart === target
+      : genericFamilyPhraseMatches(normalizedPart, target);
+    return matched ? [index] : [];
+  });
+  if (!matches.length) return false;
+
+  const targetNamesAlternateClass =
+    HARD_ALTERNATE_CATEGORY_BRANCH.test(target) ||
+    ACCESSORY_OR_TOY.test(target);
+
+  // Toys/costumes change the sold-item class. "Cars" under Toy Cars are not
+  // cars; "Dresses" under Costumes are not normal dresses. Only an explicitly
+  // toy/costume target may cross this boundary.
+  if (
+    !targetNamesAlternateClass &&
+    parts.some((part, index) =>
+      !(index === 0 && ["apparel accessories", "vehicles parts"].includes(part)) &&
+      HARD_ALTERNATE_CATEGORY_BRANCH.test(part))
+  ) return false;
+
+  // Accessories/parts are hierarchical rather than a universal class change.
+  // A parent search (Computers) must not inherit Computer Accessories, while a
+  // specific descendant search (Computer Mice) is legitimate even though its
+  // ancestor is an accessory branch.
+  const subordinateIndex = parts.findIndex((part, index) =>
+    !(index === 0 && ["apparel accessories", "vehicles parts"].includes(part)) &&
+    SUBORDINATE_CATEGORY_BRANCH.test(part));
+  if (
+    subordinateIndex >= 0 &&
+    !targetNamesAlternateClass &&
+    !matches.some((index) => index > subordinateIndex)
+  ) return false;
+
+  return true;
 }
 
 /**

@@ -157,7 +157,7 @@ function enforceCacheBudget() {
 
 function mapKind(kind: string): DictionaryField | null {
   if (["PRODUCT_TYPE", "CANONICAL_PRODUCT_TYPE"].includes(kind)) return "PRODUCT_TYPE";
-  if (kind === "CATEGORY") return "CATEGORY";
+  if (["CATEGORY", "SHOPIFY_CATEGORY_PATH"].includes(kind)) return "CATEGORY";
   if (["VENDOR", "BRAND"].includes(kind)) return "BRAND";
   if (kind === "MODEL") return "MODEL";
   if (["SKU", "BARCODE", "IDENTIFIER"].includes(kind)) return "IDENTIFIER";
@@ -181,6 +181,19 @@ function confidenceForKind(kind: string, normalized: string) {
   if (kind === "MEASUREMENT") return /^\d+(?:[.,]\d+)?$/.test(normalized) ? 0.62 : 0.95;
   if (kind === "PRODUCT_TYPE") return 0.86;
   return 1;
+}
+
+export function shopifyCategoryDictionarySegments(value: string) {
+  const seen = new Set<string>();
+  return value
+    .split(/\s*(?:>|»)\s*/)
+    .map((part) => part.trim())
+    .filter((part) => {
+      const normalized = normalizeQueryText(part);
+      if (!normalized || seen.has(normalized)) return false;
+      seen.add(normalized);
+      return true;
+    });
 }
 
 async function loadShopSearchDictionaryUncached(
@@ -210,43 +223,57 @@ async function loadShopSearchDictionaryUncached(
   for (const row of catalogSnapshot.terms) {
     const field = mapKind(row.kind);
     if (!field) continue;
-    const normalized = normalizeQueryText(row.normalizedValue || row.value);
-    if (!normalized) continue;
 
-    const canonical = row.value;
-    const canonicalNormalized = normalizeQueryText(canonical);
-    const key = `${field}\u0000${normalized}\u0000${canonicalNormalized}`;
-    const existing = grouped.get(key);
-    if (existing) {
-      for (const productId of row.productIds) existing.productIds.add(productId);
-      continue;
+    // Shopify Standard Product Category is a hierarchy. Index every typed
+    // segment separately so "Jewelry", "Shoes", "Furniture", "Bicycles",
+    // etc. become exact catalog identities without a hand-written family list.
+    // The full path remains persisted on the product profile and owns final
+    // membership proof; these dictionary entries only recognize shopper intent.
+    const dictionaryValues =
+      row.kind === "SHOPIFY_CATEGORY_PATH"
+        ? shopifyCategoryDictionarySegments(row.value)
+        : [row.value];
+
+    for (const canonical of dictionaryValues) {
+      const normalized = normalizeQueryText(canonical);
+      if (!normalized) continue;
+      const canonicalNormalized = normalizeQueryText(canonical);
+      const key = `${field}\u0000${normalized}\u0000${canonicalNormalized}`;
+      const existing = grouped.get(key);
+      if (existing) {
+        for (const productId of row.productIds) existing.productIds.add(productId);
+        continue;
+      }
+
+      grouped.set(key, {
+        normalized,
+        canonical,
+        aliases: [],
+        field,
+        productCount: row.productCount,
+        productIds: new Set(row.productIds),
+        conceptId: createHash("sha256")
+          .update(`${shop}\u0000${field}\u0000${canonicalNormalized}`, "utf8")
+          .digest("hex")
+          .slice(0, 24),
+        aliasLanguage: null,
+        source: [
+          "PRODUCT_TYPE",
+          "SHOPIFY_CATEGORY_PATH",
+          "VENDOR",
+          "SKU",
+          "BARCODE",
+          "TAG",
+          "VARIANT",
+          "VARIANT_OPTION",
+        ].includes(row.kind)
+          ? "SHOPIFY"
+          : "ENRICHMENT",
+        confidence: row.kind === "SHOPIFY_CATEGORY_PATH"
+          ? 1
+          : confidenceForKind(row.kind, normalized),
+      });
     }
-
-    grouped.set(key, {
-      normalized,
-      canonical,
-      aliases: [],
-      field,
-      productCount: row.productCount,
-      productIds: new Set(row.productIds),
-      conceptId: createHash("sha256")
-        .update(`${shop}\u0000${field}\u0000${canonicalNormalized}`, "utf8")
-        .digest("hex")
-        .slice(0, 24),
-      aliasLanguage: null,
-      source: [
-        "PRODUCT_TYPE",
-        "VENDOR",
-        "SKU",
-        "BARCODE",
-        "TAG",
-        "VARIANT",
-        "VARIANT_OPTION",
-      ].includes(row.kind)
-        ? "SHOPIFY"
-        : "ENRICHMENT",
-      confidence: confidenceForKind(row.kind, normalized),
-    });
   }
 
   const entries = [...grouped.values()].map(({ productIds, ...entry }) => ({
@@ -256,7 +283,7 @@ async function loadShopSearchDictionaryUncached(
   const value: ShopSearchDictionary = {
     shop,
     entries,
-    version: `context-v4-shared-revision:${catalogSnapshot.catalogRevision}:${entries.length}`,
+    version: `context-v5-taxonomy-segments:${catalogSnapshot.catalogRevision}:${entries.length}`,
     loadedAt: Date.now(),
     matchIndex: buildMatchIndex(entries),
   };

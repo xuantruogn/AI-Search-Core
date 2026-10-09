@@ -89,7 +89,7 @@ export function classifyPureFamilyLookup(
       .filter(Boolean),
   )];
   if (exactCatalogFamilies.length === 1) {
-    const canonical = exactCatalogFamilies[0] === "clothes"
+    const canonical = ["clothes", "apparel"].includes(exactCatalogFamilies[0])
       ? "clothing" : exactCatalogFamilies[0];
     return {
       canonical,
@@ -132,7 +132,22 @@ export function classifyPureFamilyLookup(
   if (targets.length !== 1) return null;
 
   const target = targets[0];
-  if (plan.retrievalMode === "DISCOVERY" && !BROAD_CATEGORY_IDENTITIES.has(target)) return null;
+  const fullSourceIdentityTranslation =
+    sourceAligned.length === 1 &&
+    normalizeQueryText(sourceAligned[0]) === target &&
+    (rewrite.analysis.semanticDemand?.identity ?? [])
+      .some((value) => normalizeQueryText(value) === target);
+  // Unknown-language standalone family nouns normally enter through FULL_LLM
+  // and therefore DISCOVERY. When the LLM mapped the ENTIRE source phrase to
+  // exactly one identity and there are no shopper qualifiers, allow complete
+  // taxonomy lookup for any retail family instead of limiting this lane to
+  // clothing. Product membership is still proven independently by Shopify
+  // taxonomy/canonical type, so the translation cannot admit arbitrary items.
+  if (
+    plan.retrievalMode === "DISCOVERY" &&
+    !BROAD_CATEGORY_IDENTITIES.has(target) &&
+    !fullSourceIdentityTranslation
+  ) return null;
   // The merged two-pass plan may contain a canonical translated identity
   // span as well as the source span. Permit that ONE source-aligned translation,
   // but never permit an extra attribute/context or sibling class.
@@ -148,7 +163,7 @@ export function classifyPureFamilyLookup(
   if (plan.identities.length > 1) return null;
   // Clothes/clothing share a canonical taxonomy parent; this is a trusted
   // identity synonym, not an inferred set of product subtypes.
-  const canonical = target === "clothes" ? "clothing" : target;
+  const canonical = ["clothes", "apparel"].includes(target) ? "clothing" : target;
   return { canonical, broadCategory: BROAD_CATEGORY_IDENTITIES.has(target) };
 }
 

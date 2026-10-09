@@ -34,17 +34,23 @@ const counters = {
   vehicles: 0,
   bicycles: 0,
   commonFamilies: {
-    shoes: 0,
-    bags: 0,
-    jewelry: 0,
-    watches: 0,
-    phones: 0,
-    laptops: 0,
-    headphones: 0,
-    cameras: 0,
-    furniture: 0,
-    cosmetics: 0,
-    toys: 0,
+    // Apparel / accessories
+    pants: 0, shorts: 0, shoes: 0, sandals: 0,
+    bags: 0, handbags: 0, backpacks: 0, wallets: 0,
+    jewelry: 0, rings: 0, necklaces: 0, bracelets: 0, earrings: 0,
+    watches: 0, hats: 0, eyewear: 0,
+    // Electronics
+    phones: 0, laptops: 0, tablets: 0, headphones: 0, speakers: 0,
+    cameras: 0, printers: 0, "computer monitors": 0, keyboards: 0,
+    // Home / furniture
+    furniture: 0, beds: 0, mattresses: 0, chairs: 0, tables: 0,
+    lighting: 0, "water bottles": 0, "coffee makers": 0,
+    // Beauty
+    cosmetics: 0, "skin care": 0, fragrances: 0, shampoo: 0,
+    lipstick: 0, sunscreen: 0,
+    // Pet / baby / toys / hardware / media
+    "dog food": 0, "cat food": 0, "baby strollers": 0, diapers: 0,
+    toys: 0, dolls: 0, helmets: 0, "hand tools": 0, "power tools": 0,
     books: 0,
   } as Record<string, number>,
 };
@@ -103,9 +109,10 @@ await scanShopSemanticProfiles(shop, ({ productId, terms }) => {
   if (classifyFamilyProduct(evidence, "vehicles").match) counters.vehicles++;
   if (classifyFamilyProduct(evidence, "bicycle").match) counters.bicycles++;
   for (const family of Object.keys(counters.commonFamilies)) {
-    if (classifyGenericFamilyProduct(evidence, family).match) {
-      counters.commonFamilies[family] += 1;
-    }
+    const match = family === "bags"
+      ? classifyFamilyProduct(evidence, "bags").match
+      : classifyGenericFamilyProduct(evidence, family).match;
+    if (match) counters.commonFamilies[family] += 1;
   }
 });
 
