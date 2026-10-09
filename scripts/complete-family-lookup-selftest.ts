@@ -26,7 +26,7 @@ const makeRewrite = (canonical: string, source: string, extra: Record<string, st
 }) as any;
 
 assert.deepEqual(classifyPureFamilyLookup(makePlan("bicycle", "bicycle"), makeRewrite("bicycle", "bicycle")),
-  { canonical: "bicycle", broadCategory: false });
+  { canonical: "bicycle", broadCategory: false, taxonomyGroup: "bicycle" });
 
 assert.deepEqual(classifyPureFamilyLookup(
   makePlan("clothes", "clothes", "DISCOVERY"),
