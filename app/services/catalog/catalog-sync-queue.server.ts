@@ -719,6 +719,7 @@ async function processOne() {
             const progress =
               await syncEntireCatalog({
                 admin,
+                catalogLanguage: job.languageAtStart,
 
                 shop:
                   job.shop,

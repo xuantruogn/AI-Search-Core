@@ -146,7 +146,15 @@ export async function enqueueProductSyncJob({
   // it will fetch the latest product snapshot when it runs. Never coalesce into
   // PROCESSING work because that attempt may already have fetched an older
   // snapshot; the later webhook must remain as a follow-up.
-  if (cleanTopic === "PRODUCTS_CREATE" || cleanTopic === "PRODUCTS_UPDATE") {
+  //
+  // Catalog scan retries are different: the language-activation state machine
+  // needs one durable retry record tied to the parent catalog job so it can
+  // prove that every failed scan item eventually recovered.
+  const catalogRetry = cleanWebhookId.startsWith("catalog-product-retry:");
+  if (
+    !catalogRetry &&
+    (cleanTopic === "PRODUCTS_CREATE" || cleanTopic === "PRODUCTS_UPDATE")
+  ) {
     const pendingLiveStateJob = await db.aiSearchSyncJob.findFirst({
       where: {
         shop: cleanShop,

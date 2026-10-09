@@ -12,13 +12,15 @@ import {
   FALLBACK_SEARCH_LOCALES,
   isSupportedFallbackLocale,
 } from "../services/commerce/shop-locales.server";
-import { enqueueCatalogRefresh } from "../services/catalog/catalog-sync-job.server";
+import { readCatalogLanguageState, requestCatalogLanguageChange, sampleCatalogSourceLanguage } from "../services/catalog/catalog-language.server";
 import { kickCatalogSyncQueue } from "../services/catalog/catalog-sync-queue.server";
 import { invalidateSearchCatalogRevisionCache } from "../services/search/search-catalog-revision.server";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
   const settings = await getShopSettings(session.shop);
+  const languageState = await readCatalogLanguageState(session.shop);
+  const sourceLanguageSample = await sampleCatalogSourceLanguage(session.shop);
 
   let localeOptions = [...FALLBACK_SEARCH_LOCALES];
 
@@ -43,6 +45,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   return {
     ...settings,
+    pendingCatalogLanguage: languageState.pendingCatalogLanguage,
+    sourceLanguageSample,
     localeOptions,
     onboardingRequired: !settings.searchLanguage?.trim(),
   };
@@ -151,11 +155,17 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     };
   }
 
+  if (languageChanged) {
+    try {
+      await requestCatalogLanguageChange(session.shop, searchLanguage, form.get("catalogLanguageMismatchConfirmed") === "on");
+    } catch (error) {
+      return { success: false, message: error instanceof Error ? error.message : "Catalog rebuild could not be scheduled. Language was not changed." };
+    }
+  }
   await updateShopSettings({
     shop: session.shop,
     aiSearchEnabled,
     customDataModeEnabled,
-    searchLanguage,
     resultLimit: Number.isFinite(resultLimit) ? resultLimit : 20,
   });
   invalidateSearchCatalogRevisionCache(session.shop);
@@ -166,21 +176,17 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   // language selection: the catalog queue coalesces with an existing initial
   // sync, while legacy shops that already have vectors are safely rebuilt.
   if (languageChanged) {
-    const refreshJobId = await enqueueCatalogRefresh(
-      session.shop,
-      "LANGUAGE_CHANGE",
-    );
-    if (refreshJobId) kickCatalogSyncQueue();
+    kickCatalogSyncQueue();
   }
 
   if (onboardingLanguage) {
-    throw redirect("/app");
+    if (!languageChanged) throw redirect("/app");
   }
 
   return {
     success: true,
     message: languageChanged
-      ? "Settings saved. A catalog rescan has been requested for the new product catalog language."
+      ? "Catalog rebuild scheduled. The new language becomes active only after a complete validated rebuild. Shopify native search is used while rebuilding."
       : "Settings saved successfully!",
   };
 };
@@ -190,11 +196,14 @@ export default function SettingsPage() {
   const fetcher = useFetcher<typeof action>();
   const [selectedLanguage, setSelectedLanguage] = useState(data.searchLanguage ?? "");
   const [languageConfirmed, setLanguageConfirmed] = useState(false);
+  const [mismatchConfirmed, setMismatchConfirmed] = useState(false);
   useEffect(() => {
     setSelectedLanguage(data.searchLanguage ?? "");
     setLanguageConfirmed(false);
+    setMismatchConfirmed(false);
   }, [data.searchLanguage]);
   const languageChanged = selectedLanguage.toLowerCase() !== (data.searchLanguage ?? "").toLowerCase();
+  const sourceMismatch = Boolean(data.sourceLanguageSample.dominant && selectedLanguage && data.sourceLanguageSample.dominant !== selectedLanguage.split("-")[0].toLowerCase());
 
   const isSavingSettings = fetcher.state !== "idle";
 
@@ -251,6 +260,10 @@ export default function SettingsPage() {
           </h2>
 
           <fetcher.Form method="post">
+            {data.pendingCatalogLanguage && <p role="status" style={{ padding: 14, background: "#fff8e6", borderRadius: 8 }}>
+              Catalog language rebuild pending: {data.pendingCatalogLanguage}. Active language: {data.searchLanguage ?? "not set"}.
+              Shopify native search remains available. The new language activates only after the full rebuild is verified.
+            </p>}
             {data.onboardingRequired ? (
               <input type="hidden" name="onboarding" value="language" />
             ) : null}
@@ -299,6 +312,7 @@ export default function SettingsPage() {
                   onChange={(event) => {
                     setSelectedLanguage(event.target.value);
                     setLanguageConfirmed(false);
+                    setMismatchConfirmed(false);
                   }}
                   style={{
                     width: "100%",
@@ -349,6 +363,13 @@ export default function SettingsPage() {
                       <span>I confirm that {data.localeOptions.find((item) => item.locale === selectedLanguage)?.name ?? selectedLanguage} is
                         the language of my product catalog, and I understand that all products must be rescanned.</span>
                     </label>
+                    {sourceMismatch && <label style={{ display: "flex", gap: 10, marginTop: 12 }}>
+                      <input type="checkbox" name="catalogLanguageMismatchConfirmed" required
+                        checked={mismatchConfirmed} onChange={(event) => setMismatchConfirmed(event.target.checked)} />
+                      <span>Existing product analysis suggests {data.sourceLanguageSample.dominant} ({data.sourceLanguageSample.known} sampled profiles).
+                        I have checked my source product data and confirm the different language selected here is intentional.
+                        This sample may be incomplete or outdated.</span>
+                    </label>}
                   </div>
                 ) : null}
               </div>
@@ -410,7 +431,7 @@ export default function SettingsPage() {
               <div style={{ display: "flex", alignItems: "center", gap: 16, marginTop: 8 }}>
                 <button
                   type="submit"
-                  disabled={isSavingSettings || (languageChanged && !languageConfirmed)}
+                  disabled={isSavingSettings || (languageChanged && (!languageConfirmed || (sourceMismatch && !mismatchConfirmed)))}
                   style={{
                     padding: "10px 24px",
                     borderRadius: 8,

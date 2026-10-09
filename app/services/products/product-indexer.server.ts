@@ -1,5 +1,8 @@
 ﻿import { createHash } from "node:crypto";
-import { getShopSettings } from "../commerce/shop-registry.server";
+import { PRODUCT_EMBEDDING_PIPELINE_VERSION } from "./product-index-version.server";
+export { PRODUCT_EMBEDDING_PIPELINE_VERSION } from "./product-index-version.server";
+import db from "../../db.server";
+import { readCatalogLanguageState, resolveCatalogIndexLanguage } from "../catalog/catalog-language.server";
 
 import type { ProductForIndex } from "./product-document.server";
 import { buildProductDocument } from "./product-document.server";
@@ -69,6 +72,7 @@ export type ProductIndexReason =
   | "MANUAL_REINDEX";
 
 export type IndexProductInput = {
+  catalogLanguage?: string | null;
   shop: string;
   product: ProductForIndex;
   reason?: ProductIndexReason;
@@ -97,8 +101,6 @@ export function getQdrantPointId(
   );
 }
 
-export const PRODUCT_EMBEDDING_PIPELINE_VERSION =
-  "semantic-product-v9-supply-demand-dense-bm25";
 
 const ENRICHMENT_RETRY_DELAY_MS = 6 * 60 * 60 * 1_000;
 
@@ -204,10 +206,29 @@ async function replaceStaleSemanticProfileWithCurrentSource({
   refreshDerivedRenderTransportForShop(shop);
 }
 
-export async function indexProduct({
+export async function indexProduct(input: IndexProductInput): Promise<IndexedProductResult> {
+  const state = await readCatalogLanguageState(input.shop);
+  const language = resolveCatalogIndexLanguage(input.catalogLanguage, state);
+  const result = await indexProductWithLanguage({ ...input, catalogLanguage: language });
+  if (result.action !== "blocked") {
+    await db.$executeRaw`
+      UPDATE AiSearchIndexedProduct
+      SET catalogLanguage = ${language}
+      WHERE shop = ${input.shop}
+        AND productId = ${input.product.id}
+        AND hasVector = true
+        AND vectorStatus = 'READY'
+        AND documentHash = ${result.documentHash}
+    `;
+  }
+  return result;
+}
+
+async function indexProductWithLanguage({
   shop,
   product,
   reason = "WEBHOOK",
+  catalogLanguage,
 }: IndexProductInput): Promise<IndexedProductResult> {
   const document =
     buildProductDocument(product);
@@ -218,9 +239,7 @@ export async function indexProduct({
     );
   }
 
-  const {
-    searchLanguage,
-  } = await getShopSettings(shop);
+  const searchLanguage = catalogLanguage ?? null;
 
   const documentHash =
     createProductDocumentHash(
