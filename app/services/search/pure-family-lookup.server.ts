@@ -89,7 +89,7 @@ export function classifyPureFamilyLookup(
       .filter(Boolean),
   )];
   if (exactCatalogFamilies.length === 1) {
-    const canonical = exactCatalogFamilies[0] === "clothes"
+    const canonical = ["clothes", "apparel"].includes(exactCatalogFamilies[0])
       ? "clothing" : exactCatalogFamilies[0];
     return {
       canonical,
@@ -163,7 +163,7 @@ export function classifyPureFamilyLookup(
   if (plan.identities.length > 1) return null;
   // Clothes/clothing share a canonical taxonomy parent; this is a trusted
   // identity synonym, not an inferred set of product subtypes.
-  const canonical = target === "clothes" ? "clothing" : target;
+  const canonical = ["clothes", "apparel"].includes(target) ? "clothing" : target;
   return { canonical, broadCategory: BROAD_CATEGORY_IDENTITIES.has(target) };
 }
 
