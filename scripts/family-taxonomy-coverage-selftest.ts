@@ -123,6 +123,12 @@ assert.equal(classifyPureFamilyLookup(plan("trang sức", "jewelry"), rewrite)?.
 assert.equal(classifyPureFamilyLookup(plan("điện thoại", "phones"), rewrite)?.canonical, "phones");
 assert.equal(classifyPureFamilyLookup(plan("laptop", "laptops"), rewrite)?.canonical, "laptops");
 assert.equal(classifyPureFamilyLookup(plan("nội thất", "furniture"), rewrite)?.canonical, "furniture");
+const apparelPlan = plan("apparel", "apparel", "DISCOVERY");
+assert.equal(
+  classifyPureFamilyLookup(apparelPlan, translatedRewrite("apparel", "apparel"))?.canonical,
+  "clothing",
+  "Apparel search must use Shopify Clothing subtree, not Apparel & Accessories",
+);
 for (const [source, target] of [
   ["bình nước", "water bottles"],
   ["thức ăn chó", "dog food"],
