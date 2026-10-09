@@ -273,7 +273,23 @@ export function shopifyCategoryIsClothing(path: string) {
  * Membership then comes from the product's typed Shopify category path or
  * exact sold-item type. Dense/BM25 text is never used as membership proof.
  */
+const IRREGULAR_FAMILY_SINGULAR: Record<string, string> = {
+  mice: "mouse",
+  children: "child",
+  people: "person",
+  men: "man",
+  women: "woman",
+  feet: "foot",
+  teeth: "tooth",
+  knives: "knife",
+  shelves: "shelf",
+  scarves: "scarf",
+  loaves: "loaf",
+};
+
 function singularFamilyToken(token: string) {
+  const irregular = IRREGULAR_FAMILY_SINGULAR[token];
+  if (irregular) return irregular;
   if (token.length > 4 && token.endsWith("ies")) return token.slice(0, -3) + "y";
   if (token.length > 5 && token.endsWith("sses")) return token.slice(0, -2);
   if (token.length > 4 && /(?:ches|shes|xes|zes|ses)$/.test(token)) {
