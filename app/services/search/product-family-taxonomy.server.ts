@@ -37,14 +37,17 @@ const GROUP_MEMBERS: Record<FamilyGroup, readonly FamilyNode[]> = {
 };
 
 /** Exact standalone source expressions. Phrases containing modifiers never match. */
+const QUERY_FAMILIES_UNICODE: Record<string, FamilyGroup> = {
+  "váy": "dress_or_skirt",
+  "áo": "tops",
+  "túi": "bags",
+};
+
 const QUERY_FAMILIES: Record<string, FamilyGroup> = {
-  "vay": "dress_or_skirt",       // Vietnamese broad "váy": dress OR skirt
   "dam": "dress",                // "đầm": dress, not skirt
   "chan vay": "skirt",           // "chân váy": skirt, not dress
-  "ao": "tops",                  // "áo": upper-body clothing
   "xe": "vehicles",              // vehicles, not spare parts or toy cars
   "xe dap": "bicycle",
-  "tui": "bags",                  // "túi": bags, but not suitcases/luggage
 
   // Same controlled semantics for common English standalone family nouns.
   "dress": "dress",
@@ -107,7 +110,9 @@ const CATEGORY_SUBGROUP_DENIAL =
   /\b(?:accessor(?:y|ies)|costume|toy|toys|parts?|replacement|decorations?|equipment)\b/;
 
 export function queryFamilyFromSource(query: string): FamilyGroup | null {
-  return QUERY_FAMILIES[normalizeQueryText(query)] ?? null;
+  return QUERY_FAMILIES_UNICODE[normalizeUnicodeQueryText(query)] ??
+    QUERY_FAMILIES[normalizeQueryText(query)] ??
+    null;
 }
 
 /**
@@ -125,8 +130,6 @@ const SOURCE_CANONICAL_FAMILIES: Record<string, string> = {
   "quan dai": "pants",
   "quan short": "shorts",
   "quan dui": "shorts",
-  "giay": "shoes",
-  "dep": "sandals",
   "tui xach": "handbags",
   "ba lo": "backpacks",
   "trang suc": "jewelry",
@@ -147,13 +150,10 @@ const SOURCE_CANONICAL_FAMILIES: Record<string, string> = {
   "tv": "televisions",
   "noi that": "furniture",
   "giuong": "beds",
-  "nem": "mattresses",
   "my pham": "cosmetics",
   "cham soc da": "skin care",
   "nuoc hoa": "fragrances",
-  "dau goi": "shampoo",
   "do choi": "toys",
-  "sach": "books",
   "balo": "backpacks",
 
   // Common retail families: deterministic fast path only. Unknown family
@@ -180,7 +180,6 @@ const SOURCE_CANONICAL_FAMILIES: Record<string, string> = {
   "dung cu cam tay": "hand tools",
   "dung cu dien": "power tools",
   "ly uong nuoc": "drinkware",
-  "son moi": "lipstick",
   "sua rua mat": "facial cleansers",
   "kem chong nang": "sunscreen",
   "bup be": "dolls",
@@ -201,6 +200,13 @@ const SOURCE_CANONICAL_FAMILIES_UNICODE: Record<string, string> = {
   "chảo": "pans",
   "cốc": "mugs",
   "kem dưỡng": "moisturizers",
+  "giày": "shoes",
+  "dép": "sandals",
+  "nệm": "mattresses",
+  "đệm": "mattresses",
+  "dầu gội": "shampoo",
+  "sách": "books",
+  "son môi": "lipstick",
 };
 
 export function sourceCanonicalFamilyFromSource(query: string): string | null {
