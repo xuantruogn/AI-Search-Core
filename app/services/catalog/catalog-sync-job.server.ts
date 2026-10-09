@@ -151,7 +151,7 @@ async function enqueueCatalogSyncUnlocked({
         \`shop\` = ${shop}
         AND \`status\` = 'FAILED'
         AND \`attempts\` < ${MAX_ATTEMPTS}
-        AND (`lastError` IS NULL OR `lastError` NOT LIKE 'AUTH_REQUIRED:%')
+        AND (\`lastError\` IS NULL OR \`lastError\` NOT LIKE 'AUTH_REQUIRED:%')
       ORDER BY \`id\` DESC
       LIMIT 1
     `;
@@ -257,8 +257,8 @@ async function candidates() {
         failedJob.\`attempts\` < ${MAX_ATTEMPTS}
         AND failedJob.\`status\` = 'FAILED'
         AND (
-          failedJob.`lastError` IS NULL
-          OR failedJob.`lastError` NOT LIKE 'AUTH_REQUIRED:%'
+          failedJob.\`lastError\` IS NULL
+          OR failedJob.\`lastError\` NOT LIKE 'AUTH_REQUIRED:%'
         )
         AND NOT EXISTS (
           SELECT 1
@@ -569,13 +569,13 @@ export async function getLatestCatalogSyncJob(shop: string) {
 // will pick the job up after it is reset to PENDING.
 export async function retryLatestAuthBlockedCatalogSyncJob(shop: string) {
   const rows = await db.$queryRaw<Array<{ id: number }>>`
-    SELECT `id`
-    FROM `AiSearchCatalogSyncJob`
+    SELECT \`id\`
+    FROM \`AiSearchCatalogSyncJob\`
     WHERE
-      `shop` = ${shop}
-      AND `status` = 'FAILED'
-      AND `lastError` LIKE 'AUTH_REQUIRED:%'
-    ORDER BY `id` DESC
+      \`shop\` = ${shop}
+      AND \`status\` = 'FAILED'
+      AND \`lastError\` LIKE 'AUTH_REQUIRED:%'
+    ORDER BY \`id\` DESC
     LIMIT 1
   `;
 
@@ -583,19 +583,19 @@ export async function retryLatestAuthBlockedCatalogSyncJob(shop: string) {
   if (!jobId) return null;
 
   const updated = await db.$executeRaw`
-    UPDATE `AiSearchCatalogSyncJob`
+    UPDATE \`AiSearchCatalogSyncJob\`
     SET
-      `status` = 'PENDING',
-      `attempts` = 0,
-      `lastError` = NULL,
-      `startedAt` = NULL,
-      `processedAt` = NULL,
-      `updatedAt` = UTC_TIMESTAMP(3)
+      \`status\` = 'PENDING',
+      \`attempts\` = 0,
+      \`lastError\` = NULL,
+      \`startedAt\` = NULL,
+      \`processedAt\` = NULL,
+      \`updatedAt\` = UTC_TIMESTAMP(3)
     WHERE
-      `id` = ${jobId}
-      AND `shop` = ${shop}
-      AND `status` = 'FAILED'
-      AND `lastError` LIKE 'AUTH_REQUIRED:%'
+      \`id\` = ${jobId}
+      AND \`shop\` = ${shop}
+      AND \`status\` = 'FAILED'
+      AND \`lastError\` LIKE 'AUTH_REQUIRED:%'
   `;
 
   return updated === 1 ? jobId : null;
