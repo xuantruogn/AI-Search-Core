@@ -82,9 +82,11 @@ export function sourceProductTypeOwnsTarget(args: {
   const contextualBoundaries = new Set([
     "for", "with", "on", "at", "from", "using", "without", "while",
     "when", "during", "about", "around", "because", "to", "pour", "avec", "pendant",
+    "cho", "voi",
   ]);
-  const firstBoundary = tokens.findIndex((token) =>
-    contextualBoundaries.has(token),
+  const firstBoundary = tokens.findIndex((token, index) =>
+    contextualBoundaries.has(token) &&
+    !(token === 'cho' && index === 0 && tokens[index + 1] === 'toi'),
   );
   if (firstBoundary >= 0 && args.start > firstBoundary) return false;
 

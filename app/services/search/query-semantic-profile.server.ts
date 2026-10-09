@@ -12,11 +12,12 @@ import {
 import { normalizeQueryText } from "./deterministic-query-parser.server";
 
 import { sourceProductTypeOwnsTarget } from "./query-planner.server";
+import { sourceFamilyCanonicalIdentity, canonicalFamilyGroup, queryFamilyFromSource, sourceCanonicalFamilyFromSource } from './product-family-taxonomy.server';
 
 export const QUERY_SEMANTIC_PROFILE_VERSION =
-  "query-semantic-profile-v6-parser-target-authority";
+  "query-semantic-profile-v7-source-family-polarity-authority";
 export const QUERY_EMBEDDING_PIPELINE_VERSION =
-  "semantic-expansion-v21-pure-target-equivalence";
+  "semantic-expansion-v22-source-family-breadth";
 
 export type QuerySemanticProfile = {
   rawPlan: QueryPlan;
@@ -28,6 +29,45 @@ export type QuerySemanticProfile = {
 
 export { isGenericDiscoveryFamily } from "./query-family.server";
 import { isGenericDiscoveryFamily } from "./query-family.server";
+
+/** Legacy positive facets must not invert a negated/scalar Demand quality. */
+export function removeNegatedPositivePreferences(values: string[], negatives: string[]) {
+  const excluded = new Set(negatives.map(value => normalizeQueryText(value)
+    .split(' ').filter(token => !['not', 'without', 'too', 'overly', 'excessively'].includes(token)).join(' ')));
+  return values.filter(value => {
+    const normalized = normalizeQueryText(value);
+    return !excluded.has(normalized) && !/^(?:not|without)\b/.test(normalized);
+  });
+}
+
+export function cleanLegacyPositiveFacets(values: string[], demand?: { identity: string[]; contexts: string[]; negativeConstraints: string[] }) {
+  if (!demand) return values;
+  const identities = new Set(demand.identity.map(normalizeQueryText));
+  const contextHeads = new Set(['weather', 'climate', 'season', 'conditions']);
+  return removeNegatedPositivePreferences(values, demand.negativeConstraints).filter(value => {
+    const normalized = normalizeQueryText(value);
+    return !identities.has(normalized) && !(contextHeads.has(normalized) &&
+      demand.contexts.some(context => normalizeQueryText(context).split(' ').includes(normalized)));
+  });
+}
+
+/** Conservative source bridge also survives an LLM omitting the target noun. */
+export function sourceOwnedBroadFamilyIdentities(query: string) {
+  const words = normalizeQueryText(query).split(' ').filter(Boolean);
+  const identities: string[] = [];
+  for (let start = 0; start < words.length; start++) {
+    for (let length = Math.min(6, words.length - start); length >= 1; length--) {
+      const phrase = words.slice(start, start + length).join(' ');
+      if (!queryFamilyFromSource(phrase) && !sourceCanonicalFamilyFromSource(phrase)) continue;
+      const identity = sourceFamilyCanonicalIdentity(query, phrase);
+      if (identity && sourceProductTypeOwnsTarget({query, start, end:start + length})) identities.push(identity);
+      // A longer named subtype owns its whole span; don't widen its inner noun.
+      start += length - 1;
+      break;
+    }
+  }
+  return [...new Set(identities)];
+}
 
 function buildFallbackDiscoverySemanticTerms(plan: QueryPlan) {
   const allowedFields = new Set([
@@ -262,7 +302,7 @@ export function sourceOwnedSemanticDemandIdentities(args: {
               target = target.slice(modifier.length + 1);
             }
           }
-          return target;
+          return sourceFamilyCanonicalIdentity(args.originalQuery, concept.source) ?? target;
         })
         .filter(Boolean);
     }),
@@ -660,7 +700,12 @@ export function composeFacetEmbeddingInput(
   // meaning aligned with product Semantic Supply. In COMPLEMENT, preserve the
   // target/reference relation in the LLM's canonical semanticQuery, not by
   // prepending untranslated shopper text.
-  const naturalIntent = [semanticQuery, demandText]
+  // A narrowed legacy translation must not be concatenated back after the
+  // source-family correction; structured Demand already retains every axis.
+  const sourceFamilyRebound = finalPlan.retrievalMode !== 'COMPLEMENT' && demandText &&
+    (llm.analysis.sourceOwnedTargetIdentities ?? []).some(value =>
+      ['tops', 'dress_or_skirt', 'vehicles'].includes(canonicalFamilyGroup(value) ?? ''));
+  const naturalIntent = (sourceFamilyRebound ? [demandText] : [semanticQuery, demandText])
     .map((value) => value.replace(/\s+/g, " ").trim())
     .filter(Boolean)
     .filter((value, index, values) =>
@@ -773,6 +818,7 @@ export function buildQuerySemanticProfile(args: {
       ["CODE", "DICTIONARY"].includes(item.source))
     .map((item) => item.value);
   const sourceOwnedDemandIdentities = [...new Set([
+    ...sourceOwnedBroadFamilyIdentities(args.originalQuery),
     ...parserOwnedTargetIdentities,
     ...sourceOwnedSemanticDemandIdentities({
     originalQuery: args.originalQuery,
@@ -985,6 +1031,9 @@ export function buildQuerySemanticProfile(args: {
     ...mergedRewriteBaseWithDemand,
     analysis: {
       ...mergedRewriteBaseWithDemand.analysis,
+      attributes: cleanLegacyPositiveFacets(mergedRewriteBaseWithDemand.analysis.attributes, safeLlm.analysis.semanticDemand),
+      optionalPreferences: cleanLegacyPositiveFacets(mergedRewriteBaseWithDemand.analysis.optionalPreferences, safeLlm.analysis.semanticDemand),
+      requiredAttributes: cleanLegacyPositiveFacets(mergedRewriteBaseWithDemand.analysis.requiredAttributes, safeLlm.analysis.semanticDemand),
       retrievalMode,
       semanticDemand: mergedRewriteBaseWithDemand.analysis.semanticDemand
         ? {

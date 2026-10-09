@@ -5,6 +5,7 @@ import type { ProductForIndex } from "../products/product-document.server";
 import type { ProductSemanticAnalysis } from "../products/product-embedding-input.server";
 import type { QueryRewriteResult } from "./query-rewriter.server";
 import { applyFinalRelevanceCutoff } from "./final-relevance-cutoff.server";
+import { canonicalFamilyGroup, classifyFamilyProduct } from './product-family-taxonomy.server';
 import {
   normalizeUnicodeQueryText,
   parseDeterministicQuery,
@@ -2488,6 +2489,24 @@ function directExpansionFactMatch(
   return token.length >= 5 && !GENERIC_DISCOVERY_LEAF_TOKENS.has(token);
 }
 
+/** Source-owned context conflict is negative ranking evidence, not eligibility. */
+export function hasOpposingClimateEvidence(source: string, productValues: string[]) {
+  const polarity = (text: string) => {
+    const value = normalizeContextTerm(text);
+    // Negated contexts are exclusions, handled by the existing negative lane.
+    if (/\b(?:not|without|except|avoid)\b/.test(value)) return { hot: false, cold: false };
+    return {
+      hot: /\b(?:hot weather|warm weather|hot climate|warm climate|summer|heat)\b/.test(value),
+      cold: /\b(?:cold weather|cool weather|cold climate|freezing|winter|snowy|chilly)\b/.test(value),
+    };
+  };
+  const demand = polarity(source);
+  const supply = polarity(productValues.join(' '));
+  // Dual-climate products and unspecified context remain unknown/compatible.
+  return (demand.hot && !demand.cold && supply.cold && !supply.hot) ||
+    (demand.cold && !demand.hot && supply.hot && !supply.cold);
+}
+
 export function sourceContextCatalogValueMatch(
   kind: string,
   catalogValue: string,
@@ -3337,9 +3356,19 @@ export async function filterResultsByExplicitGender<
       "ALIAS",
       "CATEGORY",
     ]);
+    const broadFamilyMatch = identitySignals.some(signal => {
+      const group = canonicalFamilyGroup(signal.value);
+      return group && classifyFamilyProduct({
+        canonicalTypes: valuesForKinds(['CANONICAL_PRODUCT_TYPE']),
+        merchantTypes: valuesForKinds(['PRODUCT_TYPE']),
+        shopifyCategoryPaths: valuesForKinds(['SHOPIFY_CATEGORY_PATH']),
+      }, group).match;
+    });
     const identityMatch = Math.max(
+      broadFamilyMatch ? 1 : 0,
       0,
       ...identitySignals.map((signal) =>
+        canonicalFamilyGroup(signal.value) ? 0 :
         Math.max(
           0,
           ...identityValues.map((value) =>
@@ -3352,7 +3381,7 @@ export async function filterResultsByExplicitGender<
       ),
     );
     const typedFamilyValues = valuesForKinds(["CANONICAL_PRODUCT_TYPE", "PRODUCT_TYPE"]);
-    const identityFamilyHeadMatch = identityFamilyHeadSignals.some((signal) =>
+    const identityFamilyHeadMatch = broadFamilyMatch || identityFamilyHeadSignals.some((signal) =>
       [...typedFamilyValues, ...valuesForKinds(["ALIAS"])].some((actual) => {
         if (!typedProductFamilyMatches(actual, signal)) return false;
         const tokens = normalizeContextTerm(actual).split(" ");
@@ -3676,6 +3705,9 @@ export async function filterResultsByExplicitGender<
     return {
       result,
       identityMatch,
+      broadFamilyMatch,
+      opposingSourceClimate: currentRetrievalMode !== "COMPLEMENT" &&
+        hasOpposingClimateEvidence(originalQuery, valuesForKinds(["PRODUCT_TITLE", "USE_CASE"])),
       hasKnownIdentity: identityValues.length > 0,
       primaryDemandVectorSimilarity:
         Number.isFinite(primaryDemandVectorSimilarity)
@@ -3732,7 +3764,9 @@ export async function filterResultsByExplicitGender<
   // the shopper need without storing every word from an expansion phrase.
   const hasIdentityMatch = scored.some((item) => item.identityMatch >= 0.5);
   const hasSourceOwnedTargetIdentity =
-    (currentRetrievalMode === "DIRECT" || currentRetrievalMode === "COMPLEMENT") &&
+    (currentRetrievalMode === "DIRECT" || currentRetrievalMode === "COMPLEMENT" ||
+      (rewrite.analysis.sourceOwnedTargetIdentities ?? []).some(value =>
+        ['tops', 'dress_or_skirt', 'vehicles'].includes(canonicalFamilyGroup(value) ?? ''))) &&
     (rewrite.analysis.sourceOwnedTargetIdentities?.length ?? 0) > 0;
   const directIdentityGrounded = shouldEnforceDirectIdentity({
     retrievalMode: currentRetrievalMode,
@@ -3936,7 +3970,7 @@ export async function filterResultsByExplicitGender<
       // Primary full Demand then precedes soft source facets and lane boosts;
       // reference ownership and exact exclusions were validated above.
       _identityTier:
-        directIdentityGrounded && item.identityMatch >= 0.75
+        item.broadFamilyMatch || (directIdentityGrounded && item.identityMatch >= 0.75)
           ? 2
           : hasSourceOwnedTargetIdentity && item.targetIdentitySemanticEvidence
             ? 1
@@ -3984,10 +4018,12 @@ export async function filterResultsByExplicitGender<
           ? 1
           : 0,
       _typedRerankScore: typedRerankScore,
+      _opposingSourceClimate: item.opposingSourceClimate,
     }];
   });
   filtered.sort((left, right) =>
     right._identityTier - left._identityTier ||
+    Number(left._opposingSourceClimate) - Number(right._opposingSourceClimate) ||
     right._jointDemandEvidence - left._jointDemandEvidence ||
     right._directSourceFacetTier - left._directSourceFacetTier ||
     (currentRetrievalMode === "DISCOVERY" && sourceCoverageSignals.length >= 2
@@ -4068,6 +4104,7 @@ export async function filterResultsByExplicitGender<
           .primaryVectorSimilarity,
       );
       if (
+        item._opposingSourceClimate ||
         !Number.isSafeInteger(branch) ||
         branch <= 0 ||
         !Number.isFinite(relative) ||
