@@ -60,7 +60,8 @@ assert.equal(queryFamilyFromSource("túi"), "bags");
 assert.equal(queryFamilyFromSource("tui"), null, "Unaccented tui is ambiguous and must use normal query analysis");
 assert.equal(queryFamilyFromSource("bags"), "bags");
 assert.equal(queryFamilyFromSource("vehicles"), "vehicles");
-assert.equal(queryFamilyFromSource("bikes"), "bicycle");
+assert.equal(queryFamilyFromSource("bikes"), null,
+  "Bike can mean bicycle or motorcycle; catalog-aware analysis must resolve it");
 assert.equal(queryFamilyFromSource("túi xách"), null);
 assert.equal(queryFamilyFromSource("váy đỏ"), null);
 assert.equal(sourceCanonicalFamilyFromSource("giày"), "shoes");
