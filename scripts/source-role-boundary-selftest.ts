@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { sourceProductTypeOwnsTarget } from "../app/services/search/query-planner.server";
-import { composeFacetEmbeddingInput, pureTargetDemandEmbedding, sourceOwnedSemanticDemandIdentities, sourceOwnedSemanticExactConstraints, isGenericDiscoveryFamily } from "../app/services/search/query-semantic-profile.server";
+import { composeFacetEmbeddingInput, pureTargetDemandEmbedding, sourceOwnedSemanticDemandIdentities, sourceOwnedSemanticExactConstraints, isGenericDiscoveryFamily, removeNegatedPositivePreferences, sourceOwnedBroadFamilyIdentities, cleanLegacyPositiveFacets } from "../app/services/search/query-semantic-profile.server";
 import { currentTargetColors, detectExplicitGender } from "../app/services/search/shop-context-index.server";
 import { parseDeterministicQuery } from "../app/services/search/deterministic-query-parser.server";
 import { applyFinalRelevanceCutoff } from "../app/services/search/final-relevance-cutoff.server";
@@ -12,6 +12,28 @@ assert.equal(isGenericDiscoveryFamily("cold weather apparel"), true);
 assert.equal(isGenericDiscoveryFamily("cold weather jacket"), false);
 assert.deepEqual(sourceOwnedSemanticDemandIdentities({ originalQuery: "winter jacket", identities: ["winter jacket"], modifiers: ["winter"], mandatoryConcepts: [{ target: "winter jacket", source: "winter jacket" }] }), ["jacket"]);
 assert.deepEqual(sourceOwnedSemanticDemandIdentities({ originalQuery: "snowboard boots", identities: ["snowboard boots"], modifiers: [], mandatoryConcepts: [{ target: "snowboard boots", source: "snowboard boots" }] }), ["snowboard boots"]);
+for (const query of ['áo mặc vào thời tiết lạnh', 'áo dùng đi làm', 'áo nhẹ cho mùa hè']) {
+  assert.deepEqual(sourceOwnedSemanticDemandIdentities({originalQuery:query, identities:['shirt'],mandatoryConcepts:[{target:'shirt',source:'áo'}]}),['upper body clothing']);
+}
+assert.deepEqual(sourceOwnedSemanticDemandIdentities({originalQuery:'áo sơ mi cho trời lạnh',identities:['shirt'],mandatoryConcepts:[{target:'shirt',source:'áo sơ mi'}]}),['shirt']);
+assert.deepEqual(sourceOwnedSemanticDemandIdentities({originalQuery:'áo khoác nhẹ',identities:['jacket'],mandatoryConcepts:[{target:'jacket',source:'áo khoác'}]}),['jacket']);
+assert.deepEqual(removeNegatedPositivePreferences(['thick','waterproof','heavy'],['too thick','overly heavy']),['waterproof']);
+assert.deepEqual(removeNegatedPositivePreferences(['black','black lining'],['black lining']),['black'],'Component exclusion must not erase target color');
+assert.deepEqual(sourceOwnedBroadFamilyIdentities('áo ấm nhưng không quá nặng'),['upper body clothing']);
+assert.deepEqual(sourceOwnedBroadFamilyIdentities('áo khoác nhẹ'),[],'Do not widen a named jacket subtype');
+assert.deepEqual(sourceOwnedBroadFamilyIdentities('quần áo mùa đông'),[],'Do not read áo inside a compound clothing family');
+assert.deepEqual(sourceOwnedBroadFamilyIdentities('phụ kiện cho áo'),[],'Referenced family is not the target');
+assert.deepEqual(sourceOwnedBroadFamilyIdentities('cho tôi áo ấm'),['upper body clothing'],'Imperative give-me is not a reference boundary');
+const reboundEmbedding = composeFacetEmbeddingInput('Looking for shirt in cold weather',
+  {rawQuery:'áo cho trời lạnh',retrievalMode:'DISCOVERY'} as any, {} as any,
+  {fallbackReason:null,analysis:{sourceOwnedTargetIdentities:['upper body clothing'],intent:'Looking for shirt',
+    semanticDemand:{identity:['upper body clothing'],desiredOutcomes:[],useCases:[],contexts:['cold weather'],qualities:['not too thick'],audience:[],styles:[],negativeConstraints:['too thick'],exactConstraints:[]}}} as any);
+assert.doesNotMatch(reboundEmbedding,/\bshirt\b/i,'Narrow legacy prose must not re-enter corrected primary Demand');
+assert.match(reboundEmbedding,/cold weather/i);
+assert.match(reboundEmbedding,/not too thick/i);
+assert.deepEqual(cleanLegacyPositiveFacets(['thick','Weather','Shirt','black'],{
+  identity:['shirt'],contexts:['cold weather'],negativeConstraints:['too thick'],
+}),['black'],'Negatives, identities and generic context heads must not become positive attributes');
 assert.deepEqual(parseDeterministicQuery("adapter compatible with Console 7").compatibility.map(item => item.normalizedValue), ["console 7"]);
 assert.deepEqual(parseDeterministicQuery("case compatible with Phone 12 Pro").compatibility.map(item => item.normalizedValue), ["phone 12 pro"]);
 assert.deepEqual(parseDeterministicQuery("shoes size 42 under 50 dollars").compatibility.map(item => item.normalizedValue), []);

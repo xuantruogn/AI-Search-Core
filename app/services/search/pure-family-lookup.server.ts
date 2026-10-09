@@ -71,7 +71,7 @@ export function classifyPureFamilyLookup(
   if (sourceCanonicalFamily) {
     return {
       canonical: sourceCanonicalFamily,
-      broadCategory: false,
+      broadCategory: BROAD_CATEGORY_IDENTITIES.has(sourceCanonicalFamily),
     };
   }
 
@@ -202,6 +202,8 @@ export function classifyVerifiedFamilyMember(
   if (genericVerdict.match) {
     return genericVerdict.reason === "SHOPIFY_CATEGORY" ? "CATEGORY" : "SUBTYPE";
   }
+  // Negative sold-item evidence must not be resurrected by suffix fallback.
+  if (genericVerdict.reason === "CONTRADICTION") return null;
   if (!typed.length) return null;
   const exact = typed.some((term) =>
     normalizeQueryText(term.value) === normalizeQueryText(target.canonical)

@@ -29,6 +29,28 @@ const GROUP_MEMBERS: Record<FamilyGroup, readonly FamilyNode[]> = {
   bicycle: ["bicycle"],
 };
 
+const FAMILY_NAMES: Record<FamilyGroup, string> = {
+  tops: 'upper body clothing', dress_or_skirt: 'dress or skirt', vehicles: 'vehicles',
+  dress: 'dress', skirt: 'skirt', bicycle: 'bicycle',
+};
+export function canonicalFamilyGroup(value: string): FamilyGroup | null {
+  return (Object.keys(FAMILY_NAMES) as FamilyGroup[]).find(group => FAMILY_NAMES[group] === normalizeQueryText(value)) ?? null;
+}
+/** Preserve the source noun's breadth, but never widen a longer named subtype. */
+export function sourceFamilyCanonicalIdentity(query: string, sourcePhrase: string): string | null {
+  const group = queryFamilyFromSource(sourcePhrase);
+  if (!group) return null;
+  const words = normalizeQueryText(query).split(' ');
+  const phrase = normalizeQueryText(sourcePhrase).split(' ');
+  const start = words.findIndex((_, i) => phrase.every((word, j) => words[i + j] === word));
+  if (start < 0) return null;
+  for (let length = phrase.length + 1; length <= Math.min(6, words.length - start); length++) {
+    const longer = words.slice(start, start + length).join(' ');
+    if (queryFamilyFromSource(longer) || sourceCanonicalFamilyFromSource(longer)) return null;
+  }
+  return FAMILY_NAMES[group];
+}
+
 /** Exact standalone source expressions. Phrases containing modifiers never match. */
 const QUERY_FAMILIES: Record<string, FamilyGroup> = {
   "vay": "dress_or_skirt",       // Vietnamese broad "váy": dress OR skirt
@@ -81,6 +103,7 @@ export function queryFamilyFromSource(query: string): FamilyGroup | null {
  * Product membership still requires Shopify taxonomy/canonical product type.
  */
 const SOURCE_CANONICAL_FAMILIES: Record<string, string> = {
+  "quan ao": "clothing",
   "ao khoac": "jacket",
   "ao so mi": "shirt",
   "ao thun": "t shirt",

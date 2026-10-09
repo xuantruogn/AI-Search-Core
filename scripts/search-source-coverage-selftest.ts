@@ -11,6 +11,11 @@ const profiles = [
   { productId: "generic-jacket", terms: [["CANONICAL_PRODUCT_TYPE", "jacket"]] },
   { productId: "hiker-jacket", terms: [["CANONICAL_PRODUCT_TYPE", "jacket"], ["AUDIENCE", "hikers"]] },
   { productId: "unknown-audience-jacket", terms: [["CANONICAL_PRODUCT_TYPE", "jacket"]] },
+  { productId: "opposing-climate", terms: [["PRODUCT_TITLE", "Cold Weather Riding Gloves"]] },
+  { productId: "unknown-climate", terms: [["PRODUCT_TITLE", "Lightweight Top"]] },
+  { productId: "broad-sweater", terms: [["CANONICAL_PRODUCT_TYPE", "sweater"]] },
+  { productId: "broad-shirt", terms: [["CANONICAL_PRODUCT_TYPE", "shirt"]] },
+  { productId: "accessory-scarf", terms: [["CANONICAL_PRODUCT_TYPE", "scarf"]] },
 ];
 (db.aiSearchProductSemanticProfile as any).findMany = async () => profiles.map(({ productId, terms }) => ({
   productId, updatedAt: new Date(), profile: {
@@ -130,7 +135,51 @@ try {
   });
   assert.equal(expansionOnly.length, 2,
     "LLM expansion evidence remains a ranking hint and cannot hard-exclude a valid source-family candidate");
+  const climateResults = await filterResultsByExplicitGender({
+    shop: "source-coverage-fixture", originalQuery: "something for hot weather",
+    rewrite: { ...rewrite, planning: { ...rewrite.planning, resolvedSegments: [] },
+      analysis: { ...rewrite.analysis, semanticExpansions: [] } },
+    results: [
+      { productId: "opposing-climate", score: 0.50, vectorSimilarity: 0.50,
+        primaryVectorSimilarity: 0.50, retrievalSources: ["SEMANTIC"] },
+      { productId: "unknown-climate", score: 0.45, vectorSimilarity: 0.45,
+        primaryVectorSimilarity: 0.45, retrievalSources: ["SEMANTIC"] },
+    ],
+  });
+  assert.deepEqual(climateResults.map(r => r.productId), ["unknown-climate", "opposing-climate"],
+    "Explicit context contradiction must demote without becoming a hard eligibility filter");
+  const climateDiversity = await filterResultsByExplicitGender({
+    shop: "source-coverage-fixture", originalQuery: "something for hot weather",
+    rewrite: { ...rewrite, planning: { ...rewrite.planning, resolvedSegments: [] } },
+    results: [
+      { productId: "opposing-climate", score: 0.50, vectorSimilarity: 0.50,
+        primaryVectorSimilarity: 0.50, retrievalSources: ["SEMANTIC"], semanticBranchIndex: 2, semanticBranchRelativeScore: 1 },
+      ...["unknown-climate", "partial", "alternative", "complete"].map((productId, i) => ({
+        productId, score: 0.49 - i * 0.01, vectorSimilarity: 0.49 - i * 0.01,
+        primaryVectorSimilarity: 0.49 - i * 0.01, retrievalSources: ["SEMANTIC"],
+        semanticBranchIndex: i + 3, semanticBranchRelativeScore: 1,
+      })),
+    ],
+  });
+  assert.equal(climateDiversity.at(-1)?.productId, "opposing-climate",
+    "Diversity must not promote a contradictory branch champion back to the top");
   console.log("PASS: source coverage reranks without stealing hard-filter authority");
+  for (const [family, mode, expected] of [
+    ['upper body clothing','DISCOVERY',['broad-sweater','broad-shirt']],
+    ['shirt','DIRECT',['broad-shirt']],
+  ] as const) {
+    const familyResults = await filterResultsByExplicitGender({
+      shop:'source-coverage-fixture', originalQuery:'áo cho thời tiết lạnh',
+      rewrite:{...rewrite,planning:{...rewrite.planning,retrievalMode:mode,resolvedSegments:[]},
+        analysis:{...rewrite.analysis,retrievalMode:mode,sourceOwnedTargetIdentities:[family],productType:family,productTypes:[family],semanticExpansions:[]}},
+      results:[
+        {productId:'accessory-scarf',score:0.6,vectorSimilarity:0.6,primaryVectorSimilarity:0.6,retrievalSources:['SEMANTIC']},
+        {productId:'broad-sweater',score:0.46,vectorSimilarity:0.46,primaryVectorSimilarity:0.46,retrievalSources:['SEMANTIC']},
+        {productId:'broad-shirt',score:0.43,vectorSimilarity:0.43,primaryVectorSimilarity:0.43,retrievalSources:['SEMANTIC']},
+      ],
+    });
+    assert.deepEqual(familyResults.map(r=>r.productId),expected,'Source-family breadth must survive discovery while named subtype stays narrow');
+  }
 } finally {
   (db.aiSearchProductSemanticProfile as any).findMany = originalFindMany;
   await db.$disconnect();

@@ -155,6 +155,20 @@ for (const [requested, path] of [
 function category(path: string) {
   return { canonicalTypes: [], merchantTypes: [], shopifyCategoryPaths: [path] };
 }
+// Contradiction is authoritative across fallback lanes, not just the classifier.
+for (const [type, family] of [
+  ["Toy Car", "car"], ["Replica Camera", "camera"],
+  ["Costume Jewelry", "jewelry"],
+] as const) {
+  assert.equal(classifyVerifiedFamilyMember([
+    { kind: "CANONICAL_PRODUCT_TYPE", value: type },
+  ], { canonical: family, broadCategory: false }), null,
+  `${type} must not regain ${family} membership through suffix fallback`);
+}
+assert.ok(classifyVerifiedFamilyMember([
+  { kind: "CANONICAL_PRODUCT_TYPE", value: "Toy Car" },
+], { canonical: "toy car", broadCategory: false }),
+"Explicitly requested toy families remain searchable");
 assert.deepEqual(classifyFamilyProduct(category(
   "Apparel & Accessories > Clothing > Skirts"), "dress_or_skirt"),
   { match: true, reason: "SHOPIFY_CATEGORY", node: "skirt" });
@@ -184,6 +198,11 @@ assert.equal(classifyFamilyProduct({
 }, "bicycle").match, false, "Merchant type must not override a helmet identity");
 
 const target = classifyPureFamilyLookup(plan("váy"), rewrite)!;
+const clothingTarget = classifyPureFamilyLookup(plan('quần áo', 'clothing'), rewrite)!;
+assert.equal(clothingTarget.broadCategory, true, 'Compound broad clothing retains category inheritance');
+assert.equal(classifyVerifiedFamilyMember([
+  {kind:'CANONICAL_PRODUCT_TYPE',value:'pants'}, {kind:'CATEGORY',value:'clothing'},
+],clothingTarget),'CATEGORY');
 const members = [
   { id: "d1", terms: [{ kind: "CANONICAL_PRODUCT_TYPE", value: "Evening Dress" }] },
   { id: "s1", terms: [{ kind: "CANONICAL_PRODUCT_TYPE", value: "Pleated Skirt" }] },
