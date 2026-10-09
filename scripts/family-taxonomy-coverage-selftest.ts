@@ -8,6 +8,7 @@ import {
   classifyPureFamilyLookup, classifyVerifiedFamilyMember,
   retrieveCompleteFamilyCandidates,
 } from "../app/services/search/pure-family-lookup.server";
+import { shopifyCategoryDictionarySegments } from "../app/services/search/shop-search-dictionary.server";
 
 function plan(rawQuery: string, canonical = "dress", mode = "DIRECT") {
   return {
@@ -21,6 +22,19 @@ function plan(rawQuery: string, canonical = "dress", mode = "DIRECT") {
     sort: { field: "RELEVANCE" },
   } as any;
 }
+function translatedRewrite(source: string, target: string) {
+  return {
+    analysis: {
+      semanticMandatoryConcepts: [{ source, target }],
+      semanticDemand: {
+        identity: [target], desiredOutcomes: [], useCases: [], contexts: [],
+        qualities: [], audience: [], styles: [],
+        exactConstraints: [], negativeConstraints: [],
+      },
+    },
+  } as any;
+}
+
 const rewrite = {
   analysis: {
     // LLM might mistakenly collapse Vietnamese broad "váy" to "dress".
@@ -53,6 +67,14 @@ assert.equal(sourceCanonicalFamilyFromSource("nội thất"), "furniture");
 assert.equal(sourceCanonicalFamilyFromSource("mỹ phẩm"), "cosmetics");
 assert.equal(sourceCanonicalFamilyFromSource("đồ chơi"), "toys");
 assert.equal(sourceCanonicalFamilyFromSource("giày đỏ"), null);
+assert.deepEqual(
+  shopifyCategoryDictionarySegments(
+    "Apparel & Accessories > Jewelry > Necklaces > Necklaces",
+  ),
+  ["Apparel & Accessories", "Jewelry", "Necklaces"],
+  "Standard taxonomy paths must expose each unique category segment to the query dictionary",
+);
+
 assert.equal(sourceCanonicalFamilyFromSource("đèn"), "lighting");
 assert.equal(sourceCanonicalFamilyFromSource("đen"), null, "Color black must never become Lighting");
 assert.equal(sourceCanonicalFamilyFromSource("bàn"), "tables");
@@ -74,6 +96,29 @@ assert.equal(classifyPureFamilyLookup(plan("trang sức", "jewelry"), rewrite)?.
 assert.equal(classifyPureFamilyLookup(plan("điện thoại", "phones"), rewrite)?.canonical, "phones");
 assert.equal(classifyPureFamilyLookup(plan("laptop", "laptops"), rewrite)?.canonical, "laptops");
 assert.equal(classifyPureFamilyLookup(plan("nội thất", "furniture"), rewrite)?.canonical, "furniture");
+for (const [source, target] of [
+  ["bình nước", "water bottles"],
+  ["thức ăn chó", "dog food"],
+  ["ghế văn phòng", "office chairs"],
+  ["xe đẩy em bé", "baby strollers"],
+  ["máy pha cà phê", "coffee makers"],
+  ["mũ bảo hiểm", "helmets"],
+  ["dụng cụ cầm tay", "hand tools"],
+] as const) {
+  const translatedPlan = plan(source, target, "DISCOVERY");
+  translatedPlan.identities = [];
+  translatedPlan.resolvedSegments = [];
+  translatedPlan.unresolvedSegments = [source];
+  assert.equal(
+    classifyPureFamilyLookup(
+      translatedPlan,
+      translatedRewrite(source, target),
+      translatedPlan,
+    )?.canonical,
+    target,
+    `Full-source identity translation must enable complete lookup for ${source}`,
+  );
+}
 const exactCatalogPlan = plan("shoes", "shoes");
 exactCatalogPlan.resolvedSegments = [{
   text: "shoes", canonicalValue: "Shoes", field: "PRODUCT_TYPE", confidence: 0.96,
@@ -135,6 +180,24 @@ assert.equal(shopifyCategoryMatchesFamily(
   "Electronics > Electronics Accessories > Mobile Phone Accessories", "phones"), false);
 assert.equal(shopifyCategoryMatchesFamily(
   "Apparel & Accessories > Clothing Accessories > Shoe Accessories", "shoes"), false);
+assert.equal(shopifyCategoryMatchesFamily(
+  "Vehicles & Parts > Vehicle Parts & Accessories > Motorcycle Protective Gear > Motorcycle Helmets",
+  "helmets"), true, "Exact helmet searches must be allowed inside an accessory branch");
+assert.equal(shopifyCategoryMatchesFamily(
+  "Animals & Pet Supplies > Pet Supplies > Dog Supplies > Dog Food",
+  "dog food"), true);
+assert.equal(shopifyCategoryMatchesFamily(
+  "Furniture > Office Furniture > Office Chairs",
+  "office chairs"), true);
+assert.equal(shopifyCategoryMatchesFamily(
+  "Baby & Toddler > Baby Transport > Baby Strollers",
+  "baby strollers"), true);
+assert.equal(shopifyCategoryMatchesFamily(
+  "Cameras & Optics > Cameras > Digital Cameras",
+  "cameras"), true);
+assert.equal(shopifyCategoryMatchesFamily(
+  "Hardware > Tools > Hand Tools",
+  "hand tools"), true);
 
 for (const [requested, path] of [
   ["shoes", "Apparel & Accessories > Shoes > Athletic Shoes"],
