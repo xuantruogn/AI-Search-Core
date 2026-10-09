@@ -54,6 +54,8 @@ assert.equal(queryFamilyFromSource("đầm"), "dress");
 assert.equal(queryFamilyFromSource("Áo"), "tops");
 assert.equal(queryFamilyFromSource("Xe"), "vehicles");
 assert.equal(queryFamilyFromSource("xe đạp"), "bicycle");
+assert.equal(queryFamilyFromSource("túi"), "bags");
+assert.equal(queryFamilyFromSource("túi xách"), null);
 assert.equal(queryFamilyFromSource("váy đỏ"), null);
 assert.equal(sourceCanonicalFamilyFromSource("giày"), "shoes");
 assert.equal(sourceCanonicalFamilyFromSource("túi xách"), "handbags");
@@ -189,6 +191,13 @@ assert.equal(shopifyCategoryMatchesFamily(
 assert.equal(shopifyCategoryMatchesFamily(
   "Apparel & Accessories > Clothing Accessories > Shoe Accessories", "shoes"), false);
 assert.equal(shopifyCategoryMatchesFamily(
+  "Luggage & Bags > Luggage > Suitcases", "bags"), false,
+  "One conjunct of a combined taxonomy root cannot own all sibling descendants");
+assert.equal(shopifyCategoryMatchesFamily(
+  "Health & Beauty > Health Care > First Aid", "beauty"), false);
+assert.equal(shopifyCategoryMatchesFamily(
+  "Food, Beverages & Tobacco > Food Items > Snacks", "tobacco"), false);
+assert.equal(shopifyCategoryMatchesFamily(
   "Vehicles & Parts > Vehicle Parts & Accessories > Motorcycle Protective Gear > Motorcycle Helmets",
   "helmets"), true, "Exact helmet searches must be allowed inside an accessory branch");
 assert.equal(shopifyCategoryMatchesFamily(
@@ -238,6 +247,19 @@ assert.equal(classifyFamilyProduct({
   canonicalTypes: ["Skirt"], merchantTypes: [],
   shopifyCategoryPaths: ["Apparel & Accessories > Clothing > Dresses"],
 }, "dress_or_skirt").match, true, "Both Dress and Skirt belong to the source-owned váy union");
+assert.equal(classifyFamilyProduct(category(
+  "Luggage & Bags > Handbags"), "bags").match, true);
+assert.equal(classifyFamilyProduct(category(
+  "Luggage & Bags > Backpacks"), "bags").match, true);
+assert.equal(classifyFamilyProduct(category(
+  "Luggage & Bags > Duffel Bags"), "bags").match, true);
+assert.equal(classifyFamilyProduct(category(
+  "Luggage & Bags > Luggage > Suitcases"), "bags").match, false,
+  "Broad túi must not absorb suitcases through Luggage & Bags");
+assert.equal(classifyFamilyProduct(category(
+  "Luggage & Bags > Handbag & Wallet Accessories > Bag Straps & Handles"), "bags").match, false,
+  "Bag accessories are not bags");
+
 assert.equal(classifyFamilyProduct(category(
   "Vehicles & Parts > Vehicle Parts & Accessories > Bicycle Helmets"), "bicycle").match, false);
 assert.equal(classifyFamilyProduct(category(
