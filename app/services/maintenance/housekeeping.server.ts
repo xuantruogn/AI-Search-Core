@@ -92,7 +92,11 @@ async function enqueueDueStorefrontCatalogReconciliations() {
         WHERE
           authBlockedJob.\`shop\` = s.\`shop\`
           AND authBlockedJob.\`status\` = 'FAILED'
-          AND authBlockedJob.\`lastError\` LIKE 'AUTH_REQUIRED:%'
+          AND (
+            authBlockedJob.\`lastError\` LIKE 'AUTH_REQUIRED:%'
+            OR authBlockedJob.\`lastError\` = '[object Response]'
+            OR authBlockedJob.\`lastError\` LIKE '%GraphQL Client: Not Found%'
+          )
           AND NOT EXISTS (
             SELECT 1
             FROM \`AiSearchCatalogSyncJob\` recoveredJob
