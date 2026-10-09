@@ -45,6 +45,22 @@ const QUERY_FAMILIES: Record<string, FamilyGroup> = {
   "xe": "vehicles",              // vehicles, not spare parts or toy cars
   "xe dap": "bicycle",
   "tui": "bags",                  // "túi": bags, but not suitcases/luggage
+
+  // Same controlled semantics for common English standalone family nouns.
+  "dress": "dress",
+  "dresses": "dress",
+  "skirt": "skirt",
+  "skirts": "skirt",
+  "top": "tops",
+  "tops": "tops",
+  "bicycle": "bicycle",
+  "bicycles": "bicycle",
+  "bike": "bicycle",
+  "bikes": "bicycle",
+  "vehicle": "vehicles",
+  "vehicles": "vehicles",
+  "bag": "bags",
+  "bags": "bags",
 };
 
 const ACCESSORY_OR_TOY =
