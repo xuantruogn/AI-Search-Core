@@ -146,7 +146,7 @@ async function classifyCatalogFailure({
           refreshToken: string | null;
           refreshTokenExpires: Date | null;
         }
-      | null;
+      | null = null;
 
     try {
       session =
