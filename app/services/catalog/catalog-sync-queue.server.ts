@@ -87,6 +87,7 @@ const MAX_JOBS_PER_DRAIN =
   );
 
 type CatalogFailurePhase =
+  | "LEASE"
   | "AUTH"
   | "SYNC";
 
@@ -487,7 +488,7 @@ async function processOne() {
   }
 
   let failurePhase: CatalogFailurePhase =
-    "AUTH";
+    "LEASE";
 
   try {
     await withDistributedLease({
@@ -673,6 +674,9 @@ async function processOne() {
           heartbeatTimer.unref?.();
 
           try {
+            failurePhase =
+              "AUTH";
+
             const {
               admin,
             } =
