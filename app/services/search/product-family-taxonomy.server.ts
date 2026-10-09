@@ -264,17 +264,33 @@ function genericFamilyPhraseMatches(actual: string, requested: string) {
  * (Jewelry, Shoes, Furniture, Computers...) automatically include descendants.
  */
 export function shopifyCategoryMatchesFamily(path: string, requested: string) {
-  const parts = shopifyCategoryParts(path);
+  const rawParts = path
+    .split(/\s*(?:>|»)\s*/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+  const parts = rawParts.map(normalizeQueryText).filter(Boolean);
   const target = normalizeFamilyPhrase(requested);
   if (!parts.length || !target) return false;
   // Accessory/toy/equipment branches are forbidden only when the shopper is
   // asking for the parent product. They are valid when that branch itself is
-  // the requested family (e.g. "toys", "accessories", "equipment").
+  // the requested family (e.g. "helmets", "accessories", "equipment").
   const targetAllowsDeniedBranch =
     CATEGORY_SUBGROUP_DENIAL.test(target) ||
     ACCESSORY_OR_TOY.test(target);
   if (!targetAllowsDeniedBranch && forbiddenCategoryBranch(parts)) return false;
-  return parts.some((part) => genericFamilyPhraseMatches(part, target));
+
+  return rawParts.some((rawPart) => {
+    const normalizedPart = normalizeFamilyPhrase(rawPart);
+    if (!normalizedPart) return false;
+    // Shopify has combined structural parents such as "Luggage & Bags",
+    // "Health & Beauty" and "Food, Beverages & Tobacco". Matching only one
+    // conjunct must NOT claim every sibling below that parent: Bags must not
+    // silently include Suitcases and Beauty must not include health products.
+    if (/[&,]/.test(rawPart)) {
+      return normalizedPart === target;
+    }
+    return genericFamilyPhraseMatches(normalizedPart, target);
+  });
 }
 
 /**
