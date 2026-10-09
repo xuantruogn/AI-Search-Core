@@ -104,7 +104,11 @@ const FAMILY_HEADS: Record<FamilyNode, readonly string[]> = {
 
 const APPAREL_CATEGORY_SEGMENTS = new Set(["clothing", "apparel", "quan ao"]);
 const CATEGORY_SUBGROUP_DENIAL =
-  /\b(?:accessor(?:y|ies)|costume|toy|toys|parts?|replacement|decorations?)\b/;
+  /\b(?:accessor(?:y|ies)|costume|toy|toys|parts?|replacement)\b/;
+const HARD_ALTERNATE_CATEGORY_BRANCH =
+  /\b(?:costume|toy|toys)\b/;
+const SUBORDINATE_CATEGORY_BRANCH =
+  /\b(?:accessor(?:y|ies)|parts?|replacement)\b/;
 
 export function queryFamilyFromSource(query: string): FamilyGroup | null {
   return QUERY_FAMILIES_UNICODE[normalizeUnicodeQueryText(query)] ??
@@ -308,26 +312,47 @@ export function shopifyCategoryMatchesFamily(path: string, requested: string) {
   const parts = rawParts.map(normalizeQueryText).filter(Boolean);
   const target = normalizeFamilyPhrase(requested);
   if (!parts.length || !target) return false;
-  // Accessory/toy/equipment branches are forbidden only when the shopper is
-  // asking for the parent product. They are valid when that branch itself is
-  // the requested family (e.g. "helmets", "accessories", "equipment").
-  const targetAllowsDeniedBranch =
-    CATEGORY_SUBGROUP_DENIAL.test(target) ||
-    ACCESSORY_OR_TOY.test(target);
-  if (!targetAllowsDeniedBranch && forbiddenCategoryBranch(parts)) return false;
-
-  return rawParts.some((rawPart) => {
+  const matches = rawParts.flatMap((rawPart, index) => {
     const normalizedPart = normalizeFamilyPhrase(rawPart);
-    if (!normalizedPart) return false;
+    if (!normalizedPart) return [];
     // Shopify has combined structural parents such as "Luggage & Bags",
     // "Health & Beauty" and "Food, Beverages & Tobacco". Matching only one
-    // conjunct must NOT claim every sibling below that parent: Bags must not
-    // silently include Suitcases and Beauty must not include health products.
-    if (/[&,]/.test(rawPart)) {
-      return normalizedPart === target;
-    }
-    return genericFamilyPhraseMatches(normalizedPart, target);
+    // conjunct must NOT claim every sibling below that parent.
+    const matched = /[&,]/.test(rawPart)
+      ? normalizedPart === target
+      : genericFamilyPhraseMatches(normalizedPart, target);
+    return matched ? [index] : [];
   });
+  if (!matches.length) return false;
+
+  const targetNamesAlternateClass =
+    HARD_ALTERNATE_CATEGORY_BRANCH.test(target) ||
+    ACCESSORY_OR_TOY.test(target);
+
+  // Toys/costumes change the sold-item class. "Cars" under Toy Cars are not
+  // cars; "Dresses" under Costumes are not normal dresses. Only an explicitly
+  // toy/costume target may cross this boundary.
+  if (
+    !targetNamesAlternateClass &&
+    parts.some((part, index) =>
+      !(index === 0 && ["apparel accessories", "vehicles parts"].includes(part)) &&
+      HARD_ALTERNATE_CATEGORY_BRANCH.test(part))
+  ) return false;
+
+  // Accessories/parts are hierarchical rather than a universal class change.
+  // A parent search (Computers) must not inherit Computer Accessories, while a
+  // specific descendant search (Computer Mice) is legitimate even though its
+  // ancestor is an accessory branch.
+  const subordinateIndex = parts.findIndex((part, index) =>
+    !(index === 0 && ["apparel accessories", "vehicles parts"].includes(part)) &&
+    SUBORDINATE_CATEGORY_BRANCH.test(part));
+  if (
+    subordinateIndex >= 0 &&
+    !targetNamesAlternateClass &&
+    !matches.some((index) => index > subordinateIndex)
+  ) return false;
+
+  return true;
 }
 
 /**
