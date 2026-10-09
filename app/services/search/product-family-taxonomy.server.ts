@@ -14,16 +14,23 @@ import { normalizeQueryText, normalizeUnicodeQueryText } from "./deterministic-q
  */
 export type FamilyNode =
   | "dress" | "skirt" | "top" | "bicycle" | "car" | "motorcycle"
-  | "scooter" | "truck" | "bus" | "van";
+  | "scooter" | "truck" | "bus" | "van"
+  | "handbag" | "backpack" | "duffel_bag" | "tote_bag"
+  | "messenger_bag" | "crossbody_bag" | "shoulder_bag"
+  | "laptop_bag" | "briefcase" | "clutch" | "waist_bag";
 
 export type FamilyGroup =
-  | "dress_or_skirt" | "tops" | "vehicles"
+  | "dress_or_skirt" | "tops" | "vehicles" | "bags"
   | "dress" | "skirt" | "bicycle";
 
 const GROUP_MEMBERS: Record<FamilyGroup, readonly FamilyNode[]> = {
   dress_or_skirt: ["dress", "skirt"],
   tops: ["top"],
   vehicles: ["bicycle", "car", "motorcycle", "scooter", "truck", "bus", "van"],
+  bags: [
+    "handbag", "backpack", "duffel_bag", "tote_bag", "messenger_bag",
+    "crossbody_bag", "shoulder_bag", "laptop_bag", "briefcase", "clutch", "waist_bag",
+  ],
   dress: ["dress"],
   skirt: ["skirt"],
   bicycle: ["bicycle"],
@@ -37,6 +44,7 @@ const QUERY_FAMILIES: Record<string, FamilyGroup> = {
   "ao": "tops",                  // "áo": upper-body clothing
   "xe": "vehicles",              // vehicles, not spare parts or toy cars
   "xe dap": "bicycle",
+  "tui": "bags",                  // "túi": bags, but not suitcases/luggage
 };
 
 const ACCESSORY_OR_TOY =
@@ -65,6 +73,17 @@ const FAMILY_HEADS: Record<FamilyNode, readonly string[]> = {
   truck: ["truck", "trucks", "pickup truck", "pickup trucks", "xe tai"],
   bus: ["bus", "buses", "coach", "coaches", "xe buyt"],
   van: ["van", "vans", "minivan", "minivans", "xe van"],
+  handbag: ["handbag", "handbags", "purse", "purses", "tui xach"],
+  backpack: ["backpack", "backpacks", "rucksack", "rucksacks", "ba lo", "balo"],
+  duffel_bag: ["duffel bag", "duffel bags", "duffle bag", "duffle bags"],
+  tote_bag: ["tote bag", "tote bags"],
+  messenger_bag: ["messenger bag", "messenger bags"],
+  crossbody_bag: ["crossbody bag", "crossbody bags"],
+  shoulder_bag: ["shoulder bag", "shoulder bags"],
+  laptop_bag: ["laptop bag", "laptop bags"],
+  briefcase: ["briefcase", "briefcases"],
+  clutch: ["clutch", "clutches", "clutch bag", "clutch bags"],
+  waist_bag: ["waist bag", "waist bags", "belt bag", "belt bags", "fanny pack", "fanny packs"],
 };
 
 const APPAREL_CATEGORY_SEGMENTS = new Set(["clothing", "apparel", "quan ao"]);
@@ -92,7 +111,6 @@ const SOURCE_CANONICAL_FAMILIES: Record<string, string> = {
   "quan dui": "shorts",
   "giay": "shoes",
   "dep": "sandals",
-  "tui": "bags",
   "tui xach": "handbags",
   "ba lo": "backpacks",
   "trang suc": "jewelry",
