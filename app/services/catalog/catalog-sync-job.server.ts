@@ -9,6 +9,20 @@ export const CATALOG_SYNC_STATUS = {
   failed: "FAILED",
 } as const;
 
+export const CATALOG_AUTH_BLOCK_PREFIX = "AUTH_REQUIRED:";
+
+export function isCatalogAuthBlockedError(
+  error: string | null | undefined,
+) {
+  if (!error) return false;
+
+  return (
+    error.startsWith(CATALOG_AUTH_BLOCK_PREFIX) ||
+    error === "[object Response]" ||
+    /GraphQL Client:\s*Not Found/i.test(error)
+  );
+}
+
 export type CatalogJobRow = {
   id: number;
   shop: string;
@@ -75,6 +89,8 @@ function claimable(job: CatalogJobRow, now: Date) {
   if (job.status === CATALOG_SYNC_STATUS.pending) return true;
 
   if (job.status === CATALOG_SYNC_STATUS.failed) {
+    if (isCatalogAuthBlockedError(job.lastError)) return false;
+
     const failedAt = asDate(job.processedAt);
     return (
       !failedAt ||
@@ -141,6 +157,14 @@ async function enqueueCatalogSyncUnlocked({
         \`shop\` = ${shop}
         AND \`status\` = 'FAILED'
         AND \`attempts\` < ${MAX_ATTEMPTS}
+        AND (
+          \`lastError\` IS NULL
+          OR (
+            \`lastError\` NOT LIKE 'AUTH_REQUIRED:%'
+            AND \`lastError\` <> '[object Response]'
+            AND \`lastError\` NOT LIKE '%GraphQL Client: Not Found%'
+          )
+        )
       ORDER BY \`id\` DESC
       LIMIT 1
     `;
@@ -245,6 +269,14 @@ async function candidates() {
       WHERE
         failedJob.\`attempts\` < ${MAX_ATTEMPTS}
         AND failedJob.\`status\` = 'FAILED'
+        AND (
+          failedJob.\`lastError\` IS NULL
+          OR (
+            failedJob.\`lastError\` NOT LIKE 'AUTH_REQUIRED:%'
+            AND failedJob.\`lastError\` <> '[object Response]'
+            AND failedJob.\`lastError\` NOT LIKE '%GraphQL Client: Not Found%'
+          )
+        )
         AND NOT EXISTS (
           SELECT 1
           FROM \`AiSearchCatalogSyncJob\` activeJob
@@ -547,6 +579,51 @@ export async function getLatestCatalogSyncJob(shop: string) {
     LIMIT 1
   `;
   return rows[0] ?? null;
+}
+
+// Re-authentication recovery for catalog jobs that were deliberately blocked
+// because the offline Shopify session could not be used. The background poller
+// will pick the job up after it is reset to PENDING.
+export async function retryLatestAuthBlockedCatalogSyncJob(shop: string) {
+  const rows = await db.$queryRaw<Array<{ id: number }>>`
+    SELECT \`id\`
+    FROM \`AiSearchCatalogSyncJob\`
+    WHERE
+      \`shop\` = ${shop}
+      AND \`status\` = 'FAILED'
+      AND (
+        \`lastError\` LIKE 'AUTH_REQUIRED:%'
+        OR \`lastError\` = '[object Response]'
+        OR \`lastError\` LIKE '%GraphQL Client: Not Found%'
+      )
+    ORDER BY \`id\` DESC
+    LIMIT 1
+  `;
+
+  const jobId = rows[0]?.id ?? null;
+  if (!jobId) return null;
+
+  const updated = await db.$executeRaw`
+    UPDATE \`AiSearchCatalogSyncJob\`
+    SET
+      \`status\` = 'PENDING',
+      \`attempts\` = 0,
+      \`lastError\` = NULL,
+      \`startedAt\` = NULL,
+      \`processedAt\` = NULL,
+      \`updatedAt\` = UTC_TIMESTAMP(3)
+    WHERE
+      \`id\` = ${jobId}
+      AND \`shop\` = ${shop}
+      AND \`status\` = 'FAILED'
+      AND (
+        \`lastError\` LIKE 'AUTH_REQUIRED:%'
+        OR \`lastError\` = '[object Response]'
+        OR \`lastError\` LIKE '%GraphQL Client: Not Found%'
+      )
+  `;
+
+  return updated === 1 ? jobId : null;
 }
 
 // Manual recovery after a catalog job has exhausted automatic retries.
