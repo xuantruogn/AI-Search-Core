@@ -14,7 +14,13 @@ export const CATALOG_AUTH_BLOCK_PREFIX = "AUTH_REQUIRED:";
 export function isCatalogAuthBlockedError(
   error: string | null | undefined,
 ) {
-  return Boolean(error?.startsWith(CATALOG_AUTH_BLOCK_PREFIX));
+  if (!error) return false;
+
+  return (
+    error.startsWith(CATALOG_AUTH_BLOCK_PREFIX) ||
+    error === "[object Response]" ||
+    /GraphQL Client:\s*Not Found/i.test(error)
+  );
 }
 
 export type CatalogJobRow = {
@@ -151,7 +157,14 @@ async function enqueueCatalogSyncUnlocked({
         \`shop\` = ${shop}
         AND \`status\` = 'FAILED'
         AND \`attempts\` < ${MAX_ATTEMPTS}
-        AND (\`lastError\` IS NULL OR \`lastError\` NOT LIKE 'AUTH_REQUIRED:%')
+        AND (
+          \`lastError\` IS NULL
+          OR (
+            \`lastError\` NOT LIKE 'AUTH_REQUIRED:%'
+            AND \`lastError\` <> '[object Response]'
+            AND \`lastError\` NOT LIKE '%GraphQL Client: Not Found%'
+          )
+        )
       ORDER BY \`id\` DESC
       LIMIT 1
     `;
@@ -258,7 +271,11 @@ async function candidates() {
         AND failedJob.\`status\` = 'FAILED'
         AND (
           failedJob.\`lastError\` IS NULL
-          OR failedJob.\`lastError\` NOT LIKE 'AUTH_REQUIRED:%'
+          OR (
+            failedJob.\`lastError\` NOT LIKE 'AUTH_REQUIRED:%'
+            AND failedJob.\`lastError\` <> '[object Response]'
+            AND failedJob.\`lastError\` NOT LIKE '%GraphQL Client: Not Found%'
+          )
         )
         AND NOT EXISTS (
           SELECT 1
@@ -574,7 +591,11 @@ export async function retryLatestAuthBlockedCatalogSyncJob(shop: string) {
     WHERE
       \`shop\` = ${shop}
       AND \`status\` = 'FAILED'
-      AND \`lastError\` LIKE 'AUTH_REQUIRED:%'
+      AND (
+        \`lastError\` LIKE 'AUTH_REQUIRED:%'
+        OR \`lastError\` = '[object Response]'
+        OR \`lastError\` LIKE '%GraphQL Client: Not Found%'
+      )
     ORDER BY \`id\` DESC
     LIMIT 1
   `;
@@ -595,7 +616,11 @@ export async function retryLatestAuthBlockedCatalogSyncJob(shop: string) {
       \`id\` = ${jobId}
       AND \`shop\` = ${shop}
       AND \`status\` = 'FAILED'
-      AND \`lastError\` LIKE 'AUTH_REQUIRED:%'
+      AND (
+        \`lastError\` LIKE 'AUTH_REQUIRED:%'
+        OR \`lastError\` = '[object Response]'
+        OR \`lastError\` LIKE '%GraphQL Client: Not Found%'
+      )
   `;
 
   return updated === 1 ? jobId : null;
