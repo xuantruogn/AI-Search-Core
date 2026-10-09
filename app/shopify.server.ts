@@ -9,6 +9,7 @@ import {
 import { PrismaSessionStorage } from "@shopify/shopify-app-session-storage-prisma";
 
 import prisma from "./db.server";
+import { retryLatestAuthBlockedCatalogSyncJob } from "./services/catalog/catalog-sync-job.server";
 import { syncThemeMapV4AfterInstall } from "./services/theme/theme-map-v4-install.server";
 
 const shopify = shopifyApp({
@@ -40,6 +41,21 @@ const shopify = shopifyApp({
       admin,
       session,
     }) => {
+      const resumedCatalogJob =
+        await retryLatestAuthBlockedCatalogSyncJob(
+          session.shop,
+        );
+
+      if (resumedCatalogJob) {
+        console.log(
+          "[AI Search] Catalog sync resumed after Shopify re-authentication:",
+          {
+            shop: session.shop,
+            jobId: resumedCatalogJob,
+          },
+        );
+      }
+
       /*
        * Theme Map V4 initial bootstrap.
        *
