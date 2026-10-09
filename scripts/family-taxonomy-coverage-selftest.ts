@@ -75,6 +75,14 @@ assert.deepEqual(
   "Standard taxonomy paths must expose each unique category segment to the query dictionary",
 );
 
+assert.equal(sourceCanonicalFamilyFromSource("bình nước"), "water bottles");
+assert.equal(sourceCanonicalFamilyFromSource("thức ăn chó"), "dog food");
+assert.equal(sourceCanonicalFamilyFromSource("xe đẩy em bé"), "baby strollers");
+assert.equal(sourceCanonicalFamilyFromSource("máy pha cà phê"), "coffee makers");
+assert.equal(sourceCanonicalFamilyFromSource("mũ bảo hiểm"), "helmets");
+assert.equal(sourceCanonicalFamilyFromSource("dụng cụ cầm tay"), "hand tools");
+assert.equal(sourceCanonicalFamilyFromSource("son môi"), "lipstick");
+assert.equal(sourceCanonicalFamilyFromSource("búp bê"), "dolls");
 assert.equal(sourceCanonicalFamilyFromSource("đèn"), "lighting");
 assert.equal(sourceCanonicalFamilyFromSource("đen"), null, "Color black must never become Lighting");
 assert.equal(sourceCanonicalFamilyFromSource("bàn"), "tables");
