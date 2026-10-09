@@ -145,12 +145,8 @@ const SOURCE_CANONICAL_FAMILIES: Record<string, string> = {
   "lop xe": "tires",
   "dung cu cam tay": "hand tools",
   "dung cu dien": "power tools",
-  "noi": "pots",
-  "chao": "pans",
-  "coc": "mugs",
   "ly uong nuoc": "drinkware",
   "son moi": "lipstick",
-  "kem duong": "moisturizers",
   "sua rua mat": "facial cleansers",
   "kem chong nang": "sunscreen",
   "bup be": "dolls",
@@ -167,6 +163,10 @@ const SOURCE_CANONICAL_FAMILIES_UNICODE: Record<string, string> = {
   "bàn": "tables",
   "ghế": "chairs",
   "đèn": "lighting",
+  "nồi": "pots",
+  "chảo": "pans",
+  "cốc": "mugs",
+  "kem dưỡng": "moisturizers",
 };
 
 export function sourceCanonicalFamilyFromSource(query: string): string | null {
