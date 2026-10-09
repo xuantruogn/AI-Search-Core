@@ -16,6 +16,7 @@ import {
 import { withProductSyncLock } from "./product-sync-lock.server";
 import { ensureShopForBackgroundWork } from "../commerce/shop-registry.server";
 import { withDistributedLease } from "../commerce/lease-lock.server";
+import { tryActivatePendingCatalogLanguage } from "../catalog/catalog-language.server";
 
 type AdminGraphqlClient = {
   graphql: (
@@ -275,6 +276,31 @@ export async function processClaimedProductSyncJob({
           productId: latestJob.productId,
           action: result.action,
         });
+
+        if (committed) {
+          try {
+            const activated = await tryActivatePendingCatalogLanguage(latestJob.shop);
+            if (activated) {
+              console.log("[AI Search] Pending catalog language activated after product recovery:", {
+                shop: latestJob.shop,
+                productJobId: latestJob.id,
+              });
+            }
+          } catch (activationError) {
+            // Product synchronization is already durable. Do not turn a
+            // successful product recovery into a retry storm because the
+            // language publication recheck failed transiently; another
+            // recovery or catalog completion will retry activation.
+            console.error("[AI Search] Catalog language activation recheck failed:", {
+              shop: latestJob.shop,
+              productJobId: latestJob.id,
+              error:
+                activationError instanceof Error
+                  ? activationError.message
+                  : String(activationError),
+            });
+          }
+        }
 
         return {
           jobId: latestJob.id,
