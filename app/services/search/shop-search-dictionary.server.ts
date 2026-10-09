@@ -183,6 +183,19 @@ function confidenceForKind(kind: string, normalized: string) {
   return 1;
 }
 
+export function shopifyCategoryDictionarySegments(value: string) {
+  const seen = new Set<string>();
+  return value
+    .split(/\s*(?:>|»)\s*/)
+    .map((part) => part.trim())
+    .filter((part) => {
+      const normalized = normalizeQueryText(part);
+      if (!normalized || seen.has(normalized)) return false;
+      seen.add(normalized);
+      return true;
+    });
+}
+
 async function loadShopSearchDictionaryUncached(
   shop: string,
   catalogRevision: string,
@@ -218,10 +231,7 @@ async function loadShopSearchDictionaryUncached(
     // membership proof; these dictionary entries only recognize shopper intent.
     const dictionaryValues =
       row.kind === "SHOPIFY_CATEGORY_PATH"
-        ? row.value
-            .split(/\s*(?:>|»)\s*/)
-            .map((value) => value.trim())
-            .filter(Boolean)
+        ? shopifyCategoryDictionarySegments(row.value)
         : [row.value];
 
     for (const canonical of dictionaryValues) {
