@@ -107,7 +107,7 @@ const FAMILY_HEADS: Record<FamilyNode, readonly string[]> = {
 
 const APPAREL_CATEGORY_SEGMENTS = new Set(["clothing", "apparel", "quan ao"]);
 const CATEGORY_SUBGROUP_DENIAL =
-  /\b(?:accessor(?:y|ies)|costume|toy|toys|parts?|replacement|decorations?|equipment)\b/;
+  /\b(?:accessor(?:y|ies)|costume|toy|toys|parts?|replacement|decorations?)\b/;
 
 export function queryFamilyFromSource(query: string): FamilyGroup | null {
   return QUERY_FAMILIES_UNICODE[normalizeUnicodeQueryText(query)] ??
