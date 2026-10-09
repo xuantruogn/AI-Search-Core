@@ -109,9 +109,10 @@ await scanShopSemanticProfiles(shop, ({ productId, terms }) => {
   if (classifyFamilyProduct(evidence, "vehicles").match) counters.vehicles++;
   if (classifyFamilyProduct(evidence, "bicycle").match) counters.bicycles++;
   for (const family of Object.keys(counters.commonFamilies)) {
-    if (classifyGenericFamilyProduct(evidence, family).match) {
-      counters.commonFamilies[family] += 1;
-    }
+    const match = family === "bags"
+      ? classifyFamilyProduct(evidence, "bags").match
+      : classifyGenericFamilyProduct(evidence, family).match;
+    if (match) counters.commonFamilies[family] += 1;
   }
 });
 
