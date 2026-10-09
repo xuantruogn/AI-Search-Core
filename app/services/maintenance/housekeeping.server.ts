@@ -86,6 +86,24 @@ async function enqueueDueStorefrontCatalogReconciliations() {
         WHERE activeJob.\`shop\` = s.\`shop\`
           AND activeJob.\`status\` IN ('PENDING', 'PROCESSING')
       )
+      AND NOT EXISTS (
+        SELECT 1
+        FROM `AiSearchCatalogSyncJob` authBlockedJob
+        WHERE
+          authBlockedJob.`shop` = s.`shop`
+          AND authBlockedJob.`status` = 'FAILED'
+          AND authBlockedJob.`lastError` LIKE 'AUTH_REQUIRED:%'
+          AND NOT EXISTS (
+            SELECT 1
+            FROM `AiSearchCatalogSyncJob` recoveredJob
+            WHERE
+              recoveredJob.`shop` = s.`shop`
+              AND recoveredJob.`status` = 'DONE'
+              AND recoveredJob.`processedAt` IS NOT NULL
+              AND authBlockedJob.`processedAt` IS NOT NULL
+              AND recoveredJob.`processedAt` > authBlockedJob.`processedAt`
+          )
+      )
       AND COALESCE((
         SELECT MAX(doneJob.\`processedAt\`)
         FROM \`AiSearchCatalogSyncJob\` doneJob
