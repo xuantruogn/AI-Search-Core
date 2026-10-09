@@ -1,4 +1,5 @@
 import { unauthenticated } from "../../shopify.server";
+import db from "../../db.server";
 
 import { syncEntireCatalog } from "../products/catalog-sync.server";
 import { fetchProductPresenceByIds } from "../products/product-sync.server";
@@ -84,6 +85,170 @@ const MAX_JOBS_PER_DRAIN =
     "AI_SEARCH_CATALOG_QUEUE_BATCH_SIZE",
     2,
   );
+
+type CatalogFailurePhase =
+  | "AUTH"
+  | "SYNC";
+
+async function describeCatalogThrownValue(error: unknown) {
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  if (
+    typeof Response !== "undefined" &&
+    error instanceof Response
+  ) {
+    let body = "";
+
+    try {
+      body =
+        (await error.clone().text())
+          .trim()
+          .slice(0, 2_000);
+    } catch {
+      body = "";
+    }
+
+    const statusText =
+      error.statusText?.trim();
+
+    return [
+      `HTTP ${error.status}${statusText ? ` ${statusText}` : ""}`,
+      body ? `body=${body}` : "",
+    ]
+      .filter(Boolean)
+      .join("; ");
+  }
+
+  return String(error);
+}
+
+async function classifyCatalogFailure({
+  error,
+  shop,
+  phase,
+}: {
+  error: unknown;
+  shop: string;
+  phase: CatalogFailurePhase;
+}) {
+  const detail =
+    await describeCatalogThrownValue(
+      error,
+    );
+
+  if (phase === "AUTH") {
+    const session =
+      await db.session.findUnique({
+        where: {
+          id: `offline_${shop}`,
+        },
+        select: {
+          expires: true,
+          refreshToken: true,
+          refreshTokenExpires: true,
+        },
+      });
+
+    if (!session) {
+      return (
+        `AUTH_REQUIRED: OFFLINE_SESSION_MISSING; shop=${shop}; ` +
+        `cause=${detail}`
+      );
+    }
+
+    const now =
+      Date.now();
+
+    const accessExpired =
+      Boolean(session.expires) &&
+      session.expires!.getTime() <=
+        now;
+
+    const refreshExpired =
+      Boolean(
+        session.refreshTokenExpires,
+      ) &&
+      session.refreshTokenExpires!.getTime() <=
+        now;
+
+    if (accessExpired) {
+      const accessExpiredAt =
+        session.expires?.toISOString() ??
+        "unknown";
+
+      const refreshExpiresAt =
+        session.refreshTokenExpires?.toISOString() ??
+        "unknown";
+
+      if (!session.refreshToken) {
+        return (
+          `AUTH_REQUIRED: OFFLINE_REFRESH_TOKEN_MISSING; shop=${shop}; ` +
+          `accessExpiredAt=${accessExpiredAt}; cause=${detail}`
+        );
+      }
+
+      if (refreshExpired) {
+        return (
+          `AUTH_REQUIRED: OFFLINE_REFRESH_TOKEN_EXPIRED; shop=${shop}; ` +
+          `accessExpiredAt=${accessExpiredAt}; refreshExpiresAt=${refreshExpiresAt}; ` +
+          `cause=${detail}`
+        );
+      }
+
+      return (
+        `AUTH_REQUIRED: OFFLINE_TOKEN_REFRESH_FAILED; shop=${shop}; ` +
+        `accessExpiredAt=${accessExpiredAt}; refreshExpiresAt=${refreshExpiresAt}; ` +
+        `cause=${detail}`
+      );
+    }
+
+    if (
+      typeof Response !==
+        "undefined" &&
+      error instanceof
+        Response &&
+      (error.status === 401 ||
+        error.status === 403)
+    ) {
+      return (
+        `AUTH_REQUIRED: OFFLINE_SESSION_REJECTED; shop=${shop}; ` +
+        `cause=${detail}`
+      );
+    }
+  }
+
+  if (
+    /GraphQL Client:\s*Not Found/i.test(
+      detail,
+    ) ||
+    /Received an error response \(404 Not Found\) from Shopify/i.test(
+      detail,
+    )
+  ) {
+    return (
+      `AUTH_REQUIRED: SHOPIFY_ADMIN_GRAPHQL_NOT_FOUND; shop=${shop}; ` +
+      `cause=${detail}`
+    );
+  }
+
+  if (
+    /\b(401 Unauthorized|403 Forbidden)\b/i.test(
+      detail,
+    ) ||
+    /invalid_(?:request|subject_token)/i.test(
+      detail,
+    )
+  ) {
+    return (
+      `AUTH_REQUIRED: SHOPIFY_ADMIN_AUTH_REJECTED; shop=${shop}; ` +
+      `cause=${detail}`
+    );
+  }
+
+  return detail;
+}
 
 // ============================================================
 // STALE CATALOG CLEANUP
@@ -321,6 +486,9 @@ async function processOne() {
     return false;
   }
 
+  let failurePhase: CatalogFailurePhase =
+    "AUTH";
+
   try {
     await withDistributedLease({
       shop:
@@ -511,6 +679,9 @@ async function processOne() {
               await unauthenticated.admin(
                 job.shop,
               );
+
+            failurePhase =
+              "SYNC";
 
             let retryJobs =
               0;
@@ -891,10 +1062,17 @@ async function processOne() {
         },
     });
   } catch (error) {
+    const failure =
+      await classifyCatalogFailure({
+        error,
+        shop: job.shop,
+        phase: failurePhase,
+      });
+
     await markCatalogSyncFailed(
       job.id,
       job.attempts,
-      error,
+      failure,
     );
   }
 
