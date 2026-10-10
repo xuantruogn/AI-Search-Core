@@ -141,38 +141,11 @@ export async function enqueueProductSyncJob({
 
   const gid = normalizeProductGid(productId);
 
-  // Shopify can emit a burst of create/update webhooks while the same product
-  // is edited. A PENDING job has not observed Shopify yet, so one job is enough:
-  // it will fetch the latest product snapshot when it runs. Never coalesce into
-  // PROCESSING work because that attempt may already have fetched an older
-  // snapshot; the later webhook must remain as a follow-up.
-  //
-  // Catalog scan retries are different: the language-activation state machine
-  // needs one durable retry record tied to the parent catalog job so it can
-  // prove that every failed scan item eventually recovered.
-  const catalogRetry = cleanWebhookId.startsWith("catalog-product-retry:");
-  if (
-    !catalogRetry &&
-    (cleanTopic === "PRODUCTS_CREATE" || cleanTopic === "PRODUCTS_UPDATE")
-  ) {
-    const pendingLiveStateJob = await db.aiSearchSyncJob.findFirst({
-      where: {
-        shop: cleanShop,
-        productId: gid,
-        topic: { in: ["PRODUCTS_CREATE", "PRODUCTS_UPDATE"] },
-        status: PRODUCT_SYNC_JOB_STATUS.pending,
-      },
-      orderBy: { id: "desc" },
-      select: { id: true },
-    });
-    if (pendingLiveStateJob) {
-      return {
-        created: false,
-        duplicate: true,
-        jobId: pendingLiveStateJob.id,
-      };
-    }
-  }
+  // Persist every distinct Shopify delivery. Checking for an existing PENDING
+  // product job before insert is racy: the worker may claim/fetch that job
+  // between the check and the new webhook, losing the newer snapshot.
+  // The unique webhookId still deduplicates re-deliveries of one event.
+  // Policy-triggered REINDEX jobs have separate deduplication semantics.
 
   if (
     cleanTopic === "REINDEX_PRODUCT" ||
