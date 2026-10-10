@@ -1,5 +1,5 @@
 import { normalizeProductGid } from "../products/product-id.server";
-import { fetchSearchableProductSnapshotsByIds } from "../products/product-sync.server";
+import { fetchSearchableProductSnapshotsByIds, type SearchableProductSnapshot } from "../products/product-sync.server";
 import type { SearchResult } from "./semantic-search.server";
 import type { QueryRewriteAnalysis } from "./query-rewriter.server";
 import {
@@ -44,14 +44,7 @@ export async function filterSearchResultsByPrice({
   const totalStartedAt = Date.now();
   const normalizeStartedAt = Date.now();
   const gidByProductId = new Map<string, string>();
-  const snapshots = new Map<string, {
-    productId: string;
-    handle: string;
-    title: string;
-    minVariantPrice: number;
-    maxVariantPrice: number;
-    currencyCode: string;
-  }>();
+  const snapshots = new Map<string, SearchableProductSnapshot>();
   for (const result of results) {
     try {
       const gid = normalizeProductGid(result.productId);
@@ -91,20 +84,22 @@ export async function filterSearchResultsByPrice({
   const filtered = results.flatMap((result) => {
     const gid = gidByProductId.get(result.productId);
     const snapshot = gid ? snapshots.get(gid) : null;
-    if (!snapshot && !constraint) {
-      // A soft sort must never silently delete a valid candidate with missing price.
-      return [result];
-    }
+    // Missing snapshot means Shopify did not verify this product as visible.
+    // Do not expose deleted/unpublished products merely because sort is soft.
+    if (!snapshot) return [];
     if (
-      !snapshot ||
-      (constraint && !productPriceMatchesConstraint(
-        {
-          min: snapshot.minVariantPrice,
-          max: snapshot.maxVariantPrice,
-          currencyCode: snapshot.currencyCode,
-        },
-        constraint,
-      ))
+      constraint &&
+      (snapshot.minVariantPrice === null ||
+        snapshot.maxVariantPrice === null ||
+        !snapshot.currencyCode ||
+        !productPriceMatchesConstraint(
+          {
+            min: snapshot.minVariantPrice,
+            max: snapshot.maxVariantPrice,
+            currencyCode: snapshot.currencyCode,
+          },
+          constraint,
+        ))
     ) {
       return [];
     }

@@ -47,6 +47,8 @@ jobs:
         run: npx tsx scripts/audit-search-live-snapshots-selftest.ts
       - name: System audit and data invariants
         run: npm run test:system-audit
+      - name: Product-policy no-op and vector-retention DB test
+        run: npx tsx scripts/audit-product-policy-idempotency-selftest.ts
       - name: Concurrent grant idempotency in isolated MySQL
         run: npx tsx scripts/audit-quota-idempotency-selftest.ts
       - name: Billing lifecycle policy regressions

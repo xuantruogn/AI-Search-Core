@@ -774,8 +774,9 @@ export type SearchableProductSnapshot = {
   productId: string;
   handle: string;
   title: string;
-  minVariantPrice: number;
-  maxVariantPrice: number;
+  // A published product may lack a usable price; deleted products are omitted.
+  minVariantPrice: number | null;
+  maxVariantPrice: number | null;
   currencyCode: string;
 };
 
@@ -905,12 +906,13 @@ async function fetchSearchableProductSnapshotsBatch(
     );
   }
 
-  for (
-    const node
-    of json.data
-      ?.nodes ??
-    []
-  ) {
+  // Individual nulls mean deleted IDs. A malformed response is an error,
+  // never proof that every product was deleted.
+  if (!Array.isArray(json.data?.nodes) || json.data.nodes.length !== ids.length) {
+    throw new Error("Shopify storefront-product validation returned incomplete nodes");
+  }
+
+  for (const node of json.data.nodes) {
     const minVariantPrice =
       Number.parseFloat(
         node?.priceRangeV2
@@ -938,13 +940,6 @@ async function fetchSearchableProductSnapshotsBatch(
       !node?.id ||
       !node.handle ||
       !node.title ||
-      !Number.isFinite(
-        minVariantPrice,
-      ) ||
-      !Number.isFinite(
-        maxVariantPrice,
-      ) ||
-      !currencyCode ||
       !isSearchableOnlineStoreProduct({
         status:
           node.status,
@@ -968,9 +963,9 @@ async function fetchSearchableProductSnapshotsBatch(
         title:
           node.title,
 
-        minVariantPrice,
+        minVariantPrice: Number.isFinite(minVariantPrice) && currencyCode ? minVariantPrice : null,
 
-        maxVariantPrice,
+        maxVariantPrice: Number.isFinite(maxVariantPrice) && currencyCode ? maxVariantPrice : null,
 
         currencyCode,
       },
