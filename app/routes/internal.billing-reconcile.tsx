@@ -44,6 +44,13 @@ async function runDueReconciliation() {
             { nextReconciliationAt: { lte: now } },
           ],
         },
+        {
+          OR: [
+            { status: { not: "FROZEN" } },
+            { frozenFollowupUntil: null },
+            { frozenFollowupUntil: { gt: now } },
+          ],
+        },
       ],
     },
     orderBy: [{ nextReconciliationAt: "asc" }, { updatedAt: "asc" }],
