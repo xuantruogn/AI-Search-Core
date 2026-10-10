@@ -162,6 +162,9 @@ export async function handleDevDashboardAction({
     throw new Response("Bad Request", { status: 400 });
   }
 
+  // Plan, quota and shop mutations all require fresh MFA, not just role access.
+  await requireRecentDevAuthentication(request);
+
   try {
     if (intent === "create_plan") {
       const reason = optionalPlanNote(form);
