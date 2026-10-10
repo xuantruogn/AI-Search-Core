@@ -254,6 +254,10 @@ model BillingSubscription {
   reconciliationCheckedAt DateTime?
   reconciliationReason    String?                     @db.VarChar(255)
   repairRequiredAt        DateTime?
+  // Due-only provider polling schedule; null means eligible for the first due check.
+  nextReconciliationAt    DateTime?
+  reconciliationAttempt   Int                         @default(0)
+  frozenFollowupUntil     DateTime?
 
   trialStartsAt         DateTime?
   trialEndsAt           DateTime?
