@@ -80,16 +80,55 @@ export async function getShopEntitlement(
   };
   const limits = await applyActiveQuotaGrants(shop, baseLimits);
 
+  const now = new Date();
+  const trialEndsAt = subscription.trialEndsAt;
+  const billingPeriodEnd = subscription.billingPeriodEnd;
+
+  // A provider status of ACTIVE is not sufficient after its entitlement window
+  // has ended. During trial, the trial end is the deadline. After trial, Shopify
+  // must expose a billing period that extends beyond the trial deadline.
+  const trialWindowActive =
+    subscription.trialStatus === "ACTIVE" &&
+    trialEndsAt !== null &&
+    trialEndsAt > now;
+
+  const paidWindowActive =
+    billingPeriodEnd !== null &&
+    billingPeriodEnd > now &&
+    (
+      trialEndsAt === null ||
+      billingPeriodEnd > trialEndsAt
+    );
+
+  const activeSubscriptionWindow =
+    subscription.status === "ACTIVE" &&
+    (trialWindowActive || paidWindowActive);
+
+  const cancelledPaidWindow =
+    subscription.status === "CANCELLED" &&
+    subscription.trialStatus !== "ACTIVE" &&
+    subscription.trialStatus !== "CANCELLED" &&
+    billingPeriodEnd !== null &&
+    billingPeriodEnd > now;
+
   const subscriptionActive =
     shopLifecycleStatus === "ACTIVE" &&
-    (
-      subscription.status === "ACTIVE" ||
-      (
-        subscription.status === "CANCELLED" &&
-        subscription.billingPeriodEnd !== null &&
-        subscription.billingPeriodEnd > new Date()
-      )
-    );
+    (activeSubscriptionWindow || cancelledPaidWindow);
+
+  console.log("[BILLING WINDOW] entitlement decision", {
+    shop,
+    status: subscription.status,
+    trialStatus: subscription.trialStatus,
+    trialStartsAt: subscription.trialStartsAt?.toISOString() ?? null,
+    trialEndsAt: trialEndsAt?.toISOString() ?? null,
+    billingPeriodStart: subscription.billingPeriodStart?.toISOString() ?? null,
+    billingPeriodEnd: billingPeriodEnd?.toISOString() ?? null,
+    paymentStatus: subscription.paymentStatus,
+    now: now.toISOString(),
+    trialWindowActive,
+    paidWindowActive,
+    subscriptionActive,
+  });
   const productSlotAvailable =
     limits.productLimit === null || productSlotsUsed < limits.productLimit;
   const productLimitExceeded =
