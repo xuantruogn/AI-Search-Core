@@ -281,6 +281,7 @@ model BillingSubscription {
 
   @@index([shop, status])
   @@index([shop, createdAt])
+  @@index([nextReconciliationAt, status], map: "billing_subscriptions_next_reconciliation_idx")
   @@map("billing_subscriptions")
 }
 
