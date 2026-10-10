@@ -1,7 +1,6 @@
 import type { ActionFunctionArgs } from "react-router";
 
 import { authenticate } from "../shopify.server";
-import db from "../db.server";
 import { deleteShopCommercialData } from "../services/commerce/shop-registry.server";
 import { deleteShopProductVectors } from "../services/search/vector-store.server";
 import { ensureProductCollection } from "../services/search/qdrant.server";
@@ -25,7 +24,6 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     return new Response("Vector cleanup failed", { status: 500 });
   }
 
-  await db.session.deleteMany({ where: { shop } });
   await deleteShopCommercialData(shop);
 
   console.log("[AI Search] Shop redact completed:", { shop });
