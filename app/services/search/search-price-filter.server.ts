@@ -91,6 +91,10 @@ export async function filterSearchResultsByPrice({
   const filtered = results.flatMap((result) => {
     const gid = gidByProductId.get(result.productId);
     const snapshot = gid ? snapshots.get(gid) : null;
+    if (!snapshot && !constraint) {
+      // A soft sort must never silently delete a valid candidate with missing price.
+      return [result];
+    }
     if (
       !snapshot ||
       (constraint && !productPriceMatchesConstraint(
@@ -118,9 +122,9 @@ export async function filterSearchResultsByPrice({
 
   // Soft preferences reorder nearby relevance scores. Explicit price sorting
   // preserves the complete list already accepted by semantic retrieval.
-  const topScore = Math.max(...filtered.map((item) => item.score));
+  const topScore = filtered.length ? Math.max(...filtered.map((item) => item.score)) : 0;
   const candidates = filtered;
-  const price = (item: SearchResult) => snapshots.get(item.productId)!.minVariantPrice;
+  const price = (item: SearchResult) => snapshots.get(item.productId)?.minVariantPrice ?? null;
   const sortStartedAt = Date.now();
   if (sortIntent !== "RELEVANCE") {
     candidates.sort((a, b) => {
@@ -128,8 +132,12 @@ export async function filterSearchResultsByPrice({
         const bandDifference = Math.floor((topScore - a.score) / 0.03) - Math.floor((topScore - b.score) / 0.03);
         if (bandDifference) return bandDifference;
       }
+      const aPrice = price(a);
+      const bPrice = price(b);
+      // Unknown prices sort last in both directions, but remain in the result set.
+      if (aPrice === null || bPrice === null) return aPrice === null ? (bPrice === null ? b.score - a.score : 1) : -1;
       const direction = sortIntent === "PRICE_ASC" || sortIntent === "BUDGET" ? 1 : -1;
-      return direction * (price(a) - price(b)) || b.score - a.score;
+      return direction * (aPrice - bPrice) || b.score - a.score;
     });
   }
   const sortCodeMs = Date.now() - sortStartedAt;
