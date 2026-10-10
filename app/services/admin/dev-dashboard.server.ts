@@ -30,6 +30,7 @@ type ShopRow = {
   legacyBillingPeriodEnd: Date | string | null;
   legacySource: string | null;
   aiSearchEnabled: boolean | number | null;
+  adminSuspended: boolean | number | null;
   productLimitOverride: number | null;
   searchLimitOverride: number | null;
   vectorUpdateLimitOverride: number | null;
@@ -158,6 +159,7 @@ export async function getDevDashboardData(search = "") {
         sub.\`billingPeriodEnd\` AS \`legacyBillingPeriodEnd\`,
         sub.\`source\` AS \`legacySource\`,
         st.\`aiSearchEnabled\`,
+        st.\`adminSuspended\`,
         st.\`productLimitOverride\`,
         st.\`searchLimitOverride\`,
         st.\`vectorUpdateLimitOverride\`,
@@ -383,7 +385,9 @@ export async function getDevDashboardData(search = "") {
       legacyBillingPeriodStart: row.legacyBillingPeriodStart,
       legacyBillingPeriodEnd: row.legacyBillingPeriodEnd,
       legacySource: row.legacySource,
-      aiSearchEnabled: Boolean(row.aiSearchEnabled),
+      aiSearchEnabled: Boolean(row.aiSearchEnabled) && !Boolean(row.adminSuspended),
+      merchantEnabled: Boolean(row.aiSearchEnabled),
+      adminEnabled: !Boolean(row.adminSuspended),
       overrides: {
         product: row.productLimitOverride,
         search: row.searchLimitOverride,
