@@ -1,4 +1,5 @@
 import type { LoaderFunctionArgs } from "react-router";
+import { withSearchAttempt, beginSearchAttempt, patchSearchAttempt, attemptFailure } from "../services/search/search-attempt-context.server";
 
 import { authenticate } from "../shopify.server";
 import {
@@ -600,7 +601,9 @@ function buildShopifyProductQuery(
 // LOADER
 // ==========================================
 
-export const loader = async ({
+export const loader = ({ request }: LoaderFunctionArgs) => withSearchAttempt(() => proxyLoader({ request } as LoaderFunctionArgs));
+
+const proxyLoader = async ({
   request,
 }: LoaderFunctionArgs) => {
   console.time(
@@ -676,8 +679,9 @@ let resultCacheStatus: "HIT" | "MISS" = "MISS";
     value: string,
     target?: string | null,
     reason = "NATIVE_SEARCH",
-  ) =>
-    wantsJson
+  ) => {
+    patchSearchAttempt({ nativeFallback: true, reason });
+    return wantsJson
       ? Response.json(
           {
             status: "fallback",
@@ -702,6 +706,7 @@ let resultCacheStatus: "HIT" | "MISS" = "MISS";
           target,
           reason,
         );
+  };
 
   try {
     const authStartedAt =
@@ -750,8 +755,10 @@ let resultCacheStatus: "HIT" | "MISS" = "MISS";
       requestUrl.searchParams.get(
         "mode",
       );
+    await beginSearchAttempt(session.shop, requestMode || (receiptRaw ? "RECEIPT_PAGE" : "SEARCH"), query);
 
     if (!await catalogLanguageSearchReady(session.shop)) {
+      patchSearchAttempt({ nativeFallback: true, reason: "CATALOG_LANGUAGE_REBUILD_PENDING" });
       if (wantsJson || requestMode) return Response.json({ status: "fallback", engine: "native", reason: "CATALOG_LANGUAGE_REBUILD_PENDING" }, { headers: { "Cache-Control": "no-store" } });
       return nativeRedirect(query, nativeSearchTarget, "CATALOG_LANGUAGE_REBUILD_PENDING");
     }
@@ -2325,6 +2332,7 @@ let resultCacheStatus: "HIT" | "MISS" = "MISS";
     const reservation:
       UsageReservation =
       reservationResult.reservation;
+    patchSearchAttempt({ reservationId: reservation.id, periodId: reservation.periodId });
 
     const startedAt =
       Date.now();
@@ -2363,6 +2371,7 @@ let resultCacheStatus: "HIT" | "MISS" = "MISS";
         resultCacheStatus = cachedQueryResult ? "HIT" : "MISS";
 
         if (cachedQueryResult) {
+          patchSearchAttempt({ cacheHit: true });
           sortIntent = cachedQueryResult.metadata.sortIntent;
           priceConstraint =
             cachedQueryResult.metadata.priceConstraint as ReturnType<
@@ -2460,6 +2469,7 @@ let resultCacheStatus: "HIT" | "MISS" = "MISS";
 
       const rewriteStartedAt =
         Date.now();
+      patchSearchAttempt({ aiExecuted: true, cacheHit: false });
 
       const queryRouterEnabled = !["0", "false", "off", "no"].includes(
         process.env.AI_SEARCH_QUERY_ROUTER_ENABLED?.trim().toLowerCase() ?? "",
@@ -4416,6 +4426,7 @@ let resultCacheStatus: "HIT" | "MISS" = "MISS";
               : String(error),
         },
       );
+      attemptFailure(error, executionPhase);
 
       try {
         await rollbackSearchUsage(
@@ -4434,6 +4445,8 @@ let resultCacheStatus: "HIT" | "MISS" = "MISS";
       );
     }
   } catch (error) {
+    if (error instanceof Response) throw error;
+    attemptFailure(error);
     console.error("[AI Search] App proxy request failed", {
       mode: requestUrl.searchParams.get("mode"),
       query,

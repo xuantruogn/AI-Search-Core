@@ -119,6 +119,22 @@ export default function DevSearchHistoryRoute() {
               </label>
 
               <label>
+                <span>From (UTC)</span>
+                <input type="date" name="from" defaultValue={filters.from} />
+              </label>
+              <label>
+                <span>To (UTC, inclusive)</span>
+                <input type="date" name="to" defaultValue={filters.to} />
+              </label>
+              <label>
+                <span>Search results</span>
+                <select name="resultStatus" defaultValue={filters.resultStatus}>
+                  <option value="">All results</option>
+                  <option value="HAS_RESULTS">Has results</option>
+                  <option value="ZERO_RESULTS">Zero results</option>
+                </select>
+              </label>
+              <label>
                 <span>Rows</span>
                 <select name="pageSize" defaultValue={String(filters.pageSize)}>
                   <option value="25">25</option>
@@ -127,10 +143,19 @@ export default function DevSearchHistoryRoute() {
                   <option value="250">250</option>
                 </select>
               </label>
+              <label>
+                <span>Attempt CSV status only</span>
+                <select name="attemptStatus" defaultValue={filters.attemptStatus}>
+                  <option value="">All attempts</option>
+                  {["STARTED", "SUCCESS", "CACHE_HIT", "ZERO_RESULTS", "NATIVE_FALLBACK", "QUOTA_BLOCKED", "AI_PROVIDER_ERROR", "RETRIEVAL_ERROR", "TIMEOUT", "PIPELINE_ERROR"].map((status) => <option value={status} key={status}>{status}</option>)}
+                </select>
+              </label>
 
               <div className="dc-history-filter-actions">
                 <button className="dc-button dc-button-primary" type="submit">Apply</button>
                 <Link className="dc-button" to="/dev/search-history">Reset</Link>
+                <a className="dc-button" href={pageUrl(history.filters, 1).replace("/dev/search-history?", "/dev/search-history-export?")}>Export filtered CSV</a>
+                <a className="dc-button" href={pageUrl(history.filters, 1).replace("/dev/search-history?", "/dev/search-history-export?source=attempts&")}>Export attempts / native fallbacks</a>
               </div>
             </Form>
 
@@ -140,6 +165,7 @@ export default function DevSearchHistoryRoute() {
                 Showing {number(pagination.from)}–{number(pagination.to)}
                 {filters.shop ? " · " + filters.shop : " · all shops"}
               </small>
+              <small>History shows retained AI query logs. Attempt CSV also includes native/error outcomes recorded after rollout. For outcomes without a query log, only the query hash is available; a query/LLM filter excludes those rows. Native click counts are unavailable, not zero.</small>
             </div>
           </div>
 
@@ -274,6 +300,10 @@ function pageUrl(
     shop: string;
     query: string;
     llmStatus: string;
+    resultStatus: string;
+    attemptStatus: string;
+    from: string;
+    to: string;
     page: number;
     pageSize: number;
   },
@@ -283,6 +313,10 @@ function pageUrl(
   if (filters.shop) params.set("shop", filters.shop);
   if (filters.query) params.set("query", filters.query);
   if (filters.llmStatus) params.set("llmStatus", filters.llmStatus);
+  if (filters.resultStatus) params.set("resultStatus", filters.resultStatus);
+  if (filters.attemptStatus) params.set("attemptStatus", filters.attemptStatus);
+  if (filters.from) params.set("from", filters.from);
+  if (filters.to) params.set("to", filters.to);
   params.set("pageSize", String(filters.pageSize));
   params.set("page", String(page));
   return "/dev/search-history?" + params.toString();

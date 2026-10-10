@@ -1,12 +1,11 @@
-import { Prisma } from "@prisma/client";
-
 import db from "../../db.server";
+import { historyFilters } from "./search-history-export";
 
 const PAGE_SIZES = [25, 50, 100, 250] as const;
 const DEFAULT_PAGE_SIZE = 50;
 
 function positiveInt(value: string | null, fallback: number) {
-  const parsed = Number.parseInt(value ?? "", 10);
+  const parsed = Number(value ?? "");
   return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : fallback;
 }
 
@@ -42,25 +41,9 @@ function readTopVectorSimilarity(rankedProductsJson: string) {
 }
 
 export async function getDevSearchHistoryData(searchParams: URLSearchParams) {
-  const shop = searchParams.get("shop")?.trim() ?? "";
-  const query = searchParams.get("query")?.trim() ?? "";
-  const llmStatus = searchParams.get("llmStatus")?.trim() ?? "";
+  const { shop, query, llmStatus, resultStatus, attemptStatus, from, to, where } = historyFilters(searchParams);
   const requestedPage = positiveInt(searchParams.get("page"), 1);
   const pageSize = normalizePageSize(searchParams.get("pageSize"));
-
-  const where: Prisma.AiSearchQueryLogWhereInput = {
-    ...(shop ? { shop } : {}),
-    ...(llmStatus ? { llmStatus } : {}),
-    ...(query
-      ? {
-          OR: [
-            { query: { contains: query } },
-            { analyzedQuery: { contains: query } },
-            { llmExpandedQuery: { contains: query } },
-          ],
-        }
-      : {}),
-  };
 
   const [shopRows, statusRows, total] = await Promise.all([
     db.aiSearchShop.findMany({
@@ -112,6 +95,7 @@ export async function getDevSearchHistoryData(searchParams: URLSearchParams) {
       shop,
       query,
       llmStatus,
+      resultStatus, attemptStatus, from, to,
       page,
       pageSize,
     },

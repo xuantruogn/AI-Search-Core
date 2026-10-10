@@ -2,6 +2,7 @@ import type { LoaderFunctionArgs } from "react-router";
 import { Form, redirect, useLoaderData } from "react-router";
 
 import { login } from "../../shopify.server";
+import { getPublicPricing } from "../../services/commerce/public-pricing.server";
 import styles from "./styles.module.css";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
@@ -9,8 +10,10 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   if (url.searchParams.get("shop")) {
     throw redirect(`/app?${url.searchParams.toString()}`);
   }
-  return { showForm: Boolean(login) };
+  try { return { showForm: Boolean(login), plans: await getPublicPricing(), pricingUnavailable: false }; }
+  catch { console.error("[Landing] PRICING_UNAVAILABLE"); return { showForm: Boolean(login), plans: [], pricingUnavailable: true }; }
 };
+export const headers = () => ({ "Cache-Control": "no-store" });
 
 function SearchIcon() {
   return <svg aria-hidden="true" viewBox="0 0 24 24"><path d="m21 21-4.35-4.35m2.35-5.15a7.5 7.5 0 1 1-15 0 7.5 7.5 0 0 1 15 0Z" /></svg>;
@@ -37,14 +40,8 @@ const capabilities = [
   ["◇", "Tích hợp giao diện an toàn", "Theme Map V4 dùng thẻ sản phẩm của giao diện hiện tại và chuyển về Shopify Search khi không tương thích."],
 ];
 
-const plans = [
-  { name: "Basic", price: "$9.90", suffix: "/ tháng", description: "Cho cửa hàng nhỏ cần tìm kiếm AI có giới hạn rõ ràng.", features: ["505 sản phẩm được lập chỉ mục", "3.000 lượt tìm kiếm mỗi kỳ", "1.000 lượt cập nhật vector mỗi kỳ", "Tự chuyển về Shopify Search khi cần"] },
-  { name: "Pro", price: "$29.90", suffix: "/ tháng", description: "Cho danh mục và lưu lượng tìm kiếm lớn hơn.", featured: true, features: ["Không giới hạn sản phẩm", "Không giới hạn lượt tìm kiếm", "Không giới hạn cập nhật vector", "Ưu tiên xử lý và hỗ trợ kỹ thuật"] },
-  { name: "Custom", price: "Liên hệ", suffix: "", description: "Hạn mức và mức giá riêng theo nhu cầu của cửa hàng.", features: ["Hạn mức theo thỏa thuận", "Theo dõi chi phí và dung lượng", "Quản lý bằng Shopify Billing", "Hỗ trợ triển khai riêng"] },
-];
-
 export default function App() {
-  const { showForm } = useLoaderData<typeof loader>();
+  const { showForm, plans, pricingUnavailable } = useLoaderData<typeof loader>();
 
   return (
     <main className={styles.page}>
@@ -60,7 +57,7 @@ export default function App() {
           <h1>Tìm kiếm hiểu ý định. <span>Trả đúng sản phẩm.</span></h1>
           <p className={styles.lead}>AI-Buyense hiểu ngôn ngữ tự nhiên, thuộc tính, ngữ cảnh và truy vấn đa ngôn ngữ; sau đó xếp hạng sản phẩm phù hợp và hiển thị bằng chính giao diện Shopify của bạn.</p>
           <div className={styles.heroActions}><a className={styles.primaryButton} href="#dang-nhap">Kết nối cửa hàng <ArrowIcon /></a><a className={styles.secondaryButton} href="/demo">Xem bản mẫu <span aria-hidden="true">▶</span></a></div>
-          <div className={styles.heroFacts}><span><CheckIcon /> Dùng thử 7 ngày</span><span><CheckIcon /> Thanh toán qua Shopify</span><span><CheckIcon /> Giữ nguyên giao diện theme</span></div>
+          <div className={styles.heroFacts}><span><CheckIcon /> Dùng thử chỉ áp dụng cho Basic theo cấu hình gói</span><span><CheckIcon /> Thanh toán qua Shopify</span><span><CheckIcon /> Giữ nguyên giao diện theme</span></div>
         </div>
 
         <div className={styles.searchPreview} aria-label="Minh họa kết quả tìm kiếm AI-Buyense">
@@ -96,7 +93,7 @@ export default function App() {
 
       <section className={styles.setupSection}><div className={styles.sectionHeading}><span>THIẾT LẬP ĐƠN GIẢN</span><h2>Sẵn sàng tìm kiếm AI trong 3 bước</h2></div><div className={styles.setupSteps}><article><i>1</i><h3>Kết nối ứng dụng</h3><p>Đăng nhập an toàn bằng Shopify OAuth và chọn gói phù hợp.</p></article><article><i>2</i><h3>Đồng bộ danh mục</h3><p>AI-Buyense xử lý dữ liệu sản phẩm và tạo chỉ mục vector.</p></article><article><i>3</i><h3>Kích hoạt cửa hàng</h3><p>Bật App Embed, đồng bộ Theme Map và kiểm tra kết quả.</p></article></div></section>
 
-      <section className={styles.pricingSection} id="bang-gia"><div className={styles.sectionHeading}><span>THANH TOÁN QUA SHOPIFY</span><h2>Gói dịch vụ rõ ràng theo quy mô cửa hàng</h2><p>Tất cả giao dịch được quản lý qua Shopify. Basic và Pro có 7 ngày dùng thử.</p></div><div className={styles.pricingGrid}>{plans.map((plan) => <article className={plan.featured ? styles.pricingFeatured : undefined} key={plan.name}>{plan.featured ? <em>Phổ biến</em> : null}<h3>{plan.name}</h3><p>{plan.description}</p><div className={styles.price}><strong>{plan.price}</strong><span>{plan.suffix}</span></div><ul>{plan.features.map((feature) => <li key={feature}><CheckIcon /> {feature}</li>)}</ul><a href="#dang-nhap">Bắt đầu với {plan.name}</a></article>)}</div></section>
+      <section className={styles.pricingSection} id="bang-gia"><div className={styles.sectionHeading}><span>THANH TOÁN QUA SHOPIFY</span><h2>Gói dịch vụ rõ ràng theo quy mô cửa hàng</h2><p>Giá và hạn mức từ cấu hình gói hiện tại. Custom được báo giá riêng.</p></div>{pricingUnavailable ? <p role="alert">Chưa tải được bảng giá. Vui lòng thử lại sau.</p> : null}<div className={styles.pricingGrid}>{plans.map((plan) => <article className={plan.featured ? styles.pricingFeatured : undefined} key={plan.handle}>{plan.featured ? <em>Phổ biến</em> : null}<h3>{plan.name}</h3><p>{plan.description}</p><div className={styles.price}><strong>{plan.price}</strong><span>{plan.suffix}</span></div>{plan.trialDays > 0 ? <p>{plan.trialDays}-day free trial · new eligible stores only</p> : null}<ul>{plan.features.map((feature) => <li key={feature}><CheckIcon /> {feature}</li>)}</ul>{plan.billingPolicy.moneyBackGuaranteeDays > 0 ? <details><summary>{plan.billingPolicy.moneyBackGuaranteeDays}-day money-back guarantee</summary><p>{plan.billingPolicy.refundTerms}</p></details> : null}<a href="#dang-nhap">Bắt đầu với {plan.name}</a></article>)}</div></section>
 
       <section className={styles.loginSection} id="dang-nhap">
         <div><span>KẾT NỐI CỬA HÀNG</span><h2>Bắt đầu cải thiện khả năng khám phá sản phẩm</h2><p>Nhập tên miền <strong>*.myshopify.com</strong>. Shopify sẽ xử lý xác thực và quyền truy cập của ứng dụng.</p></div>

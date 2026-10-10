@@ -9,6 +9,9 @@ import {
   type PlanLimits,
 } from "../commerce/plans.server";
 import { parsePlanFeatureFlags } from "../commerce/plan-catalog.server";
+import { validatePlanBillingPolicy } from "../billing/plan-policy";
+import { getReadiness } from "../maintenance/readiness.server";
+import { getSearchAttemptMetrics } from "../search/search-attempt-metrics.server";
 import {
   buildQuotaView,
   calculateSubscriptionMrr,
@@ -42,6 +45,7 @@ type ShopRow = {
 };
 
 type ApiByShopRow = {
+  unknownCostRequests: number | bigint | string | null;
   shop: string | null;
   inputTokens: number | bigint | string | null;
   outputTokens: number | bigint | string | null;
@@ -50,6 +54,7 @@ type ApiByShopRow = {
 };
 
 type ProviderSummaryRow = {
+  unknownCostRequests: number | bigint | string | null;
   inputTokens: number | bigint | string | null;
   outputTokens: number | bigint | string | null;
   totalTokens: number | bigint | string | null;
@@ -201,6 +206,7 @@ export async function getDevDashboardData(search = "") {
     `,
     db.$queryRaw<ApiByShopRow[]>`
       SELECT
+        COALESCE(SUM(u.\`unknownCostRequests\`), 0) AS \`unknownCostRequests\`,
         u.\`shop\`,
         COALESCE(SUM(u.\`inputTokens\`), 0) AS \`inputTokens\`,
         COALESCE(SUM(u.\`outputTokens\`), 0) AS \`outputTokens\`,
@@ -209,13 +215,13 @@ export async function getDevDashboardData(search = "") {
       FROM (
         SELECT
           \`shop\`, \`inputTokens\`, \`outputTokens\`,
-          \`totalTokens\`, \`estimatedCostMicros\`
+          \`totalTokens\`, \`estimatedCostMicros\`, CASE WHEN \`costEstimateStatus\` = 'UNKNOWN_RATE' THEN 1 ELSE 0 END AS \`unknownCostRequests\`
         FROM \`AiSearchApiUsageEvent\`
         WHERE \`createdAt\` >= ${from} AND \`shop\` IS NOT NULL
         UNION ALL
         SELECT
           \`shop\`, \`inputTokens\`, \`outputTokens\`,
-          \`totalTokens\`, \`estimatedCostMicros\`
+          \`totalTokens\`, \`estimatedCostMicros\`, \`unknownCostRequests\`
         FROM \`AiSearchApiUsageDaily\`
         WHERE \`day\` >= DATE(${from}) AND \`shop\` <> '__UNSCOPED__'
       ) AS u
@@ -223,6 +229,7 @@ export async function getDevDashboardData(search = "") {
     `,
     db.$queryRaw<ProviderSummaryRow[]>`
       SELECT
+        COALESCE(SUM(u.\`unknownCostRequests\`), 0) AS \`unknownCostRequests\`,
         COALESCE(SUM(u.\`inputTokens\`), 0) AS \`inputTokens\`,
         COALESCE(SUM(u.\`outputTokens\`), 0) AS \`outputTokens\`,
         COALESCE(SUM(u.\`totalTokens\`), 0) AS \`totalTokens\`,
@@ -254,13 +261,13 @@ export async function getDevDashboardData(search = "") {
       FROM (
         SELECT
           \`operation\`, \`inputTokens\`, \`outputTokens\`,
-          \`totalTokens\`, \`estimatedCostMicros\`
+          \`totalTokens\`, \`estimatedCostMicros\`, CASE WHEN \`costEstimateStatus\` = 'UNKNOWN_RATE' THEN 1 ELSE 0 END AS \`unknownCostRequests\`
         FROM \`AiSearchApiUsageEvent\`
         WHERE \`createdAt\` >= ${from}
         UNION ALL
         SELECT
           \`operation\`, \`inputTokens\`, \`outputTokens\`,
-          \`totalTokens\`, \`estimatedCostMicros\`
+          \`totalTokens\`, \`estimatedCostMicros\`, \`unknownCostRequests\`
         FROM \`AiSearchApiUsageDaily\`
         WHERE \`day\` >= DATE(${from})
       ) AS u
@@ -396,6 +403,7 @@ export async function getDevDashboardData(search = "") {
         fallbackCount: n(row.fallbackCount),
       },
       api: {
+        unknownCostRequests: n(api?.unknownCostRequests),
         inputTokens: n(api?.inputTokens),
         outputTokens: n(api?.outputTokens),
         totalTokens: n(api?.totalTokens),
@@ -409,6 +417,7 @@ export async function getDevDashboardData(search = "") {
   );
 
   const provider = providerRows[0] ?? {
+    unknownCostRequests: 0,
     inputTokens: 0,
     outputTokens: 0,
     totalTokens: 0,
@@ -423,9 +432,9 @@ export async function getDevDashboardData(search = "") {
   const totalCostUsd = n(provider.costMicros) / 1_000_000;
   const searchCostUsd = n(provider.searchCostMicros) / 1_000_000;
   const mtdSearches = n(searchCountRows[0]?.count);
-  const avgSearchCostUsd = mtdSearches > 0 ? searchCostUsd / mtdSearches : null;
+  const avgSearchCostUsd = mtdSearches > 0 && n(provider.unknownCostRequests) === 0 ? searchCostUsd / mtdSearches : null;
   const remainingBudgetUsd =
-    configuredBudget === null
+    configuredBudget === null || n(provider.unknownCostRequests) > 0
       ? null
       : Math.max(0, configuredBudget - totalCostUsd);
 
@@ -454,6 +463,19 @@ export async function getDevDashboardData(search = "") {
       apiCostUsd: 0,
     },
   );
+
+  const [totalShops, activeShops, indexedProducts, globalUsage] = await Promise.all([
+    db.aiSearchShop.count(),
+    db.aiSearchShop.count({ where: { status: "ACTIVE" } }),
+    db.aiSearchIndexedProduct.count({ where: { status: "INDEXED", hasVector: true } }),
+    db.$queryRaw<Array<{ searches: unknown; vectorUpdates: unknown; fallbacks: unknown }>>`
+      SELECT COALESCE(SUM(u.searchCount), 0) AS searches, COALESCE(SUM(u.vectorUpdateCount), 0) AS vectorUpdates, COALESCE(SUM(u.fallbackCount), 0) AS fallbacks
+      FROM AiSearchUsagePeriod u WHERE u.id = (
+        SELECT p.id FROM AiSearchUsagePeriod p WHERE p.shop = u.shop ORDER BY p.periodEnd DESC, p.id DESC LIMIT 1
+      )
+    `,
+  ]);
+  Object.assign(overall, { totalShops, activeShops, indexedProducts, searches: n(globalUsage[0]?.searches), vectorUpdates: n(globalUsage[0]?.vectorUpdates), fallbacks: n(globalUsage[0]?.fallbacks), apiTokens: n(provider.totalTokens), apiCostUsd: totalCostUsd });
 
   const currentSubscriptionByShop = new Map<
     string,
@@ -830,6 +852,7 @@ export async function getDevDashboardData(search = "") {
         }),
       },
       cost: {
+        unknownCostRequests: shop.api.unknownCostRequests,
         mtdUsd: shop.api.costUsd,
       },
     };
@@ -887,6 +910,9 @@ export async function getDevDashboardData(search = "") {
 
   return {
     generatedAt: now.toISOString(),
+    attemptMetrics: await getSearchAttemptMetrics(from, now),
+    readiness: await getReadiness(),
+    shopCoverage: { displayed: shopRows.length, total: totalShops, partial: totalShops > shopRows.length },
     monthStart: from.toISOString(),
     query: search,
     overall: {
@@ -897,6 +923,7 @@ export async function getDevDashboardData(search = "") {
     financial,
     planCatalog,
     provider: {
+      unknownCostRequests: n(provider.unknownCostRequests),
       inputTokens: n(provider.inputTokens),
       outputTokens: n(provider.outputTokens),
       totalTokens: n(provider.totalTokens),
@@ -969,6 +996,8 @@ export async function setCustomPlanTerms({
   currencyCode,
   interval,
   trialDays,
+  moneyBackGuaranteeDays = 0,
+  refundTerms = "",
   productLimit,
   searchLimit,
   vectorUpdateLimit,
@@ -985,6 +1014,8 @@ export async function setCustomPlanTerms({
   currencyCode: string;
   interval: "EVERY_30_DAYS" | "ANNUAL";
   trialDays: number;
+  moneyBackGuaranteeDays?: number;
+  refundTerms?: string;
   productLimit: number | null;
   searchLimit: number | null;
   vectorUpdateLimit: number | null;
@@ -1015,7 +1046,8 @@ export async function setCustomPlanTerms({
     throw new Error("Invalid Custom billing interval");
   }
 
-  const cleanTrialDays = Math.trunc(trialDays);
+  const cleanTrialDays = trialDays;
+  if (cleanTrialDays !== 0) throw new Error("Custom plans cannot offer a free trial.");
   if (
     !Number.isFinite(cleanTrialDays) ||
     cleanTrialDays < 0 ||
@@ -1033,6 +1065,7 @@ export async function setCustomPlanTerms({
   };
 
   const features = parsePlanFeatureFlags({
+    billingPolicy: validatePlanBillingPolicy(moneyBackGuaranteeDays, refundTerms),
     description,
     highlights,
     capabilities,

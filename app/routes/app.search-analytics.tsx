@@ -1,8 +1,10 @@
 import { useState, useRef, useEffect } from "react";
 import type { LoaderFunctionArgs } from "react-router";
-import { useLoaderData, useSubmit, useNavigation } from "react-router";
+import { data, useLoaderData, useSubmit, useNavigation } from "react-router";
 
 import prisma from "../db.server";
+import { getDailySearchMetrics, sumSearchMetrics } from "../services/search/search-metrics.server";
+import { searchAnalyticsBatches } from "../services/search/analytics-batches.server";
 import { authenticate } from "../shopify.server";
 import { getShopEntitlement } from "../services/commerce/entitlement.server";
 import {
@@ -24,16 +26,6 @@ const SORT_COLUMNS = [
 ] as const;
 type SortColumn = typeof SORT_COLUMNS[number]["key"];
 
-const MAX_ANALYTICS_EVENTS = (() => {
-  const raw = Number.parseInt(
-    process.env.AI_SEARCH_ANALYTICS_MAX_EVENTS || "",
-    10,
-  );
-  return Number.isSafeInteger(raw) && raw >= 1_000
-    ? Math.min(raw, 100_000)
-    : 20_000;
-})();
-
 export interface ClickedProductDetail {
   productId: string;
   title: string;
@@ -48,10 +40,7 @@ function formatChartNumber(num: number): string {
 }
 
 function toLocalDateString(date: Date): string {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
+  return date.toISOString().slice(0, 10);
 }
 
 // 1. TRUY VẤN DỮ LIỆU CSDL & TÍNH TOÁN LOGIC ANALYTICS
@@ -65,74 +54,25 @@ async function getShopAnalyticsData(shop: string, requestedDays: number = 30) {
   const now = new Date();
   
   let startDate = new Date();
-  startDate.setDate(now.getDate() - requestedDays);
-  startDate.setHours(0, 0, 0, 0);
+  startDate.setUTCDate(now.getUTCDate() - (requestedDays - 1));
+  startDate.setUTCHours(0, 0, 0, 0);
 
   if (earliestLog) {
     const dayBeforeEarliest = new Date(earliestLog.createdAt);
-    dayBeforeEarliest.setDate(dayBeforeEarliest.getDate() - 1);
-    dayBeforeEarliest.setHours(0, 0, 0, 0);
+    dayBeforeEarliest.setUTCDate(dayBeforeEarliest.getUTCDate() - 1);
+    dayBeforeEarliest.setUTCHours(0, 0, 0, 0);
 
     if (dayBeforeEarliest > startDate) {
       startDate = dayBeforeEarliest;
     }
   }
 
-  const queryLogs = await prisma.aiSearchQueryLog.findMany({
-    where: {
-      shop,
-      createdAt: { gte: startDate },
-    },
-    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-    take: MAX_ANALYTICS_EVENTS,
-    select: {
-      id: true,
-      query: true,
-      normalizedQuery: true,
-      resultCount: true,
-      llmAnalysisJson: true,
-      llmStatus: true,
-      createdAt: true,
-      clicks: {
-        select: { productId: true },
-      },
-    },
-  });
-
-  // Work on the newest bounded window and restore chronological order for
-  // chart aggregation. Detailed history remains available through the paged
-  // history endpoint instead of loading an unbounded log set into one request.
-  queryLogs.reverse();
-
-  const clickedProductIds = [
-    ...new Set(
-      queryLogs.flatMap((log) => log.clicks.map((click) => click.productId)),
-    ),
-  ];
-  const indexedProducts: Array<{
-    productId: string;
-    title: string;
-    handle: string;
-  }> = [];
-  for (let offset = 0; offset < clickedProductIds.length; offset += 500) {
-    indexedProducts.push(
-      ...(await prisma.aiSearchIndexedProduct.findMany({
-        where: {
-          shop,
-          productId: { in: clickedProductIds.slice(offset, offset + 500) },
-        },
-        select: { productId: true, title: true, handle: true },
-      })),
-    );
-  }
-
   const productMap = new Map<string, { title: string; handle: string }>();
-  indexedProducts.forEach((p) => {
-    productMap.set(p.productId, { title: p.title, handle: p.handle });
-  });
 
-  const totalSearches = queryLogs.length;
-  const searchesWithClick = queryLogs.filter((log) => log.clicks.length > 0).length;
+  const dailyMetrics = await getDailySearchMetrics(shop, startDate, now);
+  const totals = sumSearchMetrics(dailyMetrics);
+  const totalSearches = totals.searches;
+  const searchesWithClick = totals.clickedSearches;
   const overallCTR = totalSearches > 0 
     ? ((searchesWithClick / totalSearches) * 100).toFixed(1) + "%" 
     : "0.0%";
@@ -146,10 +86,16 @@ async function getShopAnalyticsData(shop: string, requestedDays: number = 30) {
     noResultCount: number;
     totalResultCount: number;
     productsClicked: Map<string, number>;
-    logs: typeof queryLogs;
+    daily: Map<string, { searches: number; zeroResults: number }>;
   }>();
 
-  queryLogs.forEach((log) => {
+  for await (const batch of searchAnalyticsBatches(shop, startDate, now)) {
+  const ids = [...new Set(batch.flatMap((log) => log.clicks.map((click) => click.productId)))].filter((id) => !productMap.has(id));
+  for (let offset = 0; offset < ids.length; offset += 500) {
+    const products = await prisma.aiSearchIndexedProduct.findMany({ where: { shop, productId: { in: ids.slice(offset, offset + 500) } }, select: { productId: true, title: true, handle: true } });
+    products.forEach((product) => productMap.set(product.productId, product));
+  }
+  for (const log of batch) {
     const key = log.normalizedQuery || log.query.toLowerCase().trim();
     const existing = clusterMap.get(key) || {
       normalizedQuery: key,
@@ -160,7 +106,7 @@ async function getShopAnalyticsData(shop: string, requestedDays: number = 30) {
       noResultCount: 0,
       totalResultCount: 0,
       productsClicked: new Map<string, number>(),
-      logs: [],
+      daily: new Map<string, { searches: number; zeroResults: number }>(),
     };
 
     existing.variants.add(log.query);
@@ -169,7 +115,11 @@ async function getShopAnalyticsData(shop: string, requestedDays: number = 30) {
     existing.clicks += log.clicks.length;
     existing.clickedSearches += log.clicks.length > 0 ? 1 : 0;
     existing.noResultCount += log.resultCount === 0 ? 1 : 0;
-    existing.logs.push(log);
+    const day = toLocalDateString(log.createdAt);
+    const daily = existing.daily.get(day) ?? { searches: 0, zeroResults: 0 };
+    daily.searches += 1;
+    daily.zeroResults += log.resultCount === 0 ? 1 : 0;
+    existing.daily.set(day, daily);
 
     log.clicks.forEach((c) => {
       const pCount = existing.productsClicked.get(c.productId) || 0;
@@ -177,10 +127,11 @@ async function getShopAnalyticsData(shop: string, requestedDays: number = 30) {
     });
 
     clusterMap.set(key, existing);
-  });
+  }
+  }
 
   let abnormalSearchesCount = 0;
-  const abnormalLogIds = new Set<string>();
+  const abnormalDaily = new Map<string, number>();
 
   const tableRows = Array.from(clusterMap.values()).map((cluster) => {
     const ctrValue = cluster.searches > 0
@@ -208,15 +159,13 @@ async function getShopAnalyticsData(shop: string, requestedDays: number = 30) {
             : "—";
 
     if (classification === "LOW_CTR") {
-      abnormalSearchesCount += cluster.logs.length;
-      cluster.logs.forEach((l) => abnormalLogIds.add(l.id));
+      abnormalSearchesCount += cluster.searches;
     } else if (classification === "SEMANTIC_NO_RESULTS") {
-      const abnormalLogs = cluster.logs.filter(
-        (log) =>
-          log.resultCount === 0,
-      );
-      abnormalSearchesCount += abnormalLogs.length;
-      abnormalLogs.forEach((log) => abnormalLogIds.add(log.id));
+      abnormalSearchesCount += cluster.noResultCount;
+    }
+    for (const [date, counts] of cluster.daily) {
+      const abnormal = classification === "LOW_CTR" ? counts.searches : classification === "SEMANTIC_NO_RESULTS" ? counts.zeroResults : 0;
+      abnormalDaily.set(date, (abnormalDaily.get(date) ?? 0) + abnormal);
     }
 
     const productListDetails: ClickedProductDetail[] = Array.from(cluster.productsClicked.entries())
@@ -271,32 +220,22 @@ async function getShopAnalyticsData(shop: string, requestedDays: number = 30) {
     const dateStr = toLocalDateString(currentRunner);
     dailyMap.set(dateStr, { totalSearch: 0, clickSearch: 0, abnormalSearch: 0 });
     if (dateStr === todayStr) break;
-    currentRunner.setDate(currentRunner.getDate() + 1);
+    currentRunner.setUTCDate(currentRunner.getUTCDate() + 1);
   }
-
-  queryLogs.forEach((log) => {
-    const logDateStr = toLocalDateString(new Date(log.createdAt));
-    const dayStat = dailyMap.get(logDateStr);
-    
-    if (dayStat) {
-      dayStat.totalSearch += 1;
-      if (log.clicks.length > 0) dayStat.clickSearch += 1;
-      if (abnormalLogIds.has(log.id)) {
-        dayStat.abnormalSearch += 1;
-      }
-      dailyMap.set(logDateStr, dayStat);
-    }
-  });
 
   const chartData = Array.from(dailyMap.entries()).map(([dateStr, stat], index) => ({
     day: index + 1,
     date: dateStr,
-    totalSearch: stat.totalSearch,
-    clickSearch: stat.clickSearch,
-    abnormalSearch: stat.abnormalSearch,
+    totalSearch: dailyMetrics.find((metric) => metric.date === dateStr)?.searches ?? 0,
+    clickSearch: dailyMetrics.find((metric) => metric.date === dateStr)?.clickedSearches ?? 0,
+    abnormalSearch: abnormalDaily.get(dateStr) ?? 0,
   }));
 
   return {
+    dataState: totalSearches === 0 ? "EMPTY" as const : "VALID" as const,
+    traceId: null as string | null,
+    partial: false,
+    sampledSearches: totalSearches,
     days: requestedDays,
     kpis: { totalSearches, overallCTR, abnormalSearches: abnormalSearchesCount, abnormalRate },
     chartData,
@@ -305,12 +244,14 @@ async function getShopAnalyticsData(shop: string, requestedDays: number = 30) {
 }
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
+  // Auth redirects and forbidden responses must never be converted into empty data.
+  const { session } = await authenticate.admin(request);
   try {
-    const { session } = await authenticate.admin(request);
     const entitlement = await getShopEntitlement(session.shop);
     if (!entitlement.features.capabilities.searchAnalytics) {
       return {
         featureDisabled: true as const,
+        dataState: "EMPTY" as const, traceId: null as string | null, partial: false, sampledSearches: 0,
         days: 30,
         kpis: { totalSearches: 0, overallCTR: "0.0%", abnormalSearches: 0, abnormalRate: "0.0%" },
         chartData: [],
@@ -328,13 +269,17 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       featureDisabled: false as const,
     };
   } catch (error) {
-    return {
+    if (error instanceof Response) throw error;
+    const traceId = crypto.randomUUID();
+    console.error("[Search Analytics] DATA_UNAVAILABLE", { traceId, shop: session.shop, error: error instanceof Error ? error.name : "UnknownError" });
+    return data({
+      dataState: "UNAVAILABLE" as const, traceId, partial: false, sampledSearches: 0,
       featureDisabled: false as const,
       days: 30,
       kpis: { totalSearches: 0, overallCTR: "0.0%", abnormalSearches: 0, abnormalRate: "0.0%" },
       chartData: [],
       tableRows: [],
-    };
+    }, { status: 503 });
   }
 };
 
@@ -483,6 +428,9 @@ export default function SearchAnalyticsPage() {
   });
   const visibleTableRows = filteredRows.slice(0, tableVisibleCount);
 
+  if (loaderData.dataState === "UNAVAILABLE") {
+    return <section role="alert" style={{ padding: 24 }}><h2>Search Analytics unavailable</h2><p>Data could not be loaded. This is not a zero-search result.</p><p>Reference: {loaderData.traceId}</p><button onClick={() => submit({}, { method: "get" })}>Retry</button></section>;
+  }
   if (loaderData.featureDisabled) {
     return (
       <div style={{ padding: 24 }}>
@@ -500,6 +448,8 @@ export default function SearchAnalyticsPage() {
     <div style={{ width: "100%", padding: "0 24px 40px 24px", boxSizing: "border-box", fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif", opacity: isLoading ? 0.6 : 1, transition: "opacity 0.2s" }}>
 
       {/* HEADER & TIME RANGE GLOBAL FILTER */}
+      {loaderData.partial ? <p role="status">Totals and CTR cover all retained AI query logs. Query details and anomaly counts are sampled from the latest {loaderData.sampledSearches.toLocaleString("en-US")} of {loaderData.kpis.totalSearches.toLocaleString("en-US")} searches; older anomalies may be missing.</p> : null}
+      {loaderData.dataState === "EMPTY" ? <p>No AI query logs recorded in this period.</p> : null}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: 24, borderBottom: "1px solid #e1e3e5", paddingBottom: 16 }}>
         <div>
           <h1 style={{ margin: 0, fontSize: 22, fontWeight: 700, color: "#1a1a1a" }}>Search Analytics & Insights</h1>

@@ -8,11 +8,15 @@ import { startProductSyncQueueWorker } from "./services/products/product-sync-qu
 import { startCatalogSyncQueueWorker } from "./services/catalog/catalog-sync-queue.server";
 import { startDistributedLeaseCleanupWorker } from "./services/commerce/lease-lock.server";
 import { startAiSearchHousekeepingWorker } from "./services/maintenance/housekeeping.server";
+import { startBillingReconciliationWorker } from "./services/billing/billing-reconciliation-worker.server";
+import { startTelemetryReplay } from "./services/ai/telemetry-outbox.server";
 
 startProductSyncQueueWorker();
 startCatalogSyncQueueWorker();
 startDistributedLeaseCleanupWorker();
 startAiSearchHousekeepingWorker();
+startBillingReconciliationWorker();
+startTelemetryReplay();
 
 export const streamTimeout = 5000;
 

@@ -2,6 +2,7 @@ import type { LoaderFunctionArgs } from "react-router";
 import { useLoaderData } from "react-router";
 
 import prisma from "../db.server";
+import { quotaPercentage } from "../services/admin/data-presentation";
 import { authenticate } from "../shopify.server";
 import { getShopEntitlement } from "../services/commerce/entitlement.server";
 import { getSubscriptionSnapshot } from "../services/commerce/shop-registry.server";
@@ -13,11 +14,12 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
   const shop = session.shop;
 
-  const [entitlement, subscription, recentEvents] = await Promise.all([
+  const [entitlement, subscription] = await Promise.all([
     getShopEntitlement(shop),
     getSubscriptionSnapshot(shop, { ensure: false }),
-    prisma.aiSearchUsageEvent.findMany({
-      where: { shop },
+  ]);
+  const recentEvents = await prisma.aiSearchUsageEvent.findMany({
+      where: { shop, periodId: entitlement.usage.id },
       orderBy: { createdAt: "desc" },
       take: 50,
       select: {
@@ -28,8 +30,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         productId: true,
         createdAt: true,
       },
-    }),
-  ]);
+    });
 
   const usage = entitlement.usage;
 
@@ -89,7 +90,7 @@ function renderProgressBar(current: number, max: number | null, color = "#008060
     );
   }
 
-  const percentage = Math.min(100, Math.round((current / max) * 100));
+  const percentage = quotaPercentage(current, max);
   const isHigh = percentage >= 85;
   const barColor = isHigh ? "#d32f2f" : color;
 
@@ -106,7 +107,7 @@ function renderProgressBar(current: number, max: number | null, color = "#008060
         <span>
           {current.toLocaleString("en-US")} / {max.toLocaleString("en-US")}
         </span>
-        <span style={{ color: barColor }}>{percentage}% used</span>
+        <span style={{ color: barColor }}>{max <= 0 ? "No capacity" : `${percentage}% used`}</span>
       </div>
       <div
         style={{
@@ -305,7 +306,7 @@ export default function UsagePage() {
             }}
           >
             <span style={{ color: "#616161", display: "block", fontSize: 12 }}>
-              Total Storefront Searches
+              AI executions + native fallbacks (not all requests)
             </span>
             <strong style={{ fontSize: 18, color: "#1a1a1a" }}>
               {(period.searchCount + period.fallbackCount).toLocaleString("en-US")}

@@ -1,13 +1,16 @@
 import type { ActionFunctionArgs } from "react-router";
 
-import { authenticate } from "../shopify.server";
 import db from "../db.server";
-import { recordBillingEvent } from "../services/commerce/billing-state.server";
+import { authenticateUninstallDelivery } from "../services/billing/uninstall-webhook-auth.server";
+import { withDistributedLease } from "../services/commerce/lease-lock.server";
 
 export const action = async ({ request }: ActionFunctionArgs) => {
   console.log("========== [WEBHOOK] APP_UNINSTALLED RECEIVED ==========");
 
-  const { topic, shop, webhookId, payload } = await authenticate.webhook(request);
+  const { topic, shop, webhookId, payload } = await authenticateUninstallDelivery(request, process.env.SHOPIFY_API_SECRET || "").catch(error=>{
+    console.error("[LIFECYCLE] Uninstall delivery authentication rejected",{status:error instanceof Response?error.status:500});
+    throw error;
+  });
 
   console.log("[LIFECYCLE] Shopify app uninstall webhook:", {
     topic,
@@ -20,6 +23,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     return new Response("OK", { status: 200 });
   }
 
+  return withDistributedLease({shop,resource:"billing:refresh",leaseMs:60000,waitTimeoutMs:10000,task:async()=>{
   const idempotencyKey = `shopify-webhook:${webhookId}`;
 
   const existingEvent = await db.billingEvent.findUnique({
@@ -108,6 +112,9 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       },
     });
 
+    // Commit session cleanup with lifecycle and receipt. A failed cleanup must
+    // not leave a processed receipt that causes retries to skip the cleanup.
+    await tx.session.deleteMany({where:{shop}});
     await tx.billingEvent.create({
       data: {
         shop,
@@ -134,13 +141,6 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     });
   });
 
-  // Shopify sessions are no longer valid for an uninstalled app. Removing
-  // them also prevents delayed background work from treating the shop as
-  // authenticated after uninstall.
-  await db.session.deleteMany({
-    where: { shop },
-  });
-
   console.log("[LIFECYCLE] APP_UNINSTALLED processed:", {
     shop,
     webhookId,
@@ -148,4 +148,5 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   });
 
   return new Response("OK", { status: 200 });
+  }});
 };

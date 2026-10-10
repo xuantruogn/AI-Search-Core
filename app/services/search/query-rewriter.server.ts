@@ -853,7 +853,7 @@ async function performRewrite({ shop, cleanQuery, searchLanguage, model, backupM
 
     try {
       response = await generateGeminiQueryRewrite(rewriteRequest);
-      recordGeminiUsageSafe({
+      await recordGeminiUsageSafe({
         shop,
         operation: "QUERY_REWRITE",
         model,
@@ -892,7 +892,7 @@ async function performRewrite({ shop, cleanQuery, searchLanguage, model, backupM
         timeoutMs: readPositiveInteger("AI_SEARCH_LLM_BACKUP_TIMEOUT_MS", Math.max(timeoutMs, 10_000)),
       });
       response = openAiResponse;
-      recordOpenAiUsageSafe({
+      await recordOpenAiUsageSafe({
         shop,
         operation: "QUERY_REWRITE",
         model: backupModel,

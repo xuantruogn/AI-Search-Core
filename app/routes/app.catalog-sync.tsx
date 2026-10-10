@@ -14,6 +14,7 @@ import { reconcileShopCommercialState } from "../services/commerce/reconciliatio
 import { retryFailedProductSyncJobs } from "../services/products/product-sync-job.server";
 import { kickProductSyncQueue } from "../services/products/product-sync-queue.server";
 import prisma from "../db.server";
+import { catalogPage } from "../services/admin/data-presentation";
 
 
 type CatalogProductIssueKind = "error" | "warning" | "muted" | "success";
@@ -106,9 +107,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
   const url = new URL(request.url);
 
-  const page = Math.max(1, parseInt(url.searchParams.get("page") || "1", 10));
   const pageSize = 50; // THAY ĐỔI THÀNH 50 SẢN PHẨM / TRANG
-  const skip = (page - 1) * pageSize;
 
   // One registry per shop. Badges show problems on individual products.
   const [job, totalProducts] = await Promise.all([
@@ -116,6 +115,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     prisma.aiSearchIndexedProduct.count({ where: { shop: session.shop } }),
   ]);
 
+  const page = catalogPage(url.searchParams.get("page"), totalProducts, pageSize);
+  const skip = (page - 1) * pageSize;
   const rawProducts = await prisma.aiSearchIndexedProduct.findMany({
     where: { shop: session.shop },
     orderBy: { updatedAt: "desc" },
@@ -428,7 +429,7 @@ export default function CatalogSyncPage() {
   const isActionBusy = actionFetcher.state !== "idle";
   const isTableLoading = tableFetcher.state !== "idle";
 
-  const liveJob = statusFetcher.data?.job ?? initialData.job;
+  const liveJob = statusFetcher.data ? statusFetcher.data.job : initialData.job;
 
     const isProcessing =
       liveJob?.status === "PROCESSING" ||
@@ -561,8 +562,8 @@ export default function CatalogSyncPage() {
                     borderRadius: 12,
                     display: "inline-flex",
                     alignItems: "center",
-                    background: initialData.job.status === "DONE" ? "#e4f8f0" : "#fff6df",
-                    color: initialData.job.status === "DONE" ? "#008060" : "#8a5b00",
+                    background: liveJob.status === "DONE" ? "#e4f8f0" : "#fff6df",
+                    color: liveJob.status === "DONE" ? "#008060" : "#8a5b00",
                   }}
                 >
                   {isProcessing ? <span className="spinner" /> : null}
@@ -570,7 +571,7 @@ export default function CatalogSyncPage() {
                     ? "SYNC COMPLETED"
                     : isProcessing
                     ? "SYNCING..."
-                    : initialData.job.status}
+                    : liveJob.status}
                 </span>
               ) : null}
             </div>
@@ -583,7 +584,7 @@ export default function CatalogSyncPage() {
 
               {liveJob?.lastError ? (
                 <div style={{ marginTop: 10, padding: 10, background: "#ffebe9", color: "#d32f2f", borderRadius: 8, fontSize: 12 }}>
-                  <strong>Error details:</strong> {initialData.job.lastError}
+                  <strong>Error details:</strong> {liveJob.lastError}
                 </div>
               ) : null}
             </div>

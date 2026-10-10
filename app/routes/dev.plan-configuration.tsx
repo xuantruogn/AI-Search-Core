@@ -141,6 +141,18 @@ export default function DevPlanConfigurationRoute() {
             canWrite={canWrite}
             busy={busy}
           />
+          {planConfiguration.refundRequests.length > 0 ? (
+            <section className="dc-panel" style={{ marginTop: 18 }}>
+              <div className="dc-panel-head"><div><strong>Recent refund requests</strong><small>Latest 50 requests. Review the charge in Shopify before issuing any refund. A request is not a completed refund.</small></div></div>
+              {planConfiguration.refundRequests.map((item) => (
+                <article key={item.id} style={{ padding: 16, borderTop: "1px solid #e1e3e5" }}>
+                  <strong>{item.shop}</strong>
+                  <p>{new Date(item.occurredAt).toLocaleString("en-US")} · Charge: {item.chargeId ?? "Not specified"}</p>
+                  <p style={{ whiteSpace: "pre-wrap" }}>{item.reason}</p>
+                </article>
+              ))}
+            </section>
+          ) : null}
         </section>
       </main>
     </div>

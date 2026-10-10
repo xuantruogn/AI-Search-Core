@@ -2,6 +2,10 @@ import { useEffect } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { useFetcher, useLoaderData } from "react-router";
 import db from "../db.server";
+import { formatPlanMoney } from "../services/commerce/money";
+import { offeredTrialDays } from "../services/billing/plan-policy";
+import { listRefundGuarantees, requestGuaranteedRefund } from "../services/billing/refund-guarantee.server";
+import { withDistributedLease } from "../services/commerce/lease-lock.server";
 import { authenticate } from "../shopify.server";
 import {
   getShopifyPricingPlansUrl,
@@ -37,6 +41,7 @@ function planPresentation(value: unknown) {
     .map(({ label }) => label);
   return {
     description: features.description,
+    billingPolicy: features.billingPolicy,
     highlights: features.highlights,
     capabilityLabels,
     capabilities: features.capabilities,
@@ -47,7 +52,12 @@ function planPresentation(value: unknown) {
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const debugId = crypto.randomUUID().slice(0, 8);
   console.log("[BILLING TRACE] loader:start", { debugId, method: request.method, url: request.url, referer: request.headers.get("referer"), remixRequest: request.headers.get("x-remix-request"), secFetchMode: request.headers.get("sec-fetch-mode") });
-  const { session } = await authenticate.admin(request);
+  const { admin, session } = await authenticate.admin(request);
+  if (new URL(request.url).searchParams.get("billing_callback") === "1") {
+    const refreshed = await withDistributedLease({ shop: session.shop, resource: "billing:refresh", leaseMs: 60000, waitTimeoutMs: 10000, pollMs: 100,
+      task: () => refreshShopifyAppPricingSubscription({ shop: session.shop, admin, source: "CALLBACK" }) });
+    if (refreshed.configured) await reconcileShopCommercialState({ shop: session.shop, forceCatalogRefresh: refreshed.changed });
+  }
   console.log("[BILLING DEBUG] loader:authenticated", { debugId, shop: session.shop });
 
   const entitlement = await getShopEntitlement(session.shop);
@@ -104,6 +114,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   return {
     shop: session.shop,
+    refundGuarantees: await listRefundGuarantees(session.shop),
     entitlement,
     subscription: {
       ...subscription,
@@ -124,13 +135,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         price: Number(plan.price),
         currencyCode: plan.currencyCode,
         interval: plan.interval,
-        trialDays:
-          plan.handle.toLowerCase() === "basic" &&
-          (hasEverApprovedSubscription === false ||
-            (subscription.plan === "BASIC" &&
-              subscription.trialStatus === "ACTIVE"))
-            ? plan.trialDays
-            : 0,
+        trialDays: offeredTrialDays(plan.handle, plan.trialDays, hasEverApprovedSubscription),
+        billingPolicy: presentation.billingPolicy,
         description: presentation.description,
         highlights: presentation.highlights,
         capabilityLabels: presentation.capabilityLabels,
@@ -152,7 +158,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
             price: customTerms.price,
             currencyCode: customTerms.currencyCode,
             interval: customTerms.interval,
-            trialDays: customTerms.trialDays,
+            trialDays: 0,
+            billingPolicy: customTerms.features.billingPolicy,
             description: customTerms.features.description,
             highlights: customTerms.features.highlights,
             capabilityLabels: PLAN_CAPABILITY_DEFINITIONS
@@ -212,6 +219,15 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         success: false,
         message: error instanceof Error ? error.message : String(error),
       };
+    }
+  }
+
+  if (intent === "request_refund") {
+    try {
+      await requestGuaranteedRefund(session.shop, String(form.get("chargeId") ?? ""), String(form.get("reason") ?? ""));
+      return { success: true, message: "Refund request recorded for developer review. No refund has been issued yet." };
+    } catch (error) {
+      return { success: false, message: error instanceof Error ? error.message : "Could not request refund." };
     }
   }
 
@@ -294,11 +310,9 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       }),
     );
 
-    const isBasicPlan = billingPlan.handle.toLowerCase() === "basic";
-    const trialDays =
-      isBasicPlan && !hasEverApprovedSubscription
-        ? Math.max(0, billingPlan.trialDays ?? 0)
-        : 0;
+    const trialDays = offeredTrialDays(billingPlan.handle, billingPlan.trialDays, hasEverApprovedSubscription);
+    const billingPolicy = customTerms?.features.billingPolicy
+      ?? parsePlanFeatureFlags(billingPlan.featureFlags).billingPolicy;
 
     const billingTestMode =
       String(process.env.BILLING_TEST_MODE ?? "")
@@ -371,7 +385,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
             price: finalPrice.toFixed(2),
             returnUrl: returnUrl.toString(),
             test: billingTestMode,
-            trialDays: trialDays > 0 ? trialDays : null,
+            trialDays,
             interval: billingInterval,
             currencyCode,
             replacementBehavior,
@@ -427,6 +441,22 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           pendingPlanHandle: billingPlan.handle,
           pendingSubscriptionGid: createdSubscription.id,
         },
+      });
+
+      // Snapshot the promise before approval. Later plan edits must not rewrite
+      // the refund terms offered for this Shopify subscription.
+      await db.billingEvent.upsert({
+        where: { idempotencyKey: `plan-policy:${createdSubscription.id}` },
+        create: {
+          shop: session.shop,
+          subscriptionGid: createdSubscription.id,
+          type: "SUBSCRIPTION_CREATED",
+          source: "API",
+          idempotencyKey: `plan-policy:${createdSubscription.id}`,
+          occurredAt: new Date(),
+          payload: { kind: "PLAN_BILLING_POLICY", version: 1, planVersion: billingPlan.version, trialDays, billingPolicy },
+        },
+        update: {},
       });
 
       await reconcileShopifySubscriptionFromAdmin({
@@ -545,6 +575,27 @@ export default function BillingPage() {
       }}
     >
       {/* SECTION 1: ACCOUNT OVERVIEW & SUBSCRIPTION STATUS */}
+      {data.refundGuarantees.some((charge) => charge.policy.moneyBackGuaranteeDays > 0) ? (
+        <section style={{ background: "white", padding: 20, borderRadius: 12, marginBottom: 24, border: "1px solid #e1e3e5" }}>
+          <h2 style={{ fontSize: 17 }}>Payment &amp; money-back guarantee</h2>
+          <p>Requests are reviewed by the app developer under the policy offered at purchase. Requesting a refund does not cancel your subscription or confirm a refund.</p>
+          {data.refundGuarantees.filter((charge) => charge.policy.moneyBackGuaranteeDays > 0).map((charge) => (
+            <article key={charge.chargeId} style={{ padding: "12px 0", borderTop: "1px solid #e1e3e5" }}>
+              <p>{charge.amount} {charge.currency} · Paid {new Date(charge.paidAt).toLocaleDateString("en-US")} · {charge.reason === "REQUESTED" ? "Refund requested" : charge.eligible ? "Within request window" : "Contact support"}</p>
+              <p style={{ whiteSpace: "pre-wrap" }}>{charge.policy.refundTerms}</p>
+              {charge.endsAt ? <p>Request deadline: {new Date(charge.endsAt).toLocaleString("en-US")}</p> : null}
+              {charge.eligible ? (
+                <fetcher.Form method="post">
+                  <input type="hidden" name="intent" value="request_refund" />
+                  <input type="hidden" name="chargeId" value={charge.chargeId} />
+                  <label>Reason for refund request <textarea name="reason" required minLength={3} maxLength={2000} /></label>
+                  <button type="submit" disabled={fetcher.state !== "idle"}>Request refund review</button>
+                </fetcher.Form>
+              ) : null}
+            </article>
+          ))}
+        </section>
+      ) : null}
       <div
         style={{
           background: "#fff",
@@ -849,11 +900,7 @@ export default function BillingPage() {
                 included: true,
               })),
             ];
-            const formattedPrice = new Intl.NumberFormat(undefined, {
-              style: "currency",
-              currency: plan.currencyCode,
-              maximumFractionDigits: 2,
-            }).format(plan.price);
+            const formattedPrice = formatPlanMoney(plan.price, plan.currencyCode);
 
             return (
               <article
@@ -916,6 +963,16 @@ export default function BillingPage() {
                   {plan.trialDays > 0 ? (
                     <div style={{ color: "#5b3df5", fontSize: 12, fontWeight: 700, marginTop: 5 }}>
                       {plan.trialDays}-day free trial
+                    </div>
+                  ) : null}
+                  {plan.billingPolicy.moneyBackGuaranteeDays > 0 ? (
+                    <div style={{ fontSize: 13, marginTop: 8, lineHeight: 1.5 }}>
+                      <strong>{plan.billingPolicy.moneyBackGuaranteeDays}-day money-back guarantee after payment</strong>
+                      <details>
+                        <summary>Refund policy</summary>
+                        <p style={{ whiteSpace: "pre-wrap" }}>{plan.billingPolicy.refundTerms}</p>
+                        <p>Contact the app developer to request a refund. Uninstalling does not automatically refund a charge.</p>
+                      </details>
                     </div>
                   ) : null}
                 </div>

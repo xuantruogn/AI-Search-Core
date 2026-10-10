@@ -33,6 +33,17 @@ export async function getDevPlanConfigurationData() {
   });
 
   return {
+    refundRequests: (await db.billingEvent.findMany({
+      where: { type: "REFUND_REQUESTED" },
+      orderBy: { occurredAt: "desc" }, take: 50,
+      select: { id: true, shop: true, occurredAt: true, payload: true },
+    })).map((event) => {
+      const payload = event.payload && typeof event.payload === "object" && !Array.isArray(event.payload) ? event.payload : {};
+      return { id: event.id, shop: event.shop, occurredAt: event.occurredAt.toISOString(),
+        reason: typeof payload.reason === "string" ? payload.reason : "Contact merchant for details",
+        chargeId: typeof payload.chargeId === "string" ? payload.chargeId : null,
+      };
+    }),
     generatedAt: new Date().toISOString(),
     plans: plans.map((plan) => ({
       id: plan.id,

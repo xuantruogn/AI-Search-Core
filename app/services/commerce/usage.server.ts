@@ -1,6 +1,7 @@
 import { createHash, createHmac, randomUUID } from "node:crypto";
 
 import db from "../../db.server";
+import { currentSearchAttempt, patchSearchAttempt } from "../search/search-attempt-context.server";
 import { getProductVectorForShop } from "../search/vector-store.server";
 import type { SubscriptionSnapshot, UsageSnapshot } from "./types.server";
 
@@ -225,7 +226,7 @@ async function insertUsageEvent({
   jobId?: number | null;
   metadata?: Record<string, unknown>;
 }) {
-  const json = metadataJson(metadata);
+  const json = metadataJson({ ...metadata, ...(currentSearchAttempt(shop) ? { attemptId: currentSearchAttempt(shop)!.id } : {}) });
 
   await db.$executeRaw`
     INSERT INTO \`AiSearchUsageEvent\` (
@@ -543,7 +544,8 @@ export async function commitSearchUsage(
   reservation: UsageReservation,
   metadata?: Record<string, unknown>,
 ) {
-  const json = metadataJson(metadata);
+  if (currentSearchAttempt(reservation.shop) && typeof metadata?.resultCount === "number") patchSearchAttempt({ resultCount: metadata.resultCount });
+  const json = metadataJson({ ...metadata, ...(currentSearchAttempt(reservation.shop) ? { attemptId: currentSearchAttempt(reservation.shop)!.id } : {}) });
 
   const committed = await db.$transaction(async (tx) => {
     const updated = await tx.$executeRaw`

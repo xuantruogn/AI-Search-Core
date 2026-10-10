@@ -298,6 +298,24 @@ export async function runAiSearchHousekeeping() {
     `,
     batchOptions,
   );
+  // Audit-only retention: attempts follow QueryLog; dedup receipts expire
+  // after 180 days. Replay rejects envelopes outside that dedup window.
+  const searchAttemptsDeleted = await deleteInBatches(
+    (limit) => db.$executeRaw`
+      DELETE FROM \`AiSearchAttempt\`
+      WHERE \`createdAt\` < ${queryLogCutoff}
+      LIMIT ${limit}
+    `,
+    batchOptions,
+  );
+  const telemetryReceiptsDeleted = await deleteInBatches(
+    (limit) => db.$executeRaw`
+      DELETE FROM \`AiSearchTelemetryReceipt\`
+      WHERE \`expiresAt\` < NOW(3)
+      LIMIT ${limit}
+    `,
+    batchOptions,
+  );
   const productJobsDeleted = await deleteInBatches(
     (limit) => db.$executeRaw`
       DELETE FROM \`AiSearchSyncJob\`
@@ -452,6 +470,8 @@ export async function runAiSearchHousekeeping() {
   console.log("[AI Search] Housekeeping completed:", {
     usageEventsDeleted,
     queryLogsDeleted,
+    searchAttemptsDeleted,
+    telemetryReceiptsDeleted,
     productJobsDeleted,
     catalogJobsDeleted,
     failedProductJobsDeleted,
@@ -475,6 +495,8 @@ export async function runAiSearchHousekeeping() {
   return {
     usageEventsDeleted,
     queryLogsDeleted,
+    searchAttemptsDeleted,
+    telemetryReceiptsDeleted,
     productJobsDeleted,
     catalogJobsDeleted,
     failedProductJobsDeleted,

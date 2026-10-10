@@ -59,7 +59,7 @@ export async function compactApiUsageEvents({
         INSERT INTO AiSearchApiUsageDaily (
           day, shop, provider, operation, model,
           requestCount, inputTokens, cachedInputTokens,
-          outputTokens, totalTokens, estimatedCostMicros,
+          outputTokens, totalTokens, estimatedCostMicros, unknownCostRequests,
           createdAt, updatedAt
         )
         SELECT
@@ -72,6 +72,7 @@ export async function compactApiUsageEvents({
           COALESCE(SUM(outputTokens), 0),
           COALESCE(SUM(totalTokens), 0),
           COALESCE(SUM(estimatedCostMicros), 0),
+          COALESCE(SUM(CASE WHEN costEstimateStatus = 'UNKNOWN_RATE' THEN 1 ELSE 0 END), 0),
           UTC_TIMESTAMP(3),
           UTC_TIMESTAMP(3)
         FROM AiSearchApiUsageEvent
@@ -90,6 +91,7 @@ export async function compactApiUsageEvents({
           totalTokens = totalTokens + VALUES(totalTokens),
           estimatedCostMicros =
             estimatedCostMicros + VALUES(estimatedCostMicros),
+          unknownCostRequests = unknownCostRequests + VALUES(unknownCostRequests),
           updatedAt = UTC_TIMESTAMP(3)
       `;
       const deleted = await tx.$executeRaw`

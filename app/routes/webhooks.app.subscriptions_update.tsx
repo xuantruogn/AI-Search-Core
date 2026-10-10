@@ -7,6 +7,7 @@ import { recordBillingEvent } from "../services/commerce/billing-state.server";
 import { reconcileShopCommercialState } from "../services/commerce/reconciliation.server";
 
 import db from "../db.server";
+import { withDistributedLease } from "../services/commerce/lease-lock.server";
 
 type AppSubscriptionUpdatePayload = {
   app_subscription?: {
@@ -61,6 +62,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     return new Response("OK", { status: 200 });
   }
 
+  if (!webhookId) throw new Error("Subscription webhook delivery ID missing");
+  return withDistributedLease({ shop, resource: "billing:refresh", leaseMs: 60000, waitTimeoutMs: 10000, pollMs: 100, task: async () => {
   const webhookIdempotencyKey = `shopify-webhook:${webhookId}`;
 
   const existingWebhook = await db.billingEvent.findUnique({
@@ -112,9 +115,10 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     },
   });
 
-  const incomingUpdatedAt = subscription?.updated_at
+  const parsedUpdatedAt = subscription?.updated_at
     ? new Date(subscription.updated_at)
     : null;
+  const incomingUpdatedAt = parsedUpdatedAt && Number.isFinite(parsedUpdatedAt.getTime()) ? parsedUpdatedAt : null;
 
   if (
     localBeforeWebhook?.shopifyUpdatedAt &&
@@ -145,6 +149,9 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       incomingUpdatedAt: incomingUpdatedAt.toISOString(),
       storedUpdatedAt: localBeforeWebhook.shopifyUpdatedAt.toISOString(),
     });
+    await recordBillingEvent({ shop, subscriptionGid, type: "BILLING_RECONCILED", source: "WEBHOOK", idempotencyKey: webhookIdempotencyKey,
+      payload: { webhookId, ignored: "OUT_OF_ORDER", topic } });
+    return new Response("OK", { status: 200 });
   }
 
   const { admin } = await unauthenticated.admin(shop);
@@ -174,9 +181,13 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     localStatus: result.subscription.status,
   });
 
-  // KÍCH HOẠT COMMERCIAL RECONCILE NGẦM Ở BACKGROUND (CHÍNH THỨC NHẬN OWNERSHIP)
+  if (!result.confirmed) throw new Error("Shopify subscription not confirmed; retry webhook reconciliation");
+  if (incomingUpdatedAt && !Number.isNaN(incomingUpdatedAt.getTime())) {
+    await db.billingSubscription.updateMany({ where: { shop, shopifySubscriptionGid: subscriptionGid,
+      OR: [{shopifyUpdatedAt: null}, {shopifyUpdatedAt: {lt: incomingUpdatedAt}}] }, data: {shopifyUpdatedAt: incomingUpdatedAt} });
+  }
   if (result.confirmed && result.subscription.status !== "PENDING") {
-    void reconcileShopCommercialState({
+    await reconcileShopCommercialState({
       shop,
       forceCatalogRefresh: result.subscription.status === "ACTIVE",
     }).catch((error) => {
@@ -189,8 +200,12 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           error: error instanceof Error ? error.message : String(error),
         },
       );
+      throw error;
     });
   }
 
+  await recordBillingEvent({shop, subscriptionGid, type:"BILLING_RECONCILED", source:"WEBHOOK", idempotencyKey:webhookIdempotencyKey,
+    payload:{topic,webhookId,processed:true,observedUpdatedAt:incomingUpdatedAt?.toISOString() ?? null}});
   return new Response("OK", { status: 200 });
+  }});
 };

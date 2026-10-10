@@ -58,7 +58,7 @@ export function DevCenterDashboard({
   const usdMrr =
     data.financial.revenue.find((item) => item.currency === "USD")?.mrr ?? null;
   const estimatedMargin =
-    usdMrr === null ? null : usdMrr - data.provider.totalCostUsd;
+    usdMrr === null || data.provider.unknownCostRequests > 0 ? null : usdMrr - data.provider.totalCostUsd;
 
   return (
     <div className="dc-shell">
@@ -126,6 +126,7 @@ export function DevCenterDashboard({
         ) : null}
 
         <section id="overview" className="dc-section">
+          {data.shopCoverage.partial ? <p role="status">Shop table is limited to the latest {data.shopCoverage.displayed} of {data.shopCoverage.total} shops. Shop/product totals and usage sums are global; AI-enabled count is limited to displayed shops.</p> : null}
           <SectionHeader
             eyebrow="Overview"
             title="Business at a glance"
@@ -136,7 +137,7 @@ export function DevCenterDashboard({
             <Metric label="Paid shops" value={number(data.overview.paidShops)} note={`${number(data.financial.trialSubscriptions)} currently in trial`} tone="success" />
             <Metric label="AI enabled" value={number(data.overview.aiEnabledShops)} note="Active entitlement and toggle on" />
             <Metric label="Subscription MRR" value={moneyList(data.financial.revenue)} note="Active Billing V2 snapshots" tone="primary" />
-            <Metric label="API cost MTD" value={usd(data.provider.totalCostUsd)} note="Recorded OpenAI/provider usage" />
+            <Metric label="Estimated API cost MTD" value={data.provider.unknownCostRequests > 0 ? "Incomplete" : usd(data.provider.totalCostUsd)} note={`${data.provider.unknownCostRequests} requests have unknown model rates. Known-rate subtotal: ${usd(data.provider.totalCostUsd)}. Not a provider invoice.`} />
             <Metric label="Estimated margin" value={estimatedMargin === null ? "—" : usd(estimatedMargin)} note={usdMrr === null ? "Requires comparable USD MRR" : "USD MRR minus provider cost"} />
             <Metric label="AI searches MTD" value={number(data.overview.searchesMtd)} note={`${usdNullable(data.provider.avgSearchCostUsd)} average cost/search`} />
             <Metric label="Indexed products" value={number(data.overview.indexedProducts)} note="Retained vectors across all shops" />
@@ -207,7 +208,7 @@ export function DevCenterDashboard({
                       <td><QuotaCell quota={shop.quota.products} active={shop.subscriptionStatus === "ACTIVE"} /></td>
                       <td><QuotaCell quota={shop.quota.searches} active={shop.subscriptionStatus === "ACTIVE"} /></td>
                       <td><QuotaCell quota={shop.quota.vectorUpdates} active={shop.subscriptionStatus === "ACTIVE"} /></td>
-                      <td><strong>{usd(shop.cost.mtdUsd)}</strong></td>
+                      <td><strong>{shop.cost.unknownCostRequests > 0 ? "Incomplete" : usd(shop.cost.mtdUsd)}</strong></td>
                       <td>
                         <Link className="dc-button dc-button-compact" to={manageUrl(data.query, shop.shop)}>
                           Manage
@@ -274,9 +275,9 @@ export function DevCenterDashboard({
         <section id="usage" className="dc-section">
           <SectionHeader eyebrow="Economics" title="Usage & cost" note={`Month to date from ${new Date(data.monthStart).toLocaleDateString()}.`} />
           <div className="dc-three-column">
-            <UsageCard label="Search operations" value={number(data.provider.mtdSearches)} cost={usd(data.provider.searchCostUsd)} detail="Query analysis and query embeddings" />
-            <UsageCard label="Indexing cost" value={number(data.overview.indexedProducts)} cost={usd(data.provider.indexingCostUsd)} detail="Product enrichment and embeddings" />
-            <UsageCard label="Total provider usage" value={number(data.provider.totalTokens)} cost={usd(data.provider.totalCostUsd)} detail="Tracked API tokens and recorded cost" />
+            <UsageCard label="Search operations" value={number(data.provider.mtdSearches)} cost={data.provider.unknownCostRequests > 0 ? "Incomplete" : usd(data.provider.searchCostUsd)} detail="Query analysis and query embeddings" />
+            <UsageCard label="Indexing cost" value={number(data.overview.indexedProducts)} cost={data.provider.unknownCostRequests > 0 ? "Incomplete" : usd(data.provider.indexingCostUsd)} detail="Product enrichment and embeddings" />
+            <UsageCard label="Total provider usage" value={number(data.provider.totalTokens)} cost={data.provider.unknownCostRequests > 0 ? "Incomplete" : usd(data.provider.totalCostUsd)} detail="Recorded tokens and configured estimates; never provider invoice costs" />
           </div>
           <details className="dc-diagnostics">
             <summary>Advanced diagnostics</summary>
@@ -288,6 +289,16 @@ export function DevCenterDashboard({
               <Stat label="Configured budget" value={usdNullable(data.provider.configuredBudgetUsd)} />
               <Stat label="Remaining budget" value={usdNullable(data.provider.remainingBudgetUsd)} />
               <Stat label="Failed sync jobs" value={number(data.diagnostics.failedSyncJobs)} />
+              <Stat label="Readiness (measured dependencies)" value={data.readiness.status} />
+              <Stat label="Recorded proxy requests MTD" value={number(data.attemptMetrics.proxyRequests)} />
+              <Stat label="Search requests MTD" value={number(data.attemptMetrics.searchRequests)} />
+              <Stat label="Pipeline executions (excludes full-result cache)" value={number(data.attemptMetrics.pipelineExecutions)} />
+              <Stat label="Full-result cache hits" value={number(data.attemptMetrics.cacheHits)} />
+              <Stat label="Native fallbacks (excluded from AI CTR)" value={number(data.attemptMetrics.nativeFallbacks)} />
+              <Stat label="Searches with products" value={number(data.attemptMetrics.searchesWithResults)} />
+              <Stat label="Incomplete attempts (not assumed zero)" value={number(data.attemptMetrics.incompleteAttempts)} />
+              <Stat label="Attempt telemetry since" value={data.attemptMetrics.recordedSince ?? "Not yet recorded"} />
+              {Object.entries(data.readiness.checks).map(([name, status]) => <Stat key={name} label={name} value={status} />)}
               <Stat label="Failed catalog jobs" value={number(data.diagnostics.failedCatalogJobs)} />
               <Stat label="Active subscriptions missing price" value={number(data.diagnostics.activeSubscriptionsMissingPrice)} />
             </div>
@@ -355,7 +366,7 @@ export function PlanCatalogEditor({ plans, csrfToken, canWrite, busy }: {
         <StatusBadge tone="neutral">{plans.length} plans</StatusBadge>
       </div>
       <div className="dc-info-note">
-        Quota and capability edits change entitlement for current subscribers immediately. Price changes are used for new purchases or plan changes; an already-active Shopify subscription keeps its recorded price snapshot until Shopify replaces it.
+        Quota and capability edits change entitlement for current subscribers immediately. Price changes apply to new purchases or plan changes. Only Basic offers an introductory free trial. Money-back days and refund terms are captured for new purchases, not applied retroactively. For Shopify App Pricing, configure the trial in Shopify's pricing dashboard as well.
       </div>
 
       {canWrite ? (
@@ -500,8 +511,14 @@ function PlanEditorForm({
             <option value="ANNUAL">Annual</option>
           </select>
         </Field>
-        <Field label="Trial days">
-          <input name="planTrialDays" type="number" min="0" max="365" defaultValue={plan?.trialDays ?? 0} />
+        <Field label="Free trial days (Basic only)">
+          <input name="planTrialDays" type="number" min="0" max="365" step="1" readOnly={Boolean(plan && plan.handle !== "basic")} defaultValue={plan?.handle === "basic" ? plan.trialDays : 0} />
+        </Field>
+        <Field label="Money-back guarantee days (0 = disabled)">
+          <input name="planMoneyBackDays" type="number" min="0" max="365" step="1" defaultValue={plan?.features.billingPolicy.moneyBackGuaranteeDays ?? 0} />
+        </Field>
+        <Field label="Refund terms (required when enabled)">
+          <textarea name="planRefundTerms" maxLength={2000} rows={3} defaultValue={plan?.features.billingPolicy.refundTerms ?? ""} placeholder="Eligibility, exclusions, first payment or renewals, and how to contact support. The window starts after verified payment, not installation." />
         </Field>
         <Field label="Visibility">
           <select name="planVisibility" defaultValue={plan?.visibility ?? "PUBLIC"}>
@@ -677,7 +694,7 @@ function ShopDrawer({ shop, grants, csrfToken, query, canQuotaWrite, canPlanWrit
             <div className="dc-detail-grid">
               <Stat label="Lifecycle" value={shop.lifecycleStatus} />
               <Stat label="AI state" value={shop.state.aiOperational ? "Operational" : shop.state.aiConfigured ? "Not entitled" : "Disabled"} />
-              <Stat label="API cost MTD" value={usd(shop.cost.mtdUsd)} />
+              <Stat label="Estimated API cost MTD" value={shop.cost.unknownCostRequests > 0 ? "Incomplete" : usd(shop.cost.mtdUsd)} />
               <Stat label="Retained vectors" value={number(shop.quota.products.retained)} />
             </div>
           </DrawerSection>
@@ -761,8 +778,14 @@ function ShopDrawer({ shop, grants, csrfToken, query, canQuotaWrite, canPlanWrit
                       <option value="ANNUAL">Annual</option>
                     </select>
                   </Field>
-                  <Field label="Trial days">
-                    <input name="customTrialDays" type="number" min="0" max="365" defaultValue={shop.customConfig?.trialDays ?? 0} />
+                  <Field label="Free trial (not available for Custom)">
+                    <input name="customTrialDays" type="number" value={0} readOnly />
+                  </Field>
+                  <Field label="Money-back guarantee days (0 = disabled)">
+                    <input name="customMoneyBackDays" type="number" min="0" max="365" step="1" defaultValue={shop.customConfig?.features.billingPolicy.moneyBackGuaranteeDays ?? 0} />
+                  </Field>
+                  <Field label="Refund terms">
+                    <textarea name="customRefundTerms" maxLength={2000} rows={3} defaultValue={shop.customConfig?.features.billingPolicy.refundTerms ?? ""} />
                   </Field>
                   <Field label="Product limit">
                     <input name="customProductLimit" type="number" min="0" defaultValue={shop.customConfig?.productLimit ?? ""} placeholder="Blank = unlimited" />

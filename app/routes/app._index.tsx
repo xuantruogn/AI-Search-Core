@@ -1960,29 +1960,30 @@ export default function Dashboard() {
               </div>
             ) : (
               <div className="vip-alert-empty">
-                No recurring search anomalies detected within the {impact.windowDays}-day window.
+                {impact.coverage.clusterSampled ? "No recurring anomalies found in sampled logs; older events have not been fully classified." : `No recurring search anomalies detected within the ${impact.windowDays}-day window.`}
               </div>
             )}
 
             <div className="vip-quality-health">
               <div className="vip-quality-health__title">
-                Search Quality Health Monitor
+                Search quality verification
               </div>
               <div className="vip-alert-check-item">
-                <span className="vip-alert-check-item__ok">✓</span>
-                <span>Zero-Result Query Prevention</span>
+                <span>UNKNOWN</span>
+                <span>Zero-result prevention: no runtime test recorded</span>
               </div>
               <div className="vip-alert-check-item">
-                <span className="vip-alert-check-item__ok">✓</span>
-                <span>Low-Similarity Fallback</span>
+                <span>UNKNOWN</span>
+                <span>Low-similarity fallback: no runtime test recorded</span>
               </div>
               <div className="vip-alert-check-item">
-                <span className="vip-alert-check-item__ok">✓</span>
-                <span>Click-Through Rate (CTR) Tracking</span>
+                <span>UNKNOWN</span>
+                <span>CTR tracking: recorded clicks are not a health test</span>
               </div>
             </div>
 
             <div style={{ marginTop: 16 }}>
+              {impact.coverage.clusterSampled || impact.coverage.detailSampled ? <p>Totals and CTR cover all retained logs. Anomalies are sampled: clusters use up to 2,000 recent logs; the anomaly chart uses up to {impact.coverage.sampledSearches.toLocaleString("en-US")} logs.</p> : null}
               <Link to="/app/search-analytics">Open Search Analytics →</Link>
             </div>
           </aside>

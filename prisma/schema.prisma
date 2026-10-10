@@ -584,6 +584,30 @@ model AiSearchUsageEvent {
   @@index([createdAt], map: "idx_usage_event_created_at")
 }
 
+model AiSearchAttempt {
+  id            String   @id @db.VarChar(64)
+  shop          String   @db.VarChar(191)
+  purpose       String   @db.VarChar(64)
+  queryHash     String   @db.VarChar(64)
+  status        String   @default("STARTED") @db.VarChar(64)
+  failureKind   String?  @db.VarChar(64)
+  reason        String?  @db.VarChar(191)
+  aiExecuted    Boolean  @default(false)
+  cacheHit      Boolean  @default(false)
+  nativeFallback Boolean @default(false)
+  resultCount   Int?
+  searchLogId   String?  @unique @db.VarChar(191)
+  reservationId String?  @db.VarChar(191)
+  periodId      Int?
+  durationMs    Int?
+  httpStatus    Int?
+  createdAt     DateTime @default(now())
+  finishedAt    DateTime?
+  @@index([shop, createdAt])
+  @@index([shop, status, createdAt])
+  @@index([createdAt])
+}
+
 model AiSearchQueryLog {
   id                  String   @id @default(cuid()) @db.VarChar(191)
   shop                String   @db.VarChar(191)
@@ -847,8 +871,16 @@ model AiSearchAdminAuditLog {
   @@index([createdAt], map: "idx_admin_audit_created_at")
 }
 
+model AiSearchTelemetryReceipt {
+  key       String   @id @db.VarChar(64)
+  expiresAt DateTime
+  @@index([expiresAt])
+}
+
 model AiSearchApiUsageEvent {
   id                  Int      @id @default(autoincrement())
+  idempotencyKey      String?  @unique @db.VarChar(64)
+  costEstimateStatus  String   @default("LEGACY_ESTIMATE") @db.VarChar(32)
   shop                String?  @db.VarChar(191)
   provider            String   @default("OPENAI") @db.VarChar(64)
   operation           String   @db.VarChar(64)
@@ -875,6 +907,7 @@ model AiSearchApiUsageEvent {
 
 model AiSearchApiUsageDaily {
   id                  Int      @id @default(autoincrement())
+  unknownCostRequests Int      @default(0)
   day                 DateTime @db.Date
   shop                String   @db.VarChar(191)
   provider            String   @db.VarChar(64)

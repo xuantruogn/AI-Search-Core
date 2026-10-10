@@ -1,5 +1,6 @@
 import { unauthenticated } from "../../shopify.server";
 import db from "../../db.server";
+import { recordWorkerPoll } from "../maintenance/worker-heartbeat.server";
 
 import { syncEntireCatalog } from "../products/catalog-sync.server";
 import { fetchProductPresenceByIds } from "../products/product-sync.server";
@@ -1225,7 +1226,7 @@ export function startCatalogSyncQueueWorker() {
 
   const timer =
     setInterval(
-      kickCatalogSyncQueue,
+      () => { recordWorkerPoll("catalog", pollMs); kickCatalogSyncQueue(); },
       jitterInterval(pollMs),
     );
 
@@ -1245,7 +1246,7 @@ export function startCatalogSyncQueueWorker() {
 
   const startupTimer =
     setTimeout(
-      kickCatalogSyncQueue,
+      () => { recordWorkerPoll("catalog", pollMs); kickCatalogSyncQueue(); },
       startDelayMs,
     );
 

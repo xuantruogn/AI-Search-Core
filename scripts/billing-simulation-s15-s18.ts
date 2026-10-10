@@ -172,7 +172,7 @@ async function runScenario(scenario: (typeof SCENARIOS)[number]) {
       ? { status: "PENDING", charge: "PENDING", payment: "PENDING", access: "NONE", commercial: "PENDING", active: false, search: false }
       : scenario.id === "S17"
         ? { status: "FROZEN", charge: "FAILED", payment: "FAILED", access: "SUSPENDED", commercial: "FROZEN", active: false, search: false }
-        : { status: "ACTIVE", charge: "PAID", payment: scenario.id === "S18" ? "RECOVERED" : "PAID", access: "BASIC", commercial: "PAID", active: true, search: true };
+        : { status: "ACTIVE", charge: "PENDING", payment: "PENDING", access: "BASIC", commercial: "PAID", active: true, search: true };
 
     const assertions = {
       dbStatus: row?.status === expected.status,

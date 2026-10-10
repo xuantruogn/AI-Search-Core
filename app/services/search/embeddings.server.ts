@@ -248,7 +248,7 @@ export async function createEmbedding(
     clientRequestOrdinal,
   });
 
-  recordOpenAiUsageSafe({
+  await recordOpenAiUsageSafe({
     shop: options.usageContext?.shop ?? null,
     operation: options.usageContext?.operation ?? "EMBEDDING",
     model: getEmbeddingModel(),
@@ -365,7 +365,7 @@ export async function createEmbeddings(
     clientRequestOrdinal,
   });
 
-  recordOpenAiUsageSafe({
+  await recordOpenAiUsageSafe({
     shop: options.usageContext?.shop ?? null,
     operation: options.usageContext?.operation ?? "EMBEDDING",
     model: getEmbeddingModel(),

@@ -1,6 +1,8 @@
 
 import db from "../../db.server";
 import { hashSearchQuery } from "../commerce/usage.server";
+import { searchAnalyticsBatches } from "./analytics-batches.server";
+import { currentSearchAttempt, patchSearchAttempt } from "./search-attempt-context.server";
 
 export type RankedSearchProduct = {
   productId: string;
@@ -196,6 +198,8 @@ export async function recordSearchQueryLog({
   }) => void;
 }) {
   const totalStartedAt = Date.now();
+  const attempt = currentSearchAttempt(shop);
+  if (attempt?.searchLogId) return attempt.searchLogId;
   const serializationStartedAt = Date.now();
   const compactProducts = rankedProducts.slice(
     0,
@@ -220,6 +224,7 @@ export async function recordSearchQueryLog({
   const dbStartedAt = Date.now();
   const log = await db.aiSearchQueryLog.create({
     data: {
+      ...(attempt ? { id: attempt.id } : {}),
       shop,
       query: query.slice(0, 500),
       normalizedQuery: normalizeQuery(query).slice(0, 500),
@@ -253,6 +258,7 @@ export async function recordSearchQueryLog({
     totalMs: Date.now() - totalStartedAt,
   });
 
+  if (attempt) patchSearchAttempt({ searchLogId: log.id, resultCount: rankedProducts.length });
   return log.id;
 }
 
@@ -434,8 +440,7 @@ type ClusterAccumulator = {
   clickCount: number;
   zeroResultCount: number;
   semanticFacetNoResultCount: number;
-  logIds: string[];
-  semanticFacetNoResultLogIds: string[];
+  daily: Map<string, { searches: number; zeroResults: number }>;
   scoreTotal: number;
   scoreCount: number;
   thresholdTotal: number;
@@ -450,33 +455,13 @@ type ClusterAccumulator = {
   >;
 };
 
-export async function getMerchantSearchClusters(shop: string, days = 30) {
+export async function getMerchantSearchClusters(shop: string, days = 30, range?: { from: Date; to: Date }) {
   const safeDays = Math.max(1, Math.min(Math.trunc(days), 365));
   const cutoff = new Date(Date.now() - safeDays * 24 * 60 * 60_000);
-  const logs = await db.aiSearchQueryLog.findMany({
-    where: { shop, createdAt: { gte: cutoff } },
-    orderBy: { createdAt: "desc" },
-    take: 2_000,
-    select: {
-      id: true,
-      query: true,
-      normalizedQuery: true,
-      queryVectorJson: true,
-      llmAnalysisJson: true,
-      llmStatus: true,
-      rankedProductsJson: true,
-      resultCount: true,
-      topScore: true,
-      topCandidateScore: true,
-      vectorThreshold: true,
-      createdAt: true,
-      clicks: { select: { productId: true } },
-    },
-  });
-
   const clusters: ClusterAccumulator[] = [];
 
-  for (const log of logs) {
+  for await (const batch of searchAnalyticsBatches(shop, range?.from ?? cutoff, range?.to ?? new Date())) {
+  for (const log of batch) {
     const products = parseRankedProducts(log.rankedProductsJson);
     const queryFingerprint = parseQueryFingerprint(log.queryVectorJson);
     const hasResults = log.resultCount > 0;
@@ -518,8 +503,7 @@ export async function getMerchantSearchClusters(shop: string, days = 30) {
           clickCount: 0,
           zeroResultCount: 0,
           semanticFacetNoResultCount: 0,
-          logIds: [],
-          semanticFacetNoResultLogIds: [],
+          daily: new Map(),
           scoreTotal: 0,
           scoreCount: 0,
           thresholdTotal: 0,
@@ -532,12 +516,14 @@ export async function getMerchantSearchClusters(shop: string, days = 30) {
     cluster.searchCount += 1;
     cluster.searchesWithResults += hasResults ? 1 : 0;
     cluster.zeroResultCount += hasResults ? 0 : 1;
-    const semanticFacetNoResult =
-      !hasResults &&
-      hasReasonableProductSemanticFacets(log.llmAnalysisJson, log.llmStatus);
+    // All zero-result executions require attention, regardless of LLM source.
+    const semanticFacetNoResult = !hasResults;
     cluster.semanticFacetNoResultCount += semanticFacetNoResult ? 1 : 0;
-    cluster.logIds.push(log.id);
-    if (semanticFacetNoResult) cluster.semanticFacetNoResultLogIds.push(log.id);
+    const day = log.createdAt.toISOString().slice(0, 10);
+    const daily = cluster.daily.get(day) ?? { searches: 0, zeroResults: 0 };
+    daily.searches += 1;
+    daily.zeroResults += hasResults ? 0 : 1;
+    cluster.daily.set(day, daily);
     cluster.clickedSearches += log.clicks.length > 0 ? 1 : 0;
     cluster.clickCount += log.clicks.length;
     cluster.thresholdTotal += log.vectorThreshold;
@@ -569,6 +555,7 @@ export async function getMerchantSearchClusters(shop: string, days = 30) {
       current.clickCount += clickedProductIds.has(product.productId) ? 1 : 0;
       cluster.productStats.set(product.productId, current);
     }
+  }
   }
 
   return clusters
@@ -611,8 +598,7 @@ export async function getMerchantSearchClusters(shop: string, days = 30) {
         semanticFacetNoResultCount: cluster.semanticFacetNoResultCount,
         resultRate,
         clickedSearches: cluster.clickedSearches,
-        logIds: cluster.logIds,
-        semanticFacetNoResultLogIds: cluster.semanticFacetNoResultLogIds,
+        daily: [...cluster.daily.entries()].map(([date, counts]) => ({ date, ...counts })),
         clickCount: cluster.clickCount,
         clickThroughRate,
         averageTopScore,

@@ -1,0 +1,11 @@
+import assert from "node:assert/strict";
+import {deriveBillingPeriodStart} from "../app/services/billing/billing-period.server";
+const created = new Date("2025-01-01T00:00:00Z");
+const first = deriveBillingPeriodStart(created,new Date("2025-01-31T00:00:00Z"),"EVERY_30_DAYS",null)!;
+const renewal = deriveBillingPeriodStart(created,new Date("2025-03-02T00:00:00Z"),"EVERY_30_DAYS",first)!;
+assert.equal(first.toISOString(),"2025-01-01T00:00:00.000Z");
+assert.equal(renewal.toISOString(),"2025-01-31T00:00:00.000Z");
+assert.notEqual(first.getTime(),renewal.getTime());
+assert.equal(deriveBillingPeriodStart(created,null,"EVERY_30_DAYS",renewal)?.getTime(),renewal.getTime());
+assert.equal(deriveBillingPeriodStart(created,new Date("2026-01-01T00:00:00Z"),"ANNUAL",null)?.getTime(),created.getTime());
+console.log("Billing period boundary and renewal regression PASS");

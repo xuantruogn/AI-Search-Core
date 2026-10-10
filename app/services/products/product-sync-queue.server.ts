@@ -1,4 +1,5 @@
 import { unauthenticated } from "../../shopify.server";
+import { recordWorkerPoll } from "../maintenance/worker-heartbeat.server";
 import {
   claimNextProductSyncJob,
   getProductSyncJob,
@@ -200,6 +201,7 @@ export function startProductSyncQueueWorker() {
   queueState.timerStarted = true;
 
   const timer = setInterval(() => {
+    recordWorkerPoll("product", QUEUE_POLL_MS);
     kickProductSyncQueue();
   }, jitterInterval(QUEUE_POLL_MS));
 
@@ -207,5 +209,6 @@ export function startProductSyncQueueWorker() {
 
   // Recover PENDING / FAILED / stale PROCESSING jobs as soon as this
   // server process is ready, không cần chờ webhook mới.
+  recordWorkerPoll("product", QUEUE_POLL_MS);
   kickProductSyncQueue();
 }

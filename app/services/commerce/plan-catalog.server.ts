@@ -1,6 +1,7 @@
 import type { BillingInterval, BillingMode, PlanVisibility, Prisma } from "@prisma/client";
 
 import db from "../../db.server";
+import { parsePlanBillingPolicy, validatePlanBillingPolicy, validatePolicyDays, type PlanBillingPolicy } from "../billing/plan-policy";
 
 export const PLAN_CAPABILITY_DEFINITIONS = [
   { key: "semanticSearch", label: "Semantic search" },
@@ -21,6 +22,7 @@ export type PlanMerchantFeature = {
 };
 
 export type PlanFeatureConfig = {
+  billingPolicy: PlanBillingPolicy;
   description: string;
   highlights: string[];
   capabilities: Record<PlanCapabilityKey, boolean>;
@@ -38,6 +40,7 @@ const DEFAULT_CAPABILITIES: Record<PlanCapabilityKey, boolean> = {
 
 export function disabledPlanFeatureConfig(): PlanFeatureConfig {
   return {
+    billingPolicy: parsePlanBillingPolicy(null),
     description: "",
     highlights: [],
     capabilities: Object.fromEntries(
@@ -120,6 +123,7 @@ export function parsePlanFeatureFlags(value: unknown): PlanFeatureConfig {
 
   return {
     description: cleanText(record.description, 500),
+    billingPolicy: parsePlanBillingPolicy(record.billingPolicy),
     highlights: cleanHighlights(record.highlights),
     capabilities,
     merchantFeatures: cleanMerchantFeatures(record.merchantFeatures),
@@ -135,6 +139,8 @@ export type SavePlanInput = {
   visibility: PlanVisibility;
   billingMode: BillingMode;
   trialDays: number;
+  moneyBackGuaranteeDays?: number;
+  refundTerms?: string;
   maxIndexedProducts: number | null;
   maxMonthlySearches: number | null;
   maxMonthlyVectorUpdates: number | null;
@@ -169,7 +175,7 @@ function validateInput(input: SavePlanInput) {
     throw new Error("Currency must be a 3-letter ISO currency code.");
   }
 
-  const trialDays = Math.trunc(input.trialDays);
+  const trialDays = validatePolicyDays(input.trialDays, "Free trial days");
   if (!Number.isFinite(trialDays) || trialDays < 0 || trialDays > 365) {
     throw new Error("Trial days must be between 0 and 365.");
   }
@@ -207,6 +213,7 @@ function validateInput(input: SavePlanInput) {
     sortOrder: Number.isFinite(input.sortOrder) ? Math.trunc(input.sortOrder) : 0,
     isActive: Boolean(input.isActive),
     featureFlags: {
+      billingPolicy: validatePlanBillingPolicy(input.moneyBackGuaranteeDays ?? 0, input.refundTerms ?? ""),
       description: cleanText(input.description, 500),
       highlights: cleanHighlights(input.highlights),
       capabilities,
@@ -220,6 +227,9 @@ export async function createPlanDefinition(input: SavePlanInput) {
     throw new Error(`Plan handle "${handle}" is reserved by the billing system.`);
   }
   const data = validateInput(input);
+  if (handle !== "basic" && data.trialDays !== 0) {
+    throw new Error("Only Basic can offer a free trial.");
+  }
 
   const existing = await db.plan.findUnique({
     where: { handle },
@@ -246,6 +256,9 @@ export async function updatePlanDefinition(
   if (!existing) throw new Error("Plan not found.");
 
   const data = validateInput(input);
+  if (existing.handle !== "basic" && data.trialDays !== 0) {
+    throw new Error("Only Basic can offer a free trial.");
+  }
   return db.plan.update({
     where: { id: planId },
     data: {

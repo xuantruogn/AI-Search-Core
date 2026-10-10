@@ -13,6 +13,10 @@ include_config_on_deploy = true
 api_version = "2026-10"
 
 [[webhooks.subscriptions]]
+topics = [ "app/uninstalled" ]
+uri = "/webhooks/app/uninstalled"
+
+[[webhooks.subscriptions]]
 topics = [ "app_subscriptions/update" ]
 uri = "/webhooks/app/subscriptions_update"
 

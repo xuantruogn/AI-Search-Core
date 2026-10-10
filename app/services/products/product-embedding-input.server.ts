@@ -623,7 +623,7 @@ export async function prepareProductEmbeddingInput(
         | undefined
       )?.input_tokens_details?.cached_tokens ?? 0;
 
-    recordOpenAiUsageSafe({
+    await recordOpenAiUsageSafe({
       shop: shop ?? null,
       operation: "PRODUCT_ENRICHMENT",
       model,

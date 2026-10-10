@@ -1,30 +1,5 @@
-import db from "../../db.server";
+import { getDailySearchMetrics, sumSearchMetrics } from "./search-metrics.server";
 import { getMerchantSearchClusters } from "./search-analytics.server";
-
-const MAX_ANALYTICS_EVENTS = (() => {
-  const raw = Number.parseInt(
-    process.env.AI_SEARCH_ANALYTICS_MAX_EVENTS || "",
-    10,
-  );
-  return Number.isSafeInteger(raw) && raw >= 1_000
-    ? Math.min(raw, 100_000)
-    : 20_000;
-})();
-
-type SearchImpactLogRow = {
-  id: string;
-  query: string;
-  normalizedQuery: string;
-  resultCount: number;
-  topScore: number | null;
-  topCandidateScore: number | null;
-  vectorThreshold: number;
-  createdAt: Date;
-  clicks: Array<{
-    rank: number;
-    createdAt: Date;
-  }>;
-};
 
 export type SearchImpactPoint = {
   date: string;
@@ -48,6 +23,7 @@ export type SearchImpactAlert = {
 };
 
 export type SearchImpactSnapshot = {
+  coverage: { detailSampled: boolean; clusterSampled: boolean; sampledSearches: number; totalLoggedSearches: number };
   windowDays: number;
   generatedAt: string;
   ai: {
@@ -105,34 +81,10 @@ export async function getSearchImpactSnapshot(
   windowStart.setUTCDate(windowStart.getUTCDate() - (windowDays - 1));
   windowStart.setUTCHours(0, 0, 0, 0);
 
-  const logs: SearchImpactLogRow[] = await db.aiSearchQueryLog.findMany({
-    where: {
-      shop,
-      createdAt: { gte: windowStart },
-    },
-    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-    take: MAX_ANALYTICS_EVENTS,
-    select: {
-      id: true,
-      query: true,
-      normalizedQuery: true,
-      resultCount: true,
-      topScore: true,
-      topCandidateScore: true,
-      vectorThreshold: true,
-      createdAt: true,
-      clicks: {
-        select: {
-          rank: true,
-          createdAt: true,
-        },
-      },
-    },
-  });
+  const dailyMetrics = await getDailySearchMetrics(shop, windowStart, now);
+  const totals = sumSearchMetrics(dailyMetrics);
 
-  logs.reverse();
-
-  const clusters = await getMerchantSearchClusters(shop, windowDays);
+  const clusters = await getMerchantSearchClusters(shop, windowDays, { from: windowStart, to: now });
 
   const seriesMap = new Map<
     string,
@@ -149,45 +101,19 @@ export async function getSearchImpactSnapshot(
     });
   }
 
-  let clickedSearches = 0;
-  let clickCount = 0;
-  let clickedRankSum = 0;
-
-  const abnormalLogIds = new Set<string>();
   for (const cluster of clusters) {
-    if (cluster.classification === "LOW_CTR") {
-      cluster.logIds.forEach((id) => abnormalLogIds.add(id));
-    } else if (cluster.classification === "SEMANTIC_NO_RESULTS") {
-      cluster.semanticFacetNoResultLogIds.forEach((id) => abnormalLogIds.add(id));
-    }
-  }
-
-  for (const log of logs) {
-    const key = dayKey(log.createdAt);
-    const bucket = seriesMap.get(key);
-    if (bucket) {
-      bucket.searches += 1;
-      if (log.clicks.length > 0) bucket.clickedSearches += 1;
-      if (abnormalLogIds.has(log.id)) bucket.abnormalSearches += 1;
-    }
-
-    if (log.clicks.length > 0) {
-      clickedSearches += 1;
-      clickCount += log.clicks.length;
-      clickedRankSum += log.clicks.reduce(
-        (sum: number, click: SearchImpactLogRow["clicks"][number]) =>
-          sum + click.rank,
-        0,
-      );
+    for (const daily of cluster.daily) {
+      const bucket = seriesMap.get(daily.date);
+      if (bucket) bucket.abnormalSearches += cluster.classification === "LOW_CTR" ? daily.searches : cluster.classification === "SEMANTIC_NO_RESULTS" ? daily.zeroResults : 0;
     }
   }
 
   const series = Array.from(seriesMap.entries()).map(([date, value]) => ({
     date,
-    searches: value.searches,
-    clickedSearches: value.clickedSearches,
+    searches: dailyMetrics.find((metric) => metric.date === date)?.searches ?? 0,
+    clickedSearches: dailyMetrics.find((metric) => metric.date === date)?.clickedSearches ?? 0,
     abnormalSearches: value.abnormalSearches,
-    ctr: round1(safeCtr(value.clickedSearches, value.searches)),
+    ctr: round1(safeCtr(dailyMetrics.find((metric) => metric.date === date)?.clickedSearches ?? 0, dailyMetrics.find((metric) => metric.date === date)?.searches ?? 0)),
   }));
 
   const cutoffCurrent7d = new Date(now);
@@ -197,16 +123,11 @@ export async function getSearchImpactSnapshot(
   const cutoffPrevious7d = new Date(cutoffCurrent7d);
   cutoffPrevious7d.setUTCDate(cutoffPrevious7d.getUTCDate() - 7);
 
-  const current7d = logs.filter((log: SearchImpactLogRow) => log.createdAt >= cutoffCurrent7d);
-  const previous7d = logs.filter(
-    (log: SearchImpactLogRow) =>
-      log.createdAt >= cutoffPrevious7d && log.createdAt < cutoffCurrent7d,
-  );
-
-  const current7dClicked = current7d.filter((log: SearchImpactLogRow) => log.clicks.length > 0).length;
-  const previous7dClicked = previous7d.filter((log: SearchImpactLogRow) => log.clicks.length > 0).length;
-  const current7dCtr = safeCtr(current7dClicked, current7d.length);
-  const previous7dCtr = safeCtr(previous7dClicked, previous7d.length);
+  const comparisonMetrics = windowStart > cutoffPrevious7d ? await getDailySearchMetrics(shop, cutoffPrevious7d, now) : dailyMetrics;
+  const current7d = sumSearchMetrics(comparisonMetrics.filter((row) => row.date >= dayKey(cutoffCurrent7d)));
+  const previous7d = sumSearchMetrics(comparisonMetrics.filter((row) => row.date >= dayKey(cutoffPrevious7d) && row.date < dayKey(cutoffCurrent7d)));
+  const current7dCtr = safeCtr(current7d.clickedSearches, current7d.searches);
+  const previous7dCtr = safeCtr(previous7d.clickedSearches, previous7d.searches);
 
   const deltaPercentagePoints =
     current7dCtr != null && previous7dCtr != null
@@ -245,8 +166,8 @@ export async function getSearchImpactSnapshot(
     });
 
   if (
-    current7d.length >= 30 &&
-    previous7d.length >= 30 &&
+    current7d.searches >= 30 &&
+    previous7d.searches >= 30 &&
     deltaRelativePercent != null &&
     deltaRelativePercent <= -20
   ) {
@@ -254,7 +175,7 @@ export async function getSearchImpactSnapshot(
       type: "CTR_DROP",
       severity: "HIGH",
       query: null,
-      count: current7d.length,
+      count: current7d.searches,
       detail: `CTR 7 ngày gần nhất giảm ${Math.abs(
         round1(deltaRelativePercent) ?? 0,
       )}% so với 7 ngày trước.`,
@@ -272,14 +193,15 @@ export async function getSearchImpactSnapshot(
 
   return {
     windowDays,
+    coverage: { detailSampled: false, clusterSampled: false, sampledSearches: totals.searches, totalLoggedSearches: totals.searches },
     generatedAt: now.toISOString(),
     ai: {
-      searches: logs.length,
-      clickedSearches,
-      ctr: round1(safeCtr(clickedSearches, logs.length)),
-      clicks: clickCount,
+      searches: totals.searches,
+      clickedSearches: totals.clickedSearches,
+      ctr: round1(safeCtr(totals.clickedSearches, totals.searches)),
+      clicks: totals.clicks,
       avgClickedRank:
-        clickCount > 0 ? Math.round((clickedRankSum / clickCount) * 10) / 10 : null,
+        totals.clicks > 0 ? Math.round((totals.rankTotal / totals.clicks) * 10) / 10 : null,
     },
     comparison: {
       current7dCtr: round1(current7dCtr),

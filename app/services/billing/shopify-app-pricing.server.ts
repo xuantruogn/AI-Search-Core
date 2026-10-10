@@ -1,4 +1,5 @@
 import db from "../../db.server";
+import { deriveBillingPeriodStart } from "./billing-period.server";
 import { AI_SEARCH_PLAN, planFromHandle } from "../commerce/plans.server";
 import {
   ensureShopRecord,
@@ -506,7 +507,7 @@ async function reconcileManualShopifySubscription({
     );
   }
 
-  const start = parseShopifyDate(adminSubscription.createdAt);
+  const createdAt = parseShopifyDate(adminSubscription.createdAt);
   const end = parseShopifyDate(adminSubscription.currentPeriodEnd);
 
   // Shopify's exact recurring pricing details are authoritative for the
@@ -529,6 +530,7 @@ async function reconcileManualShopifySubscription({
         : null;
 
   const shopifyPrice = recurringPricing?.price?.amount ?? null;
+  const start = deriveBillingPeriodStart(createdAt, end, shopifyInterval ?? plan.interval, current?.currentPeriodStartsAt ?? null);
   const shopifyCurrency = recurringPricing?.price?.currencyCode ?? null;
 
   /**
@@ -595,7 +597,7 @@ async function reconcileManualShopifySubscription({
   const previousStatus = before.status;
   const subscriptionPreviousStatus = current?.status ?? null;
   const shopifyCreatedAt = parseShopifyDate(adminSubscription.createdAt);
-  const shopifyUpdatedAt = parseShopifyDate(adminSubscription.updatedAt);
+  const shopifyUpdatedAt = parseShopifyDate(adminSubscription.updatedAt) ?? current?.shopifyUpdatedAt ?? null;
   const now = new Date();
 
   const trialDays = Math.max(0, adminSubscription.trialDays ?? 0);
@@ -671,6 +673,10 @@ async function reconcileManualShopifySubscription({
         : "EFFECTIVE"
       : (current?.cancellationStatus ?? "NONE");
 
+  const verifiedPayment = start ? await db.billingCharge.findFirst({
+    where: { subscriptionGid: gid, billingPeriodStart: start, status: "PAID", paidAt: { not: null }, shopifyChargeId: { not: null } },
+    select: { paidAt: true },
+  }) : null;
   const chargeStatus: BillingChargeStatus =
     status === "FROZEN"
       ? "FAILED"
@@ -679,7 +685,7 @@ async function reconcileManualShopifySubscription({
         : status === "ACTIVE" && trialStatus === "ACTIVE"
           ? "NONE"
           : status === "ACTIVE"
-            ? "PAID"
+            ? verifiedPayment ? "PAID" : "PENDING"
             : "NONE";
 
   const paymentStatus: BillingPaymentStatus =
@@ -687,12 +693,10 @@ async function reconcileManualShopifySubscription({
       ? "FAILED"
       : status === "PENDING"
         ? "PENDING"
-        : status === "ACTIVE" && subscriptionPreviousStatus === "FROZEN"
-          ? "RECOVERED"
-          : status === "ACTIVE" && trialStatus === "ACTIVE"
+        : status === "ACTIVE" && trialStatus === "ACTIVE"
             ? "NONE"
             : status === "ACTIVE"
-              ? "PAID"
+              ? verifiedPayment ? "PAID" : "PENDING"
               : "NONE";
 
   const accessStatus: BillingAccessStatus =
@@ -778,8 +782,15 @@ async function reconcileManualShopifySubscription({
       adminSubscription.test ?? process.env.NODE_ENV !== "production",
     rawResponse: {
       ...(adminSubscription as unknown as Record<string, unknown>),
+      // Provider refreshes must not erase the terms captured at checkout.
+      billingPolicySnapshot: await db.billingEvent.findUnique({
+        where: { idempotencyKey: `plan-policy:${gid}` },
+        select: { payload: true },
+      }).then((event) => event?.payload ?? null),
       reconciliationSource: source,
       reconciledAt: now.toISOString(),
+      paymentEvidence: verifiedPayment ? "PROVIDER_CHARGE_RECORD" : "UNVERIFIED_SUBSCRIPTION_LIFECYCLE",
+      periodStartSource: end ? "DERIVED_FROM_PROVIDER_END_AND_INTERVAL" : "PREVIOUS_OR_CREATION_BOUNDARY",
     },
   };
 
@@ -817,10 +828,7 @@ async function reconcileManualShopifySubscription({
             ? now
             : null,
         activatedAt: status === "ACTIVE" ? now : null,
-        paidAt:
-          status === "ACTIVE" && trialStatus !== "ACTIVE"
-            ? now
-            : null,
+        paidAt: verifiedPayment?.paidAt ?? null,
         failedAt: status === "FROZEN" ? now : null,
         frozenAt: status === "FROZEN" ? now : null,
         testMode:
@@ -841,10 +849,7 @@ async function reconcileManualShopifySubscription({
             ? now
             : undefined,
         activatedAt: status === "ACTIVE" ? now : undefined,
-        paidAt:
-          status === "ACTIVE" && trialStatus !== "ACTIVE"
-            ? now
-            : undefined,
+        paidAt: verifiedPayment?.paidAt ?? null,
         failedAt: status === "FROZEN" ? now : undefined,
         frozenAt: status === "FROZEN" ? now : undefined,
         rawResponse: {
@@ -1228,6 +1233,9 @@ async function reconcileManualShopifySubscription({
       },
     });
 
+  }
+
+  if (cancellationStatus === "EFFECTIVE" && current?.cancellationStatus !== "EFFECTIVE") {
     await recordBillingEvent({
       shop,
       subscriptionGid: gid,
@@ -1263,7 +1271,7 @@ async function reconcileManualShopifySubscription({
     subscriptionGid: gid,
     type: "BILLING_RECONCILED",
     source,
-    idempotencyKey: `billing-reconcile:${gid}:${status}:${shopifyUpdatedAt?.getTime() ?? "none"}`,
+    idempotencyKey: `billing-reconcile:${gid}:${status}:${effectivePeriodEnd?.getTime() ?? "none"}:${trialStatus}:${cancellationStatus}`,
     payload: {
       planId: plan.id,
       planHandle: inferred.planHandle,
