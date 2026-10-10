@@ -1,0 +1,34 @@
+name: Due-only Shopify Billing Reconciliation
+
+on:
+  schedule:
+    # The runner wakes every 5 minutes, but the app queries Shopify only for
+    # subscriptions whose trial/billing boundary has passed and whose retry is due.
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: billing-reconciliation
+  cancel-in-progress: false
+
+jobs:
+  reconcile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Reconcile due subscriptions
+        env:
+          BILLING_RECONCILIATION_URL: ${{ secrets.BILLING_RECONCILIATION_URL }}
+          BILLING_RECONCILIATION_SECRET: ${{ secrets.BILLING_RECONCILIATION_SECRET }}
+        run: |
+          set -eu
+          if [ -z "${BILLING_RECONCILIATION_URL:-}" ] || [ -z "${BILLING_RECONCILIATION_SECRET:-}" ]; then
+            echo "Missing BILLING_RECONCILIATION_URL or BILLING_RECONCILIATION_SECRET repository secret."
+            exit 1
+          fi
+          curl --fail-with-body --silent --show-error \
+            --max-time 240 \
+            -X POST "${BILLING_RECONCILIATION_URL%/}/internal/billing-reconcile" \
+            -H "Authorization: Bearer ${BILLING_RECONCILIATION_SECRET}" \
+            -H "Content-Type: application/json" \
+            --data '{}'
