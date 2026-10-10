@@ -82,7 +82,8 @@ export function resolveUsageWindow(subscription: SubscriptionSnapshot) {
     subscription.trialStatus === "ACTIVE" &&
     trialStart &&
     trialEnd &&
-    trialEnd > trialStart
+    trialEnd > trialStart &&
+    now < trialEnd
   ) {
     return { start: trialStart, end: trialEnd };
   }
