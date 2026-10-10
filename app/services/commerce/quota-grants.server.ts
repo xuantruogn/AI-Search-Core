@@ -351,14 +351,14 @@ export async function setShopAiEnabledWithAudit({
   }
   const before = await db.aiSearchShopSettings.findUnique({
     where: { shop: targetShop },
-    select: { aiSearchEnabled: true },
+    select: { adminSuspended: true },
   });
   if (!before) throw new Error("Target shop settings not found");
 
   await db.$transaction(async (tx) => {
     await tx.aiSearchShopSettings.update({
       where: { shop: targetShop },
-      data: { aiSearchEnabled: enabled },
+      data: { adminSuspended: !enabled },
     });
     await audit(tx as never, {
       actorShop,
@@ -366,7 +366,7 @@ export async function setShopAiEnabledWithAudit({
       action: enabled ? "AI_SEARCH_ENABLED_BY_ADMIN" : "AI_SEARCH_DISABLED_BY_ADMIN",
       reason: cleanReason,
       before,
-      after: { aiSearchEnabled: enabled },
+      after: { adminSuspended: !enabled },
     });
   });
 }
