@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type {
   ActionFunctionArgs,
   LinksFunction,
@@ -30,6 +31,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     managedShop: url.searchParams.get("manage"),
     devUser: { email: user.email, role: user.role },
     csrfToken: user.csrfToken,
+    grantRequestId: randomUUID(),
   };
 }
 
@@ -46,6 +48,7 @@ export default function DevDashboardRoute() {
       data={data.dashboard}
       devUser={data.devUser}
       csrfToken={data.csrfToken}
+      grantRequestId={data.grantRequestId}
       managedShop={data.managedShop}
       feedback={feedback}
     />

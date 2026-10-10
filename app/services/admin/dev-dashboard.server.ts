@@ -30,6 +30,7 @@ type ShopRow = {
   legacyBillingPeriodEnd: Date | string | null;
   legacySource: string | null;
   aiSearchEnabled: boolean | number | null;
+  adminSuspended: boolean | number | null;
   productLimitOverride: number | null;
   searchLimitOverride: number | null;
   vectorUpdateLimitOverride: number | null;
@@ -39,6 +40,7 @@ type ShopRow = {
   queryEmbeddingCount: number | null;
   fallbackCount: number | null;
   indexedProducts: number | bigint | string | null;
+  productSlotsUsed: number | bigint | string | null;
   searchGrant: number | bigint | string | null;
   productGrant: number | bigint | string | null;
   vectorGrant: number | bigint | string | null;
@@ -158,6 +160,7 @@ export async function getDevDashboardData(search = "") {
         sub.\`billingPeriodEnd\` AS \`legacyBillingPeriodEnd\`,
         sub.\`source\` AS \`legacySource\`,
         st.\`aiSearchEnabled\`,
+        st.\`adminSuspended\`,
         st.\`productLimitOverride\`,
         st.\`searchLimitOverride\`,
         st.\`vectorUpdateLimitOverride\`,
@@ -171,9 +174,13 @@ export async function getDevDashboardData(search = "") {
           FROM \`AiSearchIndexedProduct\` p
           WHERE
             p.\`shop\` = s.\`shop\`
-            AND p.\`status\` = 'INDEXED'
             AND p.\`hasVector\` = TRUE
         ) AS \`indexedProducts\`,
+        (
+          SELECT COUNT(*) FROM \`AiSearchIndexedProduct\` p
+          WHERE p.\`shop\` = s.\`shop\`
+            AND (p.\`blockedReason\` IS NULL OR p.\`status\` = 'PRODUCT_SLOT_RESERVED')
+        ) AS \`productSlotsUsed\`,
         COALESCE(g.\`searchGrant\`, 0) AS \`searchGrant\`,
         COALESCE(g.\`productGrant\`, 0) AS \`productGrant\`,
         COALESCE(g.\`vectorGrant\`, 0) AS \`vectorGrant\`
@@ -383,7 +390,9 @@ export async function getDevDashboardData(search = "") {
       legacyBillingPeriodStart: row.legacyBillingPeriodStart,
       legacyBillingPeriodEnd: row.legacyBillingPeriodEnd,
       legacySource: row.legacySource,
-      aiSearchEnabled: Boolean(row.aiSearchEnabled),
+      aiSearchEnabled: Boolean(row.aiSearchEnabled) && !Boolean(row.adminSuspended),
+      merchantEnabled: Boolean(row.aiSearchEnabled),
+      adminEnabled: !Boolean(row.adminSuspended),
       overrides: {
         product: row.productLimitOverride,
         search: row.searchLimitOverride,
@@ -396,6 +405,7 @@ export async function getDevDashboardData(search = "") {
       },
       usage: {
         indexedProducts: n(row.indexedProducts),
+        productSlotsUsed: n(row.productSlotsUsed),
         searchCount: n(row.searchCount),
         vectorUpdateCount: n(row.vectorUpdateCount),
         productEmbeddingCount: n(row.productEmbeddingCount),
@@ -467,7 +477,7 @@ export async function getDevDashboardData(search = "") {
   const [totalShops, activeShops, indexedProducts, globalUsage] = await Promise.all([
     db.aiSearchShop.count(),
     db.aiSearchShop.count({ where: { status: "ACTIVE" } }),
-    db.aiSearchIndexedProduct.count({ where: { status: "INDEXED", hasVector: true } }),
+    db.aiSearchIndexedProduct.count({ where: { hasVector: true } }),
     db.$queryRaw<Array<{ searches: unknown; vectorUpdates: unknown; fallbacks: unknown }>>`
       SELECT COALESCE(SUM(u.searchCount), 0) AS searches, COALESCE(SUM(u.vectorUpdateCount), 0) AS vectorUpdates, COALESCE(SUM(u.fallbackCount), 0) AS fallbacks
       FROM AiSearchUsagePeriod u WHERE u.id = (
@@ -833,7 +843,7 @@ export async function getDevDashboardData(search = "") {
       quota: {
         products: buildQuotaView({
           subscriptionStatus,
-          actualUsed: shop.usage.indexedProducts,
+          actualUsed: shop.usage.productSlotsUsed,
           retained: shop.usage.indexedProducts,
           effectiveLimit: limits.productLimit,
           storedGrant: shop.grants.product,

@@ -6,7 +6,7 @@ import { getProductSyncQueueStats } from "../services/products/product-sync-job.
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const debugId = crypto.randomUUID().slice(0, 8);
-  console.log("[CATALOG DEBUG] status:start", { debugId, method: request.method, url: request.url });
+  console.log("[CATALOG DEBUG] status:start", { debugId, method: request.method, path: new URL(request.url).pathname });
   const { session } = await authenticate.admin(request);
   console.log("[CATALOG DEBUG] status:authenticated", { debugId, shop: session.shop });
 

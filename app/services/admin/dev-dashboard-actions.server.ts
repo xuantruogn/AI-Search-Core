@@ -162,6 +162,9 @@ export async function handleDevDashboardAction({
     throw new Response("Bad Request", { status: 400 });
   }
 
+  // Plan, quota and shop mutations all require fresh MFA, not just role access.
+  await requireRecentDevAuthentication(request);
+
   try {
     if (intent === "create_plan") {
       const reason = optionalPlanNote(form);
@@ -250,6 +253,8 @@ export async function handleDevDashboardAction({
         throw new Error("Invalid grant expiry");
       }
       const expiresAt = await resolveGrantExpiry(targetShop, expiryMode);
+      const requestId = String(form.get("grantRequestId") ?? "").trim();
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(requestId)) throw new Error("Grant request token missing");
 
       await createQuotaGrant({
         actorShop: actor,
@@ -258,6 +263,7 @@ export async function handleDevDashboardAction({
         amount: Math.trunc(amount),
         reason,
         expiresAt,
+        requestId,
       });
       await writeDevAudit({
         request,

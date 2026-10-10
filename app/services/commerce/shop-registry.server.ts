@@ -35,6 +35,7 @@ type SettingsRow = {
   searchLanguage: string | null;
   shop: string;
   aiSearchEnabled: boolean | number;
+  adminSuspended: boolean | number;
   fallbackEnabled: boolean | number;
   customDataModeEnabled?: boolean | number;
   productLimitOverride: number | null;
@@ -341,6 +342,7 @@ export async function getShopSettings(
     SELECT
       \`shop\`,
       \`aiSearchEnabled\`,
+      \`adminSuspended\`,
       \`customDataModeEnabled\`,
       \`searchLanguage\`,
       \`fallbackEnabled\`,
@@ -362,6 +364,7 @@ export async function getShopSettings(
   return {
     shop: row.shop,
     aiSearchEnabled: Boolean(row.aiSearchEnabled),
+    adminSuspended: Boolean(row.adminSuspended),
     searchLanguage: row.searchLanguage,
     customDataModeEnabled: Boolean(row.customDataModeEnabled ?? false),
     fallbackEnabled: Boolean(row.fallbackEnabled),
@@ -406,19 +409,17 @@ export async function updateShopSettings({
 }
 
 export async function deleteShopCommercialData(shop: string) {
-  // Lease locks and AiSearchSyncJob predate / intentionally avoid the
-  // AiSearchShop FK, so they are removed explicitly.
+  // AiSearchLeaseLock has no FK to the shop master record.
   await deleteShopLeaseLocks(shop);
-
+  // Remove all SQL tenant records atomically; orphan tables cannot rely on cascade.
   await db.$transaction([
-    db.$executeRaw`
-      DELETE FROM \`AiSearchSyncJob\`
-      WHERE \`shop\` = ${shop}
-    `,
-    db.$executeRaw`
-      DELETE FROM \`AiSearchShop\`
-      WHERE \`shop\` = ${shop}
-    `,
+    db.session.deleteMany({ where: { shop } }),
+    db.aiSearchSyncJob.deleteMany({ where: { shop } }),
+    db.aiSearchResultReceipt.deleteMany({ where: { shop } }),
+    db.aiSearchThemeMapV4.deleteMany({ where: { shop } }),
+    db.shopThemeConfig.deleteMany({ where: { shop } }),
+    db.aiSearchApiUsageDaily.deleteMany({ where: { shop } }),
+    db.aiSearchShop.deleteMany({ where: { shop } }),
   ]);
 }
 

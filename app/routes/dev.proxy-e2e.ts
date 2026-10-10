@@ -1,12 +1,14 @@
 import crypto from "node:crypto";
 import type { LoaderFunctionArgs } from "react-router";
 import db from "../db.server";
+import { requireDevPermission } from "../services/dev-auth.server";
 import { loader as proxyLoader } from "./proxy.ai-search";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  if (process.env.NODE_ENV === "production") {
+  if (process.env.NODE_ENV === "production" || process.env.AI_SEARCH_DEV_PROXY_E2E_ENABLED !== "true") {
     return new Response("Not found", { status: 404 });
   }
+  await requireDevPermission(request, "system.read");
   const input = new URL(request.url);
   const q = input.searchParams.get("q")?.trim() ?? "";
   const theme = await db.aiSearchThemeMapV4.findFirst({

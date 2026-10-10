@@ -270,6 +270,57 @@ async function queryAdminSubscription(
     }
   }
 
+  // A known subscription GID may be older than Shopify's first 100 rows.
+  // Never classify it as missing until the paginated provider history is checked.
+  if (expectedSubscriptionGid && !byId.has(expectedSubscriptionGid)) {
+    let pageInfo = installation?.allSubscriptions?.pageInfo;
+    const seenCursors = new Set<string>();
+    let pagesRead = 0;
+    while (pageInfo?.hasNextPage) {
+      const cursor = pageInfo.endCursor;
+      if (!cursor || seenCursors.has(cursor) || ++pagesRead > 50) {
+        throw new Error("Shopify subscription history pagination stalled or exceeded safety limit");
+      }
+      seenCursors.add(cursor);
+      const nextResponse = await admin.graphql(
+        `#graphql
+          query AiSearchSubscriptionHistory($after: String!) {
+            currentAppInstallation {
+              allSubscriptions(first: 100, after: $after) {
+                nodes {
+                  id name status createdAt currentPeriodEnd trialDays test
+                  lineItems {
+                    id
+                    plan {
+                      pricingDetails {
+                        __typename
+                        ... on AppRecurringPricing {
+                          planHandle interval price { amount currencyCode }
+                        }
+                      }
+                    }
+                  }
+                }
+                pageInfo { hasNextPage endCursor }
+              }
+            }
+          }
+        `,
+        { variables: { after: cursor } },
+      );
+      const nextBody = (await nextResponse.json()) as AdminSubscriptionsResponse;
+      const page = nextBody.data?.currentAppInstallation?.allSubscriptions;
+      if (!nextResponse.ok || nextBody.errors?.length || !page?.nodes || !page.pageInfo) {
+        throw new Error("Shopify subscription history pagination failed");
+      }
+      for (const item of page.nodes) {
+        if (isShopifySubscriptionStatus(item.status)) byId.set(item.id, item);
+      }
+      if (byId.has(expectedSubscriptionGid)) break;
+      pageInfo = page.pageInfo;
+    }
+  }
+
   const subscriptions = [...byId.values()];
 
   if (expectedSubscriptionGid) {

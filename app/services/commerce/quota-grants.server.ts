@@ -1,4 +1,5 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { Prisma } from "@prisma/client";
 
 import db from "../../db.server";
 import type { PlanLimits } from "./plans.server";
@@ -169,6 +170,7 @@ export async function createQuotaGrant({
   amount,
   reason,
   expiresAt,
+  requestId,
 }: {
   actorShop: string;
   targetShop: string;
@@ -176,6 +178,7 @@ export async function createQuotaGrant({
   amount: number;
   reason: string;
   expiresAt: Date | null;
+  requestId?: string;
 }) {
   const safeAmount = boundedPositiveInteger(amount);
   const cleanReason = reason.trim().slice(0, 1000);
@@ -183,7 +186,15 @@ export async function createQuotaGrant({
     throw new Error("Grant expiry must be in the future");
   }
 
-  const id = randomUUID();
+  if (requestId && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(requestId)) {
+    throw new Error("Invalid grant mutation id");
+  }
+  // The same submitted form has the same ID, even if DB succeeded but the
+  // subsequent Qdrant reconciliation or response failed.
+  const id = requestId
+    ? createHash("sha256").update(JSON.stringify([actorShop, targetShop, requestId])).digest("hex")
+    : randomUUID();
+  try {
   await db.$transaction(async (tx) => {
     await tx.aiSearchQuotaGrant.create({
       data: {
@@ -205,9 +216,20 @@ export async function createQuotaGrant({
       after: { id, kind, amount: safeAmount, expiresAt },
     });
   });
+  } catch (error) {
+    // Concurrent duplicate HTTP submissions must resolve to the same grant.
+    if (!(error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002")) throw error;
+    const existing = await db.aiSearchQuotaGrant.findUnique({ where: { id } });
+    if (!existing || existing.shop !== targetShop || existing.createdBy !== actorShop || existing.kind !== kind || existing.amount !== safeAmount) throw error;
+  }
   invalidate(targetShop);
   if (kind === QUOTA_GRANT_KIND.product) {
+    // If this fails, the persisted NULL checkpoint is retried by the worker.
     await reconcileProductPolicyAfterQuotaChange(targetShop, true);
+    await db.aiSearchQuotaGrant.updateMany({
+      where: { id, revokedAt: null },
+      data: { productPolicyReconciledAt: new Date() },
+    });
   }
   return id;
 }
@@ -234,10 +256,11 @@ export async function revokeQuotaGrant({
     return { shop: grant.shop, kind: grant.kind as QuotaGrantKind, alreadyRevoked: true };
   }
 
+  const revokedAt = new Date();
   await db.$transaction(async (tx) => {
     await tx.aiSearchQuotaGrant.update({
       where: { id: grantId },
-      data: { revokedAt: new Date() },
+      data: { revokedAt, productPolicyReconciledAt: null },
     });
     await audit(tx as never, {
       actorShop,
@@ -256,6 +279,10 @@ export async function revokeQuotaGrant({
   invalidate(grant.shop);
   if (grant.kind === QUOTA_GRANT_KIND.product) {
     await reconcileProductPolicyAfterQuotaChange(grant.shop, false);
+    await db.aiSearchQuotaGrant.updateMany({
+      where: { id: grantId, revokedAt },
+      data: { productPolicyReconciledAt: new Date(), productExpiryReconciledAt: new Date() },
+    });
   }
   return { shop: grant.shop, kind: grant.kind as QuotaGrantKind, alreadyRevoked: false };
 }
@@ -351,14 +378,14 @@ export async function setShopAiEnabledWithAudit({
   }
   const before = await db.aiSearchShopSettings.findUnique({
     where: { shop: targetShop },
-    select: { aiSearchEnabled: true },
+    select: { adminSuspended: true },
   });
   if (!before) throw new Error("Target shop settings not found");
 
   await db.$transaction(async (tx) => {
     await tx.aiSearchShopSettings.update({
       where: { shop: targetShop },
-      data: { aiSearchEnabled: enabled },
+      data: { adminSuspended: !enabled },
     });
     await audit(tx as never, {
       actorShop,
@@ -366,7 +393,7 @@ export async function setShopAiEnabledWithAudit({
       action: enabled ? "AI_SEARCH_ENABLED_BY_ADMIN" : "AI_SEARCH_DISABLED_BY_ADMIN",
       reason: cleanReason,
       before,
-      after: { aiSearchEnabled: enabled },
+      after: { adminSuspended: !enabled },
     });
   });
 }

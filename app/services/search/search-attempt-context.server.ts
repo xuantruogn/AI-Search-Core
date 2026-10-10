@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { createHash, randomUUID } from "node:crypto";
+import { createHmac, randomUUID } from "node:crypto";
 import db from "../../db.server";
 
 type Attempt = {
@@ -18,7 +18,11 @@ export function attemptFailure(error: unknown, phase?: string) {
 }
 export async function beginSearchAttempt(shop: string, purpose: string, query: string) {
   const current = context.getStore(); if (!current) return;
-  Object.assign(current, { shop, purpose, queryHash: createHash("sha256").update(query).digest("hex") });
+  const key = process.env.AI_SEARCH_QUERY_HASH_KEY?.trim() || process.env.SHOPIFY_API_SECRET?.trim();
+  if (!key) throw new Error("Search attempt hash secret is required");
+  // HMAC is tenant-scoped and domain-separated from usage/event hashes.
+  const queryHash = createHmac("sha256", key).update(`attempt-v2\0${shop.toLowerCase()}\0${query.trim().toLowerCase()}`).digest("hex");
+  Object.assign(current, { shop, purpose, queryHash });
   try { await db.aiSearchAttempt.create({ data: { id: current.id, shop, purpose, queryHash: current.queryHash! } }); }
   catch { console.error("[Search Attempt] START_WRITE_FAILED", { attemptId: current.id }); }
 }

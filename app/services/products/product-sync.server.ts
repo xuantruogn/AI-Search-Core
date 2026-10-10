@@ -785,7 +785,7 @@ export type SearchableProductSnapshot = {
  * publication changes aren't guaranteed to reach a third-party app, so a
  * stale Qdrant point must never be enough to expose an unpublished product.
  */
-export async function fetchSearchableProductSnapshotsByIds(
+async function fetchSearchableProductSnapshotsBatch(
   admin: AdminGraphqlClient,
   productIds: string[],
 ): Promise<
@@ -978,4 +978,23 @@ export async function fetchSearchableProductSnapshotsByIds(
   }
 
   return result;
+}
+/**
+ * Validate every requested Shopify product ID, never silently truncate to 100.
+ * The underlying nodes query is bounded to 100 IDs per GraphQL request.
+ */
+export async function fetchSearchableProductSnapshotsByIds(
+  admin: AdminGraphqlClient,
+  productIds: string[],
+): Promise<Map<string, SearchableProductSnapshot>> {
+  const uniqueIds = [...new Set(productIds.map((id) => id.trim()).filter(Boolean))];
+  if (uniqueIds.length > 1000) {
+    throw new Error("Shopify live snapshot validation exceeds the 1,000-product request ceiling");
+  }
+  const snapshots = new Map<string, SearchableProductSnapshot>();
+  for (let offset = 0; offset < uniqueIds.length; offset += 100) {
+    const chunk = await fetchSearchableProductSnapshotsBatch(admin, uniqueIds.slice(offset, offset + 100));
+    for (const [id, snapshot] of chunk) snapshots.set(id, snapshot);
+  }
+  return snapshots;
 }
