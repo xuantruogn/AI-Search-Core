@@ -31,7 +31,13 @@ async function runDueReconciliation() {
       shopifySubscriptionGid: { not: null },
       status: { in: ["ACTIVE", "FROZEN"] },
       OR: [
-        { trialEndsAt: { lte: now } },
+        {
+          trialEndsAt: { lte: now },
+          OR: [
+            { currentPeriodEndsAt: null },
+            { currentPeriodEndsAt: { lte: now } },
+          ],
+        },
         { currentPeriodEndsAt: { lte: now } },
         // Frozen subscriptions stay in the follow-up queue even if Shopify's
         // cached period-end field is missing or lies in the future.
@@ -40,8 +46,8 @@ async function runDueReconciliation() {
       AND: [
         {
           OR: [
-            { nextReconciliationAt: null },
             { nextReconciliationAt: { lte: now } },
+            { nextReconciliationAt: null, reconciliationAttempt: 0 },
           ],
         },
         {
