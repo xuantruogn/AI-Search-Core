@@ -680,10 +680,16 @@ async function reconcileManualShopifySubscription({
             trialDays * 24 * 60 * 60 * 1000,
         )
       : null;
+  // Recompute the local trial deadline from the stable activation timestamp so
+  // rows previously derived from createdAt are corrected during reconciliation.
   const trialStartsAt =
-    current?.trialStartsAt ?? providerTrialStartsAt;
+    trialDays > 0
+      ? providerTrialStartsAt ?? current?.trialStartsAt ?? null
+      : current?.trialStartsAt ?? null;
   const trialEndsAt =
-    current?.trialEndsAt ?? providerTrialEndsAt;
+    trialDays > 0 && providerTrialEndsAt
+      ? providerTrialEndsAt
+      : current?.trialEndsAt ?? null;
 
   // currentPeriodEnd is provider data, but during trial it must not be treated
   // as an active paid window. Only expose a paid-period start after the trial
@@ -695,11 +701,17 @@ async function reconcileManualShopifySubscription({
     now >= trialEndsAt &&
     end !== null &&
     end > trialEndsAt;
+  const storedPaidPeriodStart =
+    current?.currentPeriodStartsAt &&
+    trialEndsAt &&
+    current.currentPeriodStartsAt >= trialEndsAt
+      ? current.currentPeriodStartsAt
+      : null;
   const billingPeriodStart =
     trialDays > 0
       ? providerPaidPeriodConfirmed
         ? trialEndsAt
-        : current?.currentPeriodStartsAt ?? null
+        : storedPaidPeriodStart
       : start ?? current?.currentPeriodStartsAt ?? null;
 
   // Financial reconciliation is optional enrichment only. Never derive a
