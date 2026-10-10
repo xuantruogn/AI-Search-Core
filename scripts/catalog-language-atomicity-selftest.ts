@@ -253,8 +253,13 @@ try {
   );
   assert.match(
     productJobs,
-    /catalog-product-retry:/,
-    "catalog failure retries must remain durable instead of being coalesced away",
+    /webhookId: cleanWebhookId/,
+    "each distinct Shopify delivery or catalog retry retains a durable unique webhook ID",
+  );
+  assert.doesNotMatch(
+    productJobs,
+    /pendingLiveStateJob/,
+    "new product updates must never be dropped during a worker PENDING-to-PROCESSING race",
   );
 
   const processor = readFileSync(
