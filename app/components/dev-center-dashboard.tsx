@@ -33,12 +33,14 @@ export function DevCenterDashboard({
   data,
   devUser,
   csrfToken,
+  grantRequestId,
   managedShop,
   feedback,
 }: {
   data: DevDashboardData;
   devUser: { email: string; role: DevRole };
   csrfToken: string;
+  grantRequestId: string;
   managedShop: string | null;
   feedback: Feedback;
 }) {
@@ -328,6 +330,7 @@ export function DevCenterDashboard({
           shop={selectedShop}
           grants={selectedGrants}
           csrfToken={csrfToken}
+          grantRequestId={grantRequestId}
           query={data.query}
           canQuotaWrite={canQuotaWrite}
           canPlanWrite={canPlanWrite}
@@ -671,10 +674,11 @@ function planLimit(value: number | null) {
   return value === null ? "Unlimited" : number(value);
 }
 
-function ShopDrawer({ shop, grants, csrfToken, query, canQuotaWrite, canPlanWrite, canSystemWrite, busy }: {
+function ShopDrawer({ shop, grants, csrfToken, grantRequestId, query, canQuotaWrite, canPlanWrite, canSystemWrite, busy }: {
   shop: Shop;
   grants: Grant[];
   csrfToken: string;
+  grantRequestId: string;
   query: string;
   canQuotaWrite: boolean;
   canPlanWrite: boolean;
@@ -743,6 +747,7 @@ function ShopDrawer({ shop, grants, csrfToken, query, canQuotaWrite, canPlanWrit
             {canQuotaWrite ? (
               <Form method="post" className="dc-form-card">
                 <MutationFields csrfToken={csrfToken} intent="grant_quota" shop={shop.shop} />
+                <input type="hidden" name="grantRequestId" value={grantRequestId} />
                 <div className="dc-form-grid-3">
                   <Field label="Quota"><select name="kind" defaultValue="SEARCH"><option value="SEARCH">Searches</option><option value="PRODUCT">Products</option><option value="VECTOR_UPDATE">Vector updates</option></select></Field>
                   <Field label="Amount"><input name="amount" type="number" min="1" required /></Field>
