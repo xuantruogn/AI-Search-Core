@@ -444,14 +444,27 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       };
     }
 
-    const hasEverApprovedSubscription = Boolean(
-      await db.billingEvent.findFirst({
+    // Trial eligibility is shop-wide, not plan-specific. Prefer the immutable
+    // approval event, and also check historical subscription rows so shops
+    // activated before event logging was introduced cannot receive another trial.
+    const [priorApprovalEvent, priorActivatedSubscription] = await Promise.all([
+      db.billingEvent.findFirst({
         where: {
           shop: session.shop,
           type: "SUBSCRIPTION_APPROVED",
         },
         select: { id: true },
       }),
+      db.billingSubscription.findFirst({
+        where: {
+          shop: session.shop,
+          activatedAt: { not: null },
+        },
+        select: { id: true },
+      }),
+    ]);
+    const hasEverApprovedSubscription = Boolean(
+      priorApprovalEvent || priorActivatedSubscription,
     );
 
     const isBasicPlan = billingPlan.handle.toLowerCase() === "basic";
