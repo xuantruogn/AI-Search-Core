@@ -97,7 +97,7 @@ export async function getShopEntitlement(
     billingPeriodEnd > now &&
     (
       trialEndsAt === null ||
-      billingPeriodEnd > trialEndsAt
+      (now >= trialEndsAt && billingPeriodEnd > trialEndsAt)
     );
 
   const activeSubscriptionWindow =
