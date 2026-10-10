@@ -43,6 +43,8 @@ jobs:
         run: npx tsx scripts/catalog-language-atomicity-selftest.ts
       - run: npm run typecheck
       - run: npm run test:search-hybrid
+      - name: Shopify snapshot batching and sort-only price regression
+        run: npx tsx scripts/audit-search-live-snapshots-selftest.ts
       - name: System audit and data invariants
         run: npm run test:system-audit
       - name: Billing lifecycle policy regressions
