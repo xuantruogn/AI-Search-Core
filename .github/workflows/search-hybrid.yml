@@ -39,6 +39,8 @@ jobs:
       - run: npm ci
       - run: npx prisma generate
       - run: npx prisma migrate deploy
+      - name: Shopify mandatory privacy webhooks - TOML and HMAC
+        run: npx tsx scripts/shopify-compliance-webhooks-selftest.ts
       - name: Language activation and no-result ordering regression
         run: npx tsx scripts/catalog-language-atomicity-selftest.ts
       - run: npm run typecheck

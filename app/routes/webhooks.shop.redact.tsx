@@ -1,11 +1,13 @@
 import type { ActionFunctionArgs } from "react-router";
 
 import { authenticate } from "../shopify.server";
+import { verifyComplianceWebhookHmac } from "../services/privacy/compliance-webhook-auth.server";
 import { deleteShopCommercialData } from "../services/commerce/shop-registry.server";
 import { deleteShopProductVectors } from "../services/search/vector-store.server";
 import { ensureProductCollection } from "../services/search/qdrant.server";
 
 export const action = async ({ request }: ActionFunctionArgs) => {
+  await verifyComplianceWebhookHmac(request);
   const { shop, topic } = await authenticate.webhook(request);
 
   console.log("[AI Search] Shop redact started:", { shop, topic });
