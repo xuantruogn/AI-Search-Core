@@ -44,3 +44,17 @@ redirect_urls = [ "https://example.com/api/auth" ]
 [[webhooks.subscriptions]]
 topics = [ "app/uninstalled" ]
 uri = "/webhooks/app/uninstalled"
+
+# Shopify App Store mandatory compliance webhook subscriptions.
+# These must be deployed as a Shopify app version, not just pushed to Git.
+[[webhooks.subscriptions]]
+compliance_topics = ["customers/data_request"]
+uri = "/webhooks/customers/data_request"
+
+[[webhooks.subscriptions]]
+compliance_topics = ["customers/redact"]
+uri = "/webhooks/customers/redact"
+
+[[webhooks.subscriptions]]
+compliance_topics = ["shop/redact"]
+uri = "/webhooks/shop/redact"
