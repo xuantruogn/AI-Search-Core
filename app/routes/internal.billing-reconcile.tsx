@@ -33,6 +33,9 @@ async function runDueReconciliation() {
       OR: [
         { trialEndsAt: { lte: now } },
         { currentPeriodEndsAt: { lte: now } },
+        // Frozen subscriptions stay in the follow-up queue even if Shopify's
+        // cached period-end field is missing or lies in the future.
+        { status: "FROZEN" },
       ],
       AND: [
         {
