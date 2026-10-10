@@ -851,13 +851,13 @@ function ShopDrawer({ shop, grants, csrfToken, query, canQuotaWrite, canPlanWrit
 
           <DrawerSection title="AI Search">
             <div className="dc-inline-control">
-              <div><strong>{shop.aiSearchEnabled ? "Configured ON" : "Configured OFF"}</strong><small>{shop.state.aiOperational ? "Entitlement active" : "AI requests are not currently entitled"}</small></div>
+              <div><strong>{shop.adminEnabled ? "Admin allowed" : "Admin suspended"}</strong><small>{shop.merchantEnabled ? "Merchant enabled" : "Merchant disabled"}; {shop.state.aiOperational ? "AI operational" : "AI not operational"}</small></div>
               {canSystemWrite ? (
                 <Form method="post" className="dc-inline-form">
                   <MutationFields csrfToken={csrfToken} intent="toggle_ai" shop={shop.shop} />
-                  <input type="hidden" name="enabled" value={shop.aiSearchEnabled ? "false" : "true"} />
+                  <input type="hidden" name="enabled" value={shop.adminEnabled ? "false" : "true"} />
                   <input name="reason" required placeholder="Reason" />
-                  <button className={`dc-button ${shop.aiSearchEnabled ? "dc-button-danger" : "dc-button-primary"}`} disabled={busy} type="submit">{shop.aiSearchEnabled ? "Disable" : "Enable"}</button>
+                  <button className={`dc-button ${shop.adminEnabled ? "dc-button-danger" : "dc-button-primary"}`} disabled={busy} type="submit">{shop.adminEnabled ? "Suspend" : "Allow"}</button>
                 </Form>
               ) : <ReadOnly />}
             </div>
