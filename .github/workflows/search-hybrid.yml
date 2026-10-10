@@ -47,6 +47,8 @@ jobs:
         run: npx tsx scripts/audit-search-live-snapshots-selftest.ts
       - name: System audit and data invariants
         run: npm run test:system-audit
+      - name: Concurrent grant idempotency in isolated MySQL
+        run: npx tsx scripts/audit-quota-idempotency-selftest.ts
       - name: Billing lifecycle policy regressions
         run: npm run test:billing-core
       - name: Dashboard data presentation regressions
