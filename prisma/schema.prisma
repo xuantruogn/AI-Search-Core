@@ -846,6 +846,8 @@ model AiSearchQuotaGrant {
   startsAt  DateTime  @default(now())
   expiresAt DateTime?
   revokedAt DateTime?
+  productPolicyReconciledAt DateTime?
+  productExpiryReconciledAt DateTime?
   createdBy String    @db.VarChar(191)
   createdAt DateTime  @default(now())
 
@@ -853,6 +855,7 @@ model AiSearchQuotaGrant {
 
   @@index([shop, kind, startsAt, expiresAt])
   @@index([shop, revokedAt, createdAt])
+  @@index([kind, expiresAt, productExpiryReconciledAt], map: "idx_product_grant_reconcile")
 }
 
 model AiSearchAdminAuditLog {
