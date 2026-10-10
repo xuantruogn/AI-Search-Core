@@ -70,17 +70,50 @@ function monthWindow(now = new Date()) {
 }
 
 export function resolveUsageWindow(subscription: SubscriptionSnapshot) {
+  const trialStart = subscription.trialStartsAt;
+  const trialEnd = subscription.trialEndsAt;
+  const billingStart = subscription.billingPeriodStart;
+  const billingEnd = subscription.billingPeriodEnd;
+  const now = new Date();
+
+  // During a provider-confirmed trial, meter usage against the trial window,
+  // not an unrelated UTC calendar month or the full recurring period.
   if (
-    subscription.billingPeriodStart &&
-    subscription.billingPeriodEnd &&
-    subscription.billingPeriodEnd > subscription.billingPeriodStart
+    subscription.trialStatus === "ACTIVE" &&
+    trialStart &&
+    trialEnd &&
+    trialEnd > trialStart
   ) {
-    return {
-      start: subscription.billingPeriodStart,
-      end: subscription.billingPeriodEnd,
-    };
+    return { start: trialStart, end: trialEnd };
   }
 
+  // After trial, use the trial deadline as the paid-window start only when
+  // Shopify's current period end extends beyond that deadline. If it does not,
+  // keep the expired trial window; do not invent a new monthly cycle.
+  if (
+    trialEnd &&
+    billingEnd &&
+    billingEnd > trialEnd &&
+    now >= trialEnd
+  ) {
+    return { start: trialEnd, end: billingEnd };
+  }
+
+  if (
+    billingStart &&
+    billingEnd &&
+    billingEnd > billingStart &&
+    (!trialEnd || billingEnd > trialEnd)
+  ) {
+    return { start: billingStart, end: billingEnd };
+  }
+
+  if (trialStart && trialEnd && trialEnd > trialStart) {
+    return { start: trialStart, end: trialEnd };
+  }
+
+  // Legacy subscriptions with no provider trial or billing dates retain the
+  // historical fallback. A known expired trial never falls through to this.
   return monthWindow();
 }
 
