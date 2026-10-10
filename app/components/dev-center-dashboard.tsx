@@ -142,7 +142,7 @@ export function DevCenterDashboard({
             <Metric label="Estimated API cost MTD" value={data.provider.unknownCostRequests > 0 ? "Incomplete" : usd(data.provider.totalCostUsd)} note={`${data.provider.unknownCostRequests} requests have unknown model rates. Known-rate subtotal: ${usd(data.provider.totalCostUsd)}. Not a provider invoice.`} />
             <Metric label="Estimated margin" value={estimatedMargin === null ? "—" : usd(estimatedMargin)} note={usdMrr === null ? "Requires comparable USD MRR" : "USD MRR minus provider cost"} />
             <Metric label="AI searches MTD" value={number(data.overview.searchesMtd)} note={`${usdNullable(data.provider.avgSearchCostUsd)} average cost/search`} />
-            <Metric label="Indexed products" value={number(data.overview.indexedProducts)} note="Retained vectors across all shops" />
+            <Metric label="Stored vectors" value={number(data.overview.indexedProducts)} note="Retained vectors across all shops, including inactive products" />
           </div>
         </section>
 
@@ -278,7 +278,7 @@ export function DevCenterDashboard({
           <SectionHeader eyebrow="Economics" title="Usage & cost" note={`Month to date from ${new Date(data.monthStart).toLocaleDateString()}.`} />
           <div className="dc-three-column">
             <UsageCard label="Search operations" value={number(data.provider.mtdSearches)} cost={data.provider.unknownCostRequests > 0 ? "Incomplete" : usd(data.provider.searchCostUsd)} detail="Query analysis and query embeddings" />
-            <UsageCard label="Indexing cost" value={number(data.overview.indexedProducts)} cost={data.provider.unknownCostRequests > 0 ? "Incomplete" : usd(data.provider.indexingCostUsd)} detail="Product enrichment and embeddings" />
+            <UsageCard label="Stored vector footprint" value={number(data.overview.indexedProducts)} cost={data.provider.unknownCostRequests > 0 ? "Incomplete" : usd(data.provider.indexingCostUsd)} detail="MTD enrichment/embedding cost; stored vector count is not monthly usage" />
             <UsageCard label="Total provider usage" value={number(data.provider.totalTokens)} cost={data.provider.unknownCostRequests > 0 ? "Incomplete" : usd(data.provider.totalCostUsd)} detail="Recorded tokens and configured estimates; never provider invoice costs" />
           </div>
           <details className="dc-diagnostics">
