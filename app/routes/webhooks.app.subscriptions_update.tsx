@@ -174,6 +174,39 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     localStatus: result.subscription.status,
   });
 
+  // A webhook never replaces polling. If it reports Frozen or arrives at/past a
+  // trial/billing boundary, bring the persisted reconciliation schedule forward.
+  const localAfterWebhook = await db.billingSubscription.findUnique({
+    where: { shopifySubscriptionGid: subscriptionGid },
+    select: {
+      status: true,
+      trialEndsAt: true,
+      currentPeriodEndsAt: true,
+      frozenAt: true,
+      frozenFollowupUntil: true,
+    },
+  });
+  const boundaryReached = Boolean(
+    (localAfterWebhook?.trialEndsAt && localAfterWebhook.trialEndsAt <= new Date()) ||
+    (localAfterWebhook?.currentPeriodEndsAt && localAfterWebhook.currentPeriodEndsAt <= new Date()),
+  );
+  if (localAfterWebhook && (localAfterWebhook.status === "FROZEN" || boundaryReached)) {
+    const now = new Date();
+    await db.billingSubscription.update({
+      where: { shopifySubscriptionGid: subscriptionGid },
+      data: {
+        nextReconciliationAt: now,
+        ...(localAfterWebhook.status === "FROZEN"
+          ? {
+              frozenFollowupUntil:
+                localAfterWebhook.frozenFollowupUntil ??
+                new Date((localAfterWebhook.frozenAt ?? now).getTime() + 7 * 24 * 60 * 60_000),
+            }
+          : {}),
+      },
+    });
+  }
+
   // KÍCH HOẠT COMMERCIAL RECONCILE NGẦM Ở BACKGROUND (CHÍNH THỨC NHẬN OWNERSHIP)
   if (result.confirmed && result.subscription.status !== "PENDING") {
     void reconcileShopCommercialState({
