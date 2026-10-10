@@ -180,10 +180,13 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   let daysRemaining: number | null = null;
   let formattedPeriodEnd: string | null = null;
+  let trialDaysRemaining: number | null = null;
+  let formattedTrialEnd: string | null = null;
+  let expectedTotalDays: number | null = null;
 
+  const now = new Date();
   if (subscription.billingPeriodEnd) {
     const endDate = new Date(subscription.billingPeriodEnd);
-    const now = new Date();
     const diffTime = endDate.getTime() - now.getTime();
     daysRemaining = Math.max(0, Math.ceil(diffTime / (1000 * 60 * 60 * 24)));
     formattedPeriodEnd = endDate.toLocaleDateString("en-US", {
@@ -193,6 +196,30 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     });
   }
 
+  if (subscription.trialEndsAt) {
+    const trialEndDate = new Date(subscription.trialEndsAt);
+    trialDaysRemaining = Math.max(
+      0,
+      Math.ceil((trialEndDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24)),
+    );
+    formattedTrialEnd = trialEndDate.toLocaleDateString("en-US", {
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+    });
+  }
+
+  if (subscription.trialStartsAt && subscription.billingPeriodEnd) {
+    expectedTotalDays = Math.max(
+      0,
+      Math.ceil(
+        (subscription.billingPeriodEnd.getTime() -
+          subscription.trialStartsAt.getTime()) /
+          (1000 * 60 * 60 * 24),
+      ),
+    );
+  }
+
   return {
     shop: session.shop,
     entitlement,
@@ -200,9 +227,15 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       ...subscription,
       billingPeriodStart: subscription.billingPeriodStart?.toISOString() ?? null,
       billingPeriodEnd: subscription.billingPeriodEnd?.toISOString() ?? null,
+      trialStartsAt: subscription.trialStartsAt?.toISOString() ?? null,
+      trialEndsAt: subscription.trialEndsAt?.toISOString() ?? null,
+      trialStatus: subscription.trialStatus,
       lastSyncedAt: subscription.lastSyncedAt?.toISOString() ?? null,
       daysRemaining,
       formattedPeriodEnd,
+      trialDaysRemaining,
+      formattedTrialEnd,
+      expectedTotalDays,
     },
     pricingUrl: getShopifyPricingPlansUrl(session.shop),
     partnerApiConfigured: isShopifyAppPricingConfigured(),
@@ -834,6 +867,12 @@ export default function BillingPage() {
 
 
   const currentPlanHandle = data.subscription.planHandle?.toLowerCase() ?? null;
+  const isBasicPlan = currentPlanHandle === "basic";
+  const isBasicTrial =
+    isBasicPlan &&
+    data.subscription.trialStatus === "ACTIVE" &&
+    Boolean(data.subscription.trialEndsAt) &&
+    new Date(data.subscription.trialEndsAt!).getTime() > Date.now();
   const isNonRenewing = data.entitlement.cancellationStatus === "NON_RENEWING";
   const isActive = data.entitlement.active;
   const hideBasicPlan =
@@ -898,9 +937,13 @@ export default function BillingPage() {
           >
             {isNonRenewing
               ? "ACTIVE — NOT RENEWING"
-              : isActive
-                ? "ACTIVE (PAID)"
-                : data.entitlement.subscriptionStatus}
+              : isActive && isBasicTrial
+                ? "ACTIVE — BASIC TRIAL"
+                : isActive && isBasicPlan
+                  ? "ACTIVE — BASIC PLAN"
+                  : isActive
+                    ? "ACTIVE (PAID)"
+                    : data.entitlement.subscriptionStatus}
           </span>
         </div>
 
@@ -918,6 +961,23 @@ export default function BillingPage() {
           </div>
           <div>
             <strong>Current Plan:</strong> {data.entitlement.planLabel}
+            {isBasicPlan ? (
+              <div style={{ marginTop: 5 }}>
+                <span
+                  style={{
+                    display: "inline-block",
+                    padding: "3px 8px",
+                    borderRadius: 999,
+                    background: isBasicTrial ? "#f0eaff" : "#eaf4ff",
+                    color: isBasicTrial ? "#5b3df5" : "#175cd3",
+                    fontSize: 11,
+                    fontWeight: 800,
+                  }}
+                >
+                  {isBasicTrial ? "7-DAY FREE TRIAL" : "STANDARD BASIC PLAN"}
+                </span>
+              </div>
+            ) : null}
           </div>
           <div>
             <strong>Billing Cycle:</strong>{" "}
@@ -980,6 +1040,36 @@ export default function BillingPage() {
             </a>
           )}
         </div>
+        {isBasicPlan ? (
+          <div
+            style={{
+              marginTop: 14,
+              padding: 14,
+              borderRadius: 10,
+              background: isBasicTrial ? "#f7f3ff" : "#f2f8ff",
+              border: `1px solid ${isBasicTrial ? "#d9ccff" : "#c8ddff"}`,
+            }}
+          >
+            <div style={{ fontWeight: 800, fontSize: 13, color: "#1a1a1a" }}>
+              {isBasicTrial ? "Basic — Free Trial in Progress" : "Basic — Standard Subscription"}
+            </div>
+            <div style={{ fontSize: 12, color: "#4a4a4a", marginTop: 6, lineHeight: 1.6 }}>
+              {isBasicTrial
+                ? `Your 7-day Basic trial is active. Trial ends on ${data.subscription.formattedTrialEnd ?? "the date recorded by Shopify"}${data.subscription.trialDaysRemaining !== null ? ` (${data.subscription.trialDaysRemaining} days left)` : ""}. Shopify's current subscription end date is ${data.subscription.formattedPeriodEnd ?? "not available"}.`
+                : data.subscription.trialStatus === "ENDED"
+                  ? `The Basic trial has ended. This is now treated as the standard Basic subscription period. Current period ends on ${data.subscription.formattedPeriodEnd ?? "a date not available"}.`
+                  : "This Basic subscription does not currently have an active trial. The standard Basic plan is in effect."}
+            </div>
+            {data.subscription.expectedTotalDays !== null &&
+            data.subscription.trialStartsAt &&
+            data.subscription.trialEndsAt ? (
+              <div style={{ fontSize: 12, color: "#4a4a4a", marginTop: 8 }}>
+                <strong>Recorded overall window:</strong> {data.subscription.expectedTotalDays} days from trial start to Shopify's current subscription end date. This is a date-based estimate, not a guarantee of access; current Shopify status and entitlement dates still determine access.
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+
         {isActive ? (
           <div
             style={{
