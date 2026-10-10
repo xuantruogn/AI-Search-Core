@@ -1,4 +1,5 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { Prisma } from "@prisma/client";
 
 import db from "../../db.server";
 import type { PlanLimits } from "./plans.server";
@@ -169,6 +170,7 @@ export async function createQuotaGrant({
   amount,
   reason,
   expiresAt,
+  requestId,
 }: {
   actorShop: string;
   targetShop: string;
@@ -176,6 +178,7 @@ export async function createQuotaGrant({
   amount: number;
   reason: string;
   expiresAt: Date | null;
+  requestId?: string;
 }) {
   const safeAmount = boundedPositiveInteger(amount);
   const cleanReason = reason.trim().slice(0, 1000);
@@ -183,7 +186,15 @@ export async function createQuotaGrant({
     throw new Error("Grant expiry must be in the future");
   }
 
-  const id = randomUUID();
+  if (requestId && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(requestId)) {
+    throw new Error("Invalid grant mutation id");
+  }
+  // The same submitted form has the same ID, even if DB succeeded but the
+  // subsequent Qdrant reconciliation or response failed.
+  const id = requestId
+    ? createHash("sha256").update(JSON.stringify([actorShop, targetShop, requestId])).digest("hex")
+    : randomUUID();
+  try {
   await db.$transaction(async (tx) => {
     await tx.aiSearchQuotaGrant.create({
       data: {
@@ -205,6 +216,12 @@ export async function createQuotaGrant({
       after: { id, kind, amount: safeAmount, expiresAt },
     });
   });
+  } catch (error) {
+    // Concurrent duplicate HTTP submissions must resolve to the same grant.
+    if (!(error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002")) throw error;
+    const existing = await db.aiSearchQuotaGrant.findUnique({ where: { id } });
+    if (!existing || existing.shop !== targetShop || existing.createdBy !== actorShop || existing.kind !== kind || existing.amount !== safeAmount) throw error;
+  }
   invalidate(targetShop);
   if (kind === QUOTA_GRANT_KIND.product) {
     await reconcileProductPolicyAfterQuotaChange(targetShop, true);
