@@ -104,6 +104,8 @@ export async function getShopEntitlement(
 
   if (!subscriptionActive) {
     disabledReason = "SUBSCRIPTION_INACTIVE";
+  } else if (settings.adminSuspended) {
+    disabledReason = "AI_SEARCH_SUSPENDED_BY_ADMIN";
   } else if (!settings.aiSearchEnabled) {
     disabledReason = "AI_SEARCH_DISABLED_BY_MERCHANT";
   } else if (!features.capabilities.semanticSearch) {
@@ -130,6 +132,7 @@ export async function getShopEntitlement(
   const active =
     subscriptionActive &&
     settings.aiSearchEnabled &&
+    !settings.adminSuspended &&
     features.capabilities.semanticSearch;
 
   return {
@@ -139,7 +142,7 @@ export async function getShopEntitlement(
     subscriptionStatus: subscription.status,
     cancellationStatus: subscription.cancellationStatus,
     active,
-    aiSearchEnabled: settings.aiSearchEnabled,
+    aiSearchEnabled: settings.aiSearchEnabled && !settings.adminSuspended,
     fallbackEnabled: settings.fallbackEnabled,
     features,
     limits,
