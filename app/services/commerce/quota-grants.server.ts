@@ -224,7 +224,12 @@ export async function createQuotaGrant({
   }
   invalidate(targetShop);
   if (kind === QUOTA_GRANT_KIND.product) {
+    // If this fails, the persisted NULL checkpoint is retried by the worker.
     await reconcileProductPolicyAfterQuotaChange(targetShop, true);
+    await db.aiSearchQuotaGrant.updateMany({
+      where: { id, revokedAt: null },
+      data: { productPolicyReconciledAt: new Date() },
+    });
   }
   return id;
 }
@@ -251,10 +256,11 @@ export async function revokeQuotaGrant({
     return { shop: grant.shop, kind: grant.kind as QuotaGrantKind, alreadyRevoked: true };
   }
 
+  const revokedAt = new Date();
   await db.$transaction(async (tx) => {
     await tx.aiSearchQuotaGrant.update({
       where: { id: grantId },
-      data: { revokedAt: new Date() },
+      data: { revokedAt, productPolicyReconciledAt: null },
     });
     await audit(tx as never, {
       actorShop,
@@ -273,6 +279,10 @@ export async function revokeQuotaGrant({
   invalidate(grant.shop);
   if (grant.kind === QUOTA_GRANT_KIND.product) {
     await reconcileProductPolicyAfterQuotaChange(grant.shop, false);
+    await db.aiSearchQuotaGrant.updateMany({
+      where: { id: grantId, revokedAt },
+      data: { productPolicyReconciledAt: new Date(), productExpiryReconciledAt: new Date() },
+    });
   }
   return { shop: grant.shop, kind: grant.kind as QuotaGrantKind, alreadyRevoked: false };
 }
