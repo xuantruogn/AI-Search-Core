@@ -782,6 +782,7 @@ export async function reconcileIndexedProductEligibility({
       ORDER BY \`searchable\` DESC, (\`vectorStatus\` = 'READY') DESC, \`createdAt\` ASC, \`productId\` ASC
       FOR UPDATE
     `;
+    const originalsById = new Map(rows.map((row) => [row.productId, row] as const));
     const decisions = planProductEligibility(rows.map((row) => ({
       ...row, searchable: Boolean(row.searchable), hasVector: Boolean(row.hasVector),
     })), policyActive, productLimit, { recoverMissingAsProductCapacity });
@@ -793,7 +794,8 @@ export async function reconcileIndexedProductEligibility({
     const deactivate: string[] = [];
     let policyChanged = false;
     for (const decision of decisions) {
-      const original = rows.find((row) => row.productId === decision.productId)!;
+      const original = originalsById.get(decision.productId);
+      if (!original) throw new Error(`Product policy returned an unknown product: ${decision.productId}`);
       if (decision.searchable && !Boolean(original.searchable)) reactivateReady.push(decision.productId);
       if (!decision.searchable && Boolean(original.searchable)) deactivate.push(decision.productId);
       if (decision.requiresReindex) {
@@ -820,17 +822,21 @@ export async function reconcileIndexedProductEligibility({
           productCapacityReindex.push(decision.productId);
         }
       }
-      if (Boolean(original.searchable) !== decision.searchable || original.blockedReason !== decision.blockedReason || original.status !== decision.status) {
+      const changed = Boolean(original.searchable) !== decision.searchable ||
+        original.blockedReason !== decision.blockedReason || original.status !== decision.status;
+      if (changed) {
         policyChanged = true;
+        // No-op reconciliation must not lock/update every catalog row or
+        // corrupt updatedAt-based incremental catalog diagnostics.
+        await tx.$executeRaw`
+          UPDATE \`AiSearchIndexedProduct\`
+          SET \`searchable\` = ${decision.searchable},
+              \`blockedReason\` = ${decision.blockedReason},
+              \`status\` = ${decision.status},
+              \`updatedAt\` = UTC_TIMESTAMP(3)
+          WHERE \`shop\` = ${shop} AND \`productId\` = ${decision.productId}
+        `;
       }
-      await tx.$executeRaw`
-        UPDATE \`AiSearchIndexedProduct\`
-        SET \`searchable\` = ${decision.searchable},
-            \`blockedReason\` = ${decision.blockedReason},
-            \`status\` = ${decision.status},
-            \`updatedAt\` = UTC_TIMESTAMP(3)
-        WHERE \`shop\` = ${shop} AND \`productId\` = ${decision.productId}
-      `;
     }
     if (policyChanged) {
       await tx.$executeRaw`
