@@ -132,14 +132,26 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const entitlement = await getShopEntitlement(session.shop);
   const subscription = await getSubscriptionSnapshot(session.shop, { ensure: false });
 
-  const hasEverApprovedSubscription = Boolean(
-    await db.billingEvent.findFirst({
+  const [priorApprovalEvent, priorActivatedSubscription] = await Promise.all([
+    db.billingEvent.findFirst({
       where: {
         shop: session.shop,
         type: "SUBSCRIPTION_APPROVED",
       },
       select: { id: true },
     }),
+    db.billingSubscription.findFirst({
+      where: {
+        shop: session.shop,
+        activatedAt: { not: null },
+      },
+      select: { id: true },
+    }),
+  ]);
+  // Keep the displayed trial offer consistent with the server-side subscribe
+  // action, including subscriptions activated before approval events existed.
+  const hasEverApprovedSubscription = Boolean(
+    priorApprovalEvent || priorActivatedSubscription,
   );
   const billingPlans = await db.plan.findMany({
     where: {
@@ -205,9 +217,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         interval: plan.interval,
         trialDays:
           plan.handle.toLowerCase() === "basic" &&
-          (hasEverApprovedSubscription === false ||
-            (subscription.plan === "BASIC" &&
-              subscription.trialStatus === "ACTIVE"))
+          !hasEverApprovedSubscription
             ? plan.trialDays
             : 0,
         description: presentation.description,
