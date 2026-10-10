@@ -664,23 +664,43 @@ async function reconcileManualShopifySubscription({
   const now = new Date();
 
   const trialDays = Math.max(0, adminSubscription.trialDays ?? 0);
+
+  // Shopify AppSubscription exposes trialDays, not a dedicated trialEndsAt.
+  // A pending subscription has not started its trial yet: anchor the local
+  // trial window to the first provider-confirmed ACTIVE observation, persisted
+  // as activatedAt, rather than createdAt (which can predate merchant approval).
+  const activationObservedAt =
+    current?.activatedAt ?? (status === "ACTIVE" ? now : null);
   const providerTrialStartsAt =
-    trialDays > 0 ? shopifyCreatedAt : null;
+    trialDays > 0 ? activationObservedAt : null;
   const providerTrialEndsAt =
-    trialDays > 0 && shopifyCreatedAt
+    trialDays > 0 && activationObservedAt
       ? new Date(
-          shopifyCreatedAt.getTime() +
+          activationObservedAt.getTime() +
             trialDays * 24 * 60 * 60 * 1000,
         )
       : null;
   const trialStartsAt =
     current?.trialStartsAt ?? providerTrialStartsAt;
   const trialEndsAt =
-    current?.trialEndsAt &&
-    providerTrialEndsAt &&
-    providerTrialEndsAt.getTime() > current.trialEndsAt.getTime()
-      ? providerTrialEndsAt
-      : current?.trialEndsAt ?? providerTrialEndsAt;
+    current?.trialEndsAt ?? providerTrialEndsAt;
+
+  // currentPeriodEnd is provider data, but during trial it must not be treated
+  // as an active paid window. Only expose a paid-period start after the trial
+  // deadline has passed and Shopify reports a period ending beyond that date.
+  const providerPaidPeriodConfirmed =
+    status === "ACTIVE" &&
+    trialDays > 0 &&
+    trialEndsAt !== null &&
+    now >= trialEndsAt &&
+    end !== null &&
+    end > trialEndsAt;
+  const billingPeriodStart =
+    trialDays > 0
+      ? providerPaidPeriodConfirmed
+        ? trialEndsAt
+        : current?.currentPeriodStartsAt ?? null
+      : start ?? current?.currentPeriodStartsAt ?? null;
 
   // Financial reconciliation is optional enrichment only. Never derive a
   // legacy RecurringApplicationCharge ID from an AppSubscription GID: those
@@ -883,7 +903,7 @@ async function reconcileManualShopifySubscription({
     repairRequiredAt: null,
     trialStartsAt,
     trialEndsAt,
-    currentPeriodStartsAt: start ?? current?.currentPeriodStartsAt ?? null,
+    currentPeriodStartsAt: billingPeriodStart,
     // Shopify returns currentPeriodEnd=null after cancellation. Keep the
     // provider period end cached while the subscription was active.
     currentPeriodEndsAt: effectivePeriodEnd,
@@ -934,12 +954,12 @@ async function reconcileManualShopifySubscription({
   // Lifecycle reconciliation preserves PAID on cancellation when the exact
   // subscription had already entered the paid period. A CANCELLED state by
   // itself is never treated as a refund.
-  if (start) {
+  if (billingPeriodStart) {
     await db.billingCharge.upsert({
       where: {
         subscriptionGid_billingPeriodStart: {
           subscriptionGid: gid,
-          billingPeriodStart: start,
+          billingPeriodStart,
         },
       },
       create: {
@@ -949,7 +969,7 @@ async function reconcileManualShopifySubscription({
         status: chargeStatus,
         amount: shopifyPrice ?? plan.price,
         currency: shopifyCurrency ?? plan.currencyCode,
-        billingPeriodStart: start,
+        billingPeriodStart,
         billingPeriodEnd: effectivePeriodEnd,
         acceptedAt:
           subscriptionPreviousStatus === "PENDING" && status === "ACTIVE"
