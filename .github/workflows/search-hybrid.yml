@@ -43,6 +43,12 @@ jobs:
         run: npx tsx scripts/catalog-language-atomicity-selftest.ts
       - run: npm run typecheck
       - run: npm run test:search-hybrid
+      - name: System audit and data invariants
+        run: npm run test:system-audit
+      - name: Billing lifecycle policy regressions
+        run: npm run test:billing-core
+      - name: Dashboard data presentation regressions
+        run: npm run test:data-bound-ui
       - name: Storefront native/result count regression
         run: node scripts/storefront-selftest.cjs
         env:
